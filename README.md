@@ -118,6 +118,10 @@ npm run test:e2e
 
 ## Phase status
 
-**Phase 1 (functional foundation):** implemented end-to-end locally.
+**Phase 1:** complete and verified (simulator → pipeline → AI → inbox → dashboard).
 
-**Phase 2 / 3:** follow-ups, bookings, insights, and reports are present in working form and can be deepened next (qualification builder UI polish, richer notification fan-out, Google Sheets live adapter).
+**Phase 2:** largely complete (qualification builder, automations engine, notifications, opt-out, booking adapters, assignment, follow-ups).
+
+**Phase 3:** implemented in working form (insights aggregation helpers, content/ad idea APIs, reports POST/CSV, campaign attribution). Live Sheets/email remain credential-gated.
+
+See `docs/PHASE-AUDIT.md` for evidence-based status.

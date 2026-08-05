@@ -17,6 +17,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:dev": "tsx scripts/dev-db.ts",
+    "db:upgrade": "tsx scripts/apply-schema-upgrade.ts",
     "db:setup": "prisma db push && tsx prisma/seed.ts",
     "worker": "tsx src/workers/index.ts",
     "postinstall": "prisma generate"

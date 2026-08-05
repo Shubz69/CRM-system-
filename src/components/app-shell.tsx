@@ -14,6 +14,7 @@ import {
   FileBarChart,
   Settings,
   FlaskConical,
+  ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ const NAV = [
   { href: "/agent", label: "AI Agent", icon: Bot },
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },
+  { href: "/qualification", label: "Qualification", icon: ListChecks },
   { href: "/reports", label: "Reports", icon: FileBarChart },
   { href: "/simulator", label: "Simulator", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },

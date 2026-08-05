@@ -69,6 +69,7 @@ enum WebhookProcessingStatus {
   PROCESSED
   FAILED
   DUPLICATE
+  IGNORED
 }
 
 enum IntegrationType {
@@ -88,6 +89,10 @@ enum NotificationType {
   BOOKING
   SYSTEM
   TASK
+  AI_FAILURE
+  FOLLOW_UP_FAILURE
+  AUTOMATION_FAILURE
+  UNASSIGNED_QUALIFIED
 }
 
 model Organisation {
@@ -125,6 +130,8 @@ model Organisation {
   detectedQuestions    DetectedQuestion[]
   buyingSignals        BuyingSignal[]
   conversationInsights ConversationInsight[]
+  notes                Note[]
+  attributions         Attribution[]
 }
 
 model User {
@@ -289,16 +296,18 @@ model Contact {
 }
 
 model ContactIdentifier {
-  id         String   @id @default(cuid())
-  contactId  String
-  channel    String
-  identifier String
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organisationId String
+  contactId      String
+  channel        String
+  identifier     String
+  createdAt      DateTime @default(now())
 
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
-  @@unique([channel, identifier])
+  @@unique([organisationId, channel, identifier])
   @@index([contactId])
+  @@index([organisationId])
 }
 
 model Conversation {
@@ -451,17 +460,20 @@ model Lead {
 }
 
 model QualificationField {
-  id             String   @id @default(cuid())
-  organisationId String
-  key            String
-  label          String
-  description    String?
-  required       Boolean  @default(false)
-  weight         Int      @default(10)
-  position       Int      @default(0)
-  active         Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  organisationId       String
+  key                  String
+  label                String
+  description          String?
+  fieldType            String   @default("short_text")
+  required             Boolean  @default(false)
+  weight               Int      @default(10)
+  position             Int      @default(0)
+  active               Boolean  @default(true)
+  options              Json     @default("[]")
+  disqualifyingAnswers Json     @default("[]")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   organisation Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   answers      QualificationAnswer[]
@@ -636,10 +648,12 @@ model Note {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   contact      Contact?      @relation(fields: [contactId], references: [id], onDelete: Cascade)
   conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   author       User?         @relation(fields: [authorId], references: [id])
 
+  @@index([organisationId, createdAt])
   @@index([contactId, createdAt])
   @@index([conversationId, createdAt])
 }
@@ -694,12 +708,16 @@ model AgentConfiguration {
   organisationId          String
   name                    String   @default("Default Agent")
   isActive                Boolean  @default(true)
+  isDraft                 Boolean  @default(false)
+  version                 Int      @default(1)
+  publishedVersion        Int?
   aiProvider              String   @default("mock")
   model                   String   @default("mock-v1")
   brandTone               String   @default("professional, helpful, concise")
   formality               String   @default("professional")
   responseLength          String   @default("medium")
   emojiUsage              String   @default("minimal")
+  language                String   @default("en")
   qualificationQuestions  Json     @default("[]")
   scoringRules            Json     @default("{}")
   bookingConditions       Json     @default("{}")
@@ -709,9 +727,14 @@ model AgentConfiguration {
   maxFollowUps            Int      @default(3)
   operatingHours          Json     @default("{}")
   restrictedTopics        Json     @default("[]")
+  optOutKeywords          Json     @default("[\"stop\",\"unsubscribe\",\"opt out\"]")
   confidenceThreshold     Float    @default(0.65)
   bookingUrl              String?
   systemPromptExtra       String?  @db.Text
+  escalationInstructions  String?  @db.Text
+  lastEditedById          String?
+  lastPublishedById       String?
+  publishedAt             DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -818,20 +841,23 @@ model Campaign {
 }
 
 model Attribution {
-  id         String   @id @default(cuid())
-  contactId  String
-  leadId     String?
-  campaignId String?
-  source     String?
-  medium     String?
-  content    String?
-  metadata   Json     @default("{}")
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organisationId String
+  contactId      String
+  leadId         String?
+  campaignId     String?
+  source         String?
+  medium         String?
+  content        String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
 
-  contact  Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  lead     Lead?     @relation(fields: [leadId], references: [id])
-  campaign Campaign? @relation(fields: [campaignId], references: [id])
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id])
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id])
 
+  @@index([organisationId, createdAt])
   @@index([contactId])
   @@index([campaignId])
 }

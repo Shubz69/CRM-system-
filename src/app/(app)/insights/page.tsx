@@ -13,15 +13,44 @@ type Insight = {
   items: Array<{ label: string; count: number }>;
 };
 
+type Idea = {
+  title?: string;
+  angle?: string;
+  format?: string;
+  hook?: string;
+  evidenceCount: number;
+  confidence: number;
+  aiGenerated?: boolean;
+  recommendedAction?: string;
+};
+
 export default function InsightsPage() {
   const [insights, setInsights] = useState<Insight[]>([]);
+  const [contentIdeas, setContentIdeas] = useState<Idea[]>([]);
+  const [adIdeas, setAdIdeas] = useState<Idea[]>([]);
 
   useEffect(() => {
-    fetch("/api/insights")
-      .then(async (r) => {
+    Promise.all([
+      fetch("/api/insights").then(async (r) => {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || "Failed");
-        setInsights(j.insights);
+        return j.insights as Insight[];
+      }),
+      fetch("/api/insights/content").then(async (r) => {
+        const j = await r.json();
+        if (!r.ok) return [] as Idea[];
+        return (j.ideas || j.contentIdeas || []) as Idea[];
+      }),
+      fetch("/api/insights/ads").then(async (r) => {
+        const j = await r.json();
+        if (!r.ok) return [] as Idea[];
+        return (j.ideas || j.adIdeas || []) as Idea[];
+      }),
+    ])
+      .then(([i, c, a]) => {
+        setInsights(i);
+        setContentIdeas(c);
+        setAdIdeas(a);
       })
       .catch((e) => toast.error(e.message));
   }, []);
@@ -60,6 +89,42 @@ export default function InsightsPage() {
           </article>
         ))}
       </div>
+
+      <section className="space-y-3">
+        <h2 className="h-display text-3xl">Content ideas</h2>
+        <p className="text-sm text-[var(--muted)]">AI-generated suggestions grounded in conversation evidence.</p>
+        <div className="grid gap-3 md:grid-cols-2">
+          {contentIdeas.length === 0 && <div className="surface p-4 text-sm text-[var(--muted)]">No content ideas yet.</div>}
+          {contentIdeas.map((idea, idx) => (
+            <article key={`c-${idx}`} className="surface p-4">
+              <div className="flex flex-wrap gap-2">
+                <h3 className="font-semibold">{idea.title || "Content idea"}</h3>
+                {idea.aiGenerated !== false && <span className="badge badge-warn">AI suggestion</span>}
+                <span className="badge">Evidence {idea.evidenceCount}</span>
+              </div>
+              <p className="mt-2 text-sm">{idea.hook || idea.recommendedAction}</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">{idea.format}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="h-display text-3xl">Advertisement ideas</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          {adIdeas.length === 0 && <div className="surface p-4 text-sm text-[var(--muted)]">No ad ideas yet.</div>}
+          {adIdeas.map((idea, idx) => (
+            <article key={`a-${idx}`} className="surface p-4">
+              <div className="flex flex-wrap gap-2">
+                <h3 className="font-semibold">{idea.angle || idea.title || "Ad angle"}</h3>
+                <span className="badge badge-warn">AI suggestion</span>
+                <span className="badge">Evidence {idea.evidenceCount}</span>
+              </div>
+              <p className="mt-2 text-sm">{idea.hook || idea.recommendedAction}</p>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

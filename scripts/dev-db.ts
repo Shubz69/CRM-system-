@@ -4,7 +4,7 @@
  *
  * Usage: npx tsx scripts/dev-db.ts
  */
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import EmbeddedPostgres from "embedded-postgres";
 
@@ -21,8 +21,14 @@ async function main() {
     persistent: true,
   });
 
-  console.log(`Initialising embedded Postgres in ${dataDir} on port ${port}...`);
-  await pg.initialise();
+  const alreadyInitialised = existsSync(join(dataDir, "PG_VERSION"));
+  if (!alreadyInitialised) {
+    console.log(`Initialising embedded Postgres in ${dataDir} on port ${port}...`);
+    await pg.initialise();
+  } else {
+    console.log(`Starting existing Postgres cluster in ${dataDir} on port ${port}...`);
+  }
+
   await pg.start();
   try {
     await pg.createDatabase("dm_intelligence_crm");

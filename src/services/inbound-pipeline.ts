@@ -12,9 +12,20 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { InboundMessageInput } from "@/schemas/webhook";
 import { writeAuditLog } from "@/services/audit";
+import { upsertCampaignAttribution } from "@/services/attribution";
+import { runAutomations } from "@/services/automations";
 import { cancelFollowUpsOnOptOut, cancelPendingFollowUps, scheduleFollowUps } from "@/services/followups";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
+import {
+  notifyOnHandover,
+  notifyOnHighScore,
+  notifyOnNegativeSentiment,
+  notifyOrganisationOwners,
+} from "@/services/notifications";
+import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/opt-out";
+import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
+import { NotificationType } from "@prisma/client";
 
 function mapQualificationStatus(status: string): QualificationStatus {
   switch (status) {
@@ -35,7 +46,11 @@ async function getDefaultStage(organisationId: string, slug: string) {
     include: { stages: true },
   });
   if (!pipeline) return null;
-  return pipeline.stages.find((s) => s.slug === slug) ?? pipeline.stages.sort((a, b) => a.position - b.position)[0] ?? null;
+  return (
+    pipeline.stages.find((s) => s.slug === slug) ??
+    pipeline.stages.sort((a, b) => a.position - b.position)[0] ??
+    null
+  );
 }
 
 export type InboundProcessResult = {
@@ -48,6 +63,8 @@ export type InboundProcessResult = {
   aiReplySent?: boolean;
   needsHumanReview?: boolean;
   outboundMessageId?: string;
+  optedOut?: boolean;
+  analysis?: Record<string, unknown>;
 };
 
 export async function processInboundMessage(
@@ -75,7 +92,7 @@ export async function processInboundMessage(
     },
   });
 
-  if (existing && existing.status === WebhookProcessingStatus.PROCESSED) {
+  if (existing && (existing.status === WebhookProcessingStatus.PROCESSED || existing.status === WebhookProcessingStatus.DUPLICATE)) {
     return { duplicate: true, webhookEventId: existing.id };
   }
 
@@ -119,9 +136,15 @@ export async function processInboundMessage(
         });
       }
 
-      const identifier = `manychat:${input.contact.externalId}`;
+      const identifierValue = `manychat:${input.contact.externalId}`;
       const contactIdentifier = await tx.contactIdentifier.findUnique({
-        where: { channel_identifier: { channel: "manychat", identifier } },
+        where: {
+          organisationId_channel_identifier: {
+            organisationId: input.organisationId,
+            channel: "manychat",
+            identifier: identifierValue,
+          },
+        },
         include: { contact: true },
       });
 
@@ -132,6 +155,16 @@ export async function processInboundMessage(
           where: {
             organisationId: input.organisationId,
             email: input.contact.email,
+            deletedAt: null,
+          },
+        });
+      }
+
+      if (!contact && input.contact.phone) {
+        contact = await tx.contact.findFirst({
+          where: {
+            organisationId: input.organisationId,
+            phone: input.contact.phone,
             deletedAt: null,
           },
         });
@@ -153,8 +186,9 @@ export async function processInboundMessage(
             campaignSource: input.campaignSource,
             identifiers: {
               create: {
+                organisationId: input.organisationId,
                 channel: "manychat",
-                identifier,
+                identifier: identifierValue,
               },
             },
           },
@@ -175,9 +209,10 @@ export async function processInboundMessage(
         if (!contactIdentifier) {
           await tx.contactIdentifier.create({
             data: {
+              organisationId: input.organisationId,
               contactId: contact.id,
               channel: "manychat",
-              identifier,
+              identifier: identifierValue,
             },
           });
         }
@@ -187,10 +222,7 @@ export async function processInboundMessage(
       let conversation = await tx.conversation.findFirst({
         where: {
           organisationId: input.organisationId,
-          OR: [
-            { externalThreadId: threadKey },
-            { contactId: contact.id, deletedAt: null },
-          ],
+          OR: [{ externalThreadId: threadKey }, { contactId: contact.id, deletedAt: null }],
         },
         orderBy: { updatedAt: "desc" },
       });
@@ -265,21 +297,40 @@ export async function processInboundMessage(
       return { contact, conversation, inboundMessage, lead, channel };
     });
 
-    if (result.contact.optedOut) {
-      await cancelFollowUpsOnOptOut(result.contact.id);
+    const agentConfig = await prisma.agentConfiguration.findFirst({
+      where: { organisationId: input.organisationId, isActive: true, isDraft: false },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    const optOutKeywords = Array.isArray(agentConfig?.optOutKeywords)
+      ? (agentConfig.optOutKeywords as string[])
+      : DEFAULT_OPT_OUT_KEYWORDS;
+
+    if (detectOptOut(input.message.text, optOutKeywords) || result.contact.optedOut) {
+      if (!result.contact.optedOut) {
+        await applyOptOut({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+          source: "inbound_keyword",
+          reason: input.message.text.slice(0, 200),
+        });
+      } else {
+        await cancelFollowUpsOnOptOut(result.contact.id);
+      }
+
       await prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
-        data: {
-          status: WebhookProcessingStatus.PROCESSED,
-          processedAt: new Date(),
-        },
+        data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },
       });
-      await writeAuditLog({
+
+      await runAutomations({
         organisationId: input.organisationId,
-        action: "inbound.skipped_opt_out",
-        entityType: "Contact",
-        entityId: result.contact.id,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "contact_opted_out",
       });
+
       return {
         duplicate: false,
         webhookEventId: webhookEvent.id,
@@ -288,18 +339,34 @@ export async function processInboundMessage(
         messageId: result.inboundMessage.id,
         leadId: result.lead.id,
         aiReplySent: false,
+        optedOut: true,
       };
     }
 
-    // Cancel follow-ups because the lead replied
     await cancelPendingFollowUps({
       conversationId: result.conversation.id,
       reason: "Lead replied",
     });
 
+    await runAutomations({
+      organisationId: input.organisationId,
+      contactId: result.contact.id,
+      conversationId: result.conversation.id,
+      leadId: result.lead.id,
+      triggerType: "lead_replied",
+    });
+
+    await runAutomations({
+      organisationId: input.organisationId,
+      contactId: result.contact.id,
+      conversationId: result.conversation.id,
+      leadId: result.lead.id,
+      triggerType: "new_inbound_message",
+      payload: { text: input.message.text },
+    });
+
     const aiEnabled =
-      !result.conversation.aiPaused &&
-      result.conversation.handlingMode === HandlingMode.AI;
+      !result.conversation.aiPaused && result.conversation.handlingMode === HandlingMode.AI;
 
     if (!aiEnabled) {
       await prisma.webhookEvent.update({
@@ -317,11 +384,6 @@ export async function processInboundMessage(
       };
     }
 
-    const agentConfig = await prisma.agentConfiguration.findFirst({
-      where: { organisationId: input.organisationId, isActive: true },
-      orderBy: { updatedAt: "desc" },
-    });
-
     const knowledge = await retrieveRelevantKnowledge({
       organisationId: input.organisationId,
       query: input.message.text,
@@ -333,10 +395,7 @@ export async function processInboundMessage(
       take: 30,
     });
 
-    const transcript = recentMessages
-      .map((m) => `${m.senderType}: ${m.body}`)
-      .join("\n");
-
+    const transcript = recentMessages.map((m) => `${m.senderType}: ${m.body}`).join("\n");
     const providerClient = getAiProvider(agentConfig?.aiProvider);
     const systemPrompt = buildAgentSystemPrompt({
       brandTone: agentConfig?.brandTone ?? "professional, helpful, concise",
@@ -349,6 +408,7 @@ export async function processInboundMessage(
       systemPromptExtra: agentConfig?.systemPromptExtra,
     });
 
+    const analysisStarted = Date.now();
     const analysisResult = await analyseWithValidation(providerClient, {
       model: agentConfig?.model,
       systemPrompt,
@@ -356,6 +416,7 @@ export async function processInboundMessage(
       knowledgeContext: knowledge.chunks.join("\n\n"),
       leadMessage: input.message.text,
     });
+    const analysisLatencyMs = Date.now() - analysisStarted;
 
     if (!analysisResult.ok) {
       await prisma.conversation.update({
@@ -371,7 +432,14 @@ export async function processInboundMessage(
         action: "ai.validation_failed",
         entityType: "Conversation",
         entityId: result.conversation.id,
-        metadata: { reason: analysisResult.reason },
+        metadata: { reason: analysisResult.reason, latencyMs: analysisLatencyMs },
+      });
+      await notifyOrganisationOwners({
+        organisationId: input.organisationId,
+        type: NotificationType.AI_FAILURE,
+        title: "AI response validation failed",
+        body: "Conversation flagged for human review.",
+        metadata: { conversationId: result.conversation.id },
       });
       await prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
@@ -391,8 +459,13 @@ export async function processInboundMessage(
 
     const analysis = analysisResult.analysis;
     const threshold = agentConfig?.confidenceThreshold ?? 0.65;
-    const forceHandover =
-      analysis.should_handover || analysis.confidence < threshold;
+    const forceHandover = analysis.should_handover || analysis.confidence < threshold;
+
+    await syncQualificationAnswers({
+      organisationId: input.organisationId,
+      leadId: result.lead.id,
+      answers: analysis.answers_collected,
+    });
 
     const score = calculateLeadScore({
       analysis,
@@ -432,7 +505,7 @@ export async function processInboundMessage(
         },
       });
 
-      const leadScore = await tx.leadScore.create({
+      await tx.leadScore.create({
         data: {
           leadId: result.lead.id,
           totalScore: score.totalScore,
@@ -446,8 +519,6 @@ export async function processInboundMessage(
           },
         },
       });
-
-      void leadScore;
 
       for (const objection of analysis.objections_detected) {
         await tx.objection.create({
@@ -481,6 +552,79 @@ export async function processInboundMessage(
       }
     });
 
+    await upsertCampaignAttribution({
+      organisationId: input.organisationId,
+      contactId: result.contact.id,
+      leadId: result.lead.id,
+      campaignSource: input.campaignSource,
+      leadSource: input.leadSource,
+    });
+
+    if (forceHandover) {
+      await notifyOnHandover({
+        organisationId: input.organisationId,
+        conversationId: result.conversation.id,
+        reason: analysis.handover_reason,
+      });
+      await runAutomations({
+        organisationId: input.organisationId,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "human_requested",
+        payload: { reason: analysis.handover_reason },
+      });
+    }
+
+    if (analysis.sentiment === "negative") {
+      await notifyOnNegativeSentiment({
+        organisationId: input.organisationId,
+        conversationId: result.conversation.id,
+      });
+      await runAutomations({
+        organisationId: input.organisationId,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "negative_sentiment",
+      });
+    }
+
+    await notifyOnHighScore({
+      organisationId: input.organisationId,
+      leadId: result.lead.id,
+      score: score.totalScore,
+    });
+
+    await runAutomations({
+      organisationId: input.organisationId,
+      contactId: result.contact.id,
+      conversationId: result.conversation.id,
+      leadId: result.lead.id,
+      triggerType: "lead_score_changed",
+      payload: { score: score.totalScore },
+    });
+
+    if (analysis.qualification_status === "qualified") {
+      await runAutomations({
+        organisationId: input.organisationId,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "lead_qualified",
+      });
+    }
+
+    if (analysis.qualification_status === "disqualified") {
+      await runAutomations({
+        organisationId: input.organisationId,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "lead_disqualified",
+      });
+    }
+
     let aiReplySent = false;
     let outboundMessageId: string | undefined;
 
@@ -496,7 +640,7 @@ export async function processInboundMessage(
         }
       }
 
-      const adapter = getMessagingAdapter(false);
+      const adapter = getMessagingAdapter();
       const sendResult = await adapter.sendMessage({
         organisationId: input.organisationId,
         contactExternalId: input.contact.externalId,
@@ -515,10 +659,12 @@ export async function processInboundMessage(
             body: reply,
             aiMetadata: {
               provider: providerClient.name,
+              model: agentConfig?.model,
               confidence: analysis.confidence,
               repaired: analysisResult.repaired,
               recommended_next_action: analysis.recommended_next_action,
               knowledgeDocuments: knowledge.documentTitles,
+              latencyMs: analysisLatencyMs,
             },
             deliveryStatus: "sent",
           },
@@ -538,6 +684,13 @@ export async function processInboundMessage(
         await prisma.conversation.update({
           where: { id: result.conversation.id },
           data: { needsHumanReview: true },
+        });
+        await notifyOrganisationOwners({
+          organisationId: input.organisationId,
+          type: NotificationType.AI_FAILURE,
+          title: "Message delivery failed",
+          body: sendResult.error || "Outbound send failed",
+          metadata: { conversationId: result.conversation.id },
         });
       }
 
@@ -575,6 +728,8 @@ export async function processInboundMessage(
         leadId: result.lead.id,
         score: score.totalScore,
         aiReplySent,
+        provider: providerClient.name,
+        latencyMs: analysisLatencyMs,
       },
     });
 
@@ -593,9 +748,12 @@ export async function processInboundMessage(
       aiReplySent,
       needsHumanReview: forceHandover,
       outboundMessageId,
+      analysis: analysis as unknown as Record<string, unknown>,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Inbound processing failed";
+    const message = (error instanceof Error ? error.message : "Inbound processing failed")
+      .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "?")
+      .slice(0, 1000);
     logger.error("Inbound processing error", { message });
     await prisma.webhookEvent.update({
       where: { id: webhookEvent.id },

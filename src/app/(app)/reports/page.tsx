@@ -1,19 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 export default function ReportsPage() {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [reports, setReports] = useState<Array<{ id: string; title: string; type: string; createdAt: string; payload: Record<string, unknown> }>>([]);
+
+  async function loadReports() {
+    const response = await fetch("/api/reports");
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error || "Failed");
+    setReports(json.reports);
+  }
+
+  useEffect(() => { loadReports().catch((error) => toast.error(error.message)); }, []);
 
   async function generate(type: "daily" | "weekly") {
     setLoading(true);
     try {
-      const res = await fetch(`/api/reports?type=${type}`);
+      const res = await fetch(`/api/reports?type=${type}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type }) });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
       setPayload(json.payload);
+      await loadReports();
       toast.success(`${type} report generated`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
@@ -71,6 +82,13 @@ export default function ReportsPage() {
       {payload && (
         <pre className="surface overflow-x-auto p-5 text-xs">{JSON.stringify(payload, null, 2)}</pre>
       )}
+      <section className="surface p-5">
+        <h2 className="h-display text-2xl">Generated reports</h2>
+        <ul className="mt-3 space-y-2">
+          {reports.map((report) => <li key={report.id}><button className="text-left hover:underline" onClick={() => setPayload(report.payload)}>{report.title} · {report.type} · {new Date(report.createdAt).toLocaleString()}</button></li>)}
+          {!reports.length && <li className="text-[var(--muted)]">No reports generated yet.</li>}
+        </ul>
+      </section>
     </div>
   );
 }

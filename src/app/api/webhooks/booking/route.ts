@@ -80,12 +80,11 @@ export async function POST(req: NextRequest) {
       : null;
 
     if (!contact && body.contactExternalId) {
-      const ident = await prisma.contactIdentifier.findUnique({
+      const ident = await prisma.contactIdentifier.findFirst({
         where: {
-          channel_identifier: {
-            channel: "manychat",
-            identifier: `manychat:${body.contactExternalId}`,
-          },
+          organisationId: org.id,
+          channel: "manychat",
+          identifier: `manychat:${body.contactExternalId}`,
         },
         include: { contact: true },
       });

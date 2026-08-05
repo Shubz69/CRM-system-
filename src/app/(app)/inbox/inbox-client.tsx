@@ -60,9 +60,11 @@ type ConversationDetail = {
   questions: Array<{ id: string; text: string }>;
   buyingSignals: Array<{ id: string; text: string }>;
   followUps: Array<{ id: string; status: string; scheduledFor: string; attemptNumber: number }>;
+  assignments?: Array<{ user: { id: string; name: string | null; email: string } }>;
 };
 
 type Stage = { id: string; name: string; slug: string };
+type Member = { id: string; name: string | null; email: string; role: string };
 
 export default function InboxPage() {
   const searchParams = useSearchParams();
@@ -72,6 +74,8 @@ export default function InboxPage() {
   const [reply, setReply] = useState("");
   const [stages, setStages] = useState<Stage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [note, setNote] = useState("");
 
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -94,6 +98,7 @@ export default function InboxPage() {
       fetch("/api/pipeline")
         .then((r) => r.json())
         .then((j) => setStages(j.pipeline?.stages ?? [])),
+      fetch("/api/members").then((r) => r.json()).then((j) => setMembers(j.members ?? [])),
     ])
       .catch((e) => toast.error(e.message))
       .finally(() => setLoading(false));
@@ -276,6 +281,18 @@ export default function InboxPage() {
                 <p>{detail.contact.phone || "No phone"}</p>
                 <p>Source: {detail.contact.leadSource || "—"}</p>
                 {detail.contact.optedOut && <span className="badge badge-danger">Opted out</span>}
+              </div>
+              <div>
+                <h3 className="font-semibold">Assignee</h3>
+                <select className="input mt-2" value={detail.assignments?.[0]?.user.id || ""} onChange={(e) => patch({ assignUserId: e.target.value || null })}>
+                  <option value="">Unassigned</option>
+                  {members.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}
+                </select>
+              </div>
+              <div>
+                <h3 className="font-semibold">Internal note</h3>
+                <textarea className="input mt-2 min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note" />
+                <button className="btn btn-secondary mt-2" type="button" onClick={() => { if (note.trim()) patch({ note }).then(() => setNote("")); }}>Save note</button>
               </div>
               <div>
                 <h3 className="font-semibold">Lead summary</h3>

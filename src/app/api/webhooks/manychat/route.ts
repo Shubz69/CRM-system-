@@ -41,15 +41,29 @@ export async function POST(req: NextRequest) {
     let organisationId = data.organisationId;
 
     if (!organisationId) {
+      // Resolve via messaging channel external id when available; never fall back to "first org" silently.
+      const channelId = typeof body.channel_id === "string" ? body.channel_id : undefined;
+      if (channelId) {
+        const channel = await prisma.messagingChannel.findFirst({
+          where: { provider: "manychat", externalId: channelId, isActive: true },
+        });
+        organisationId = channel?.organisationId;
+      }
+    }
+
+    if (!organisationId && process.env.NODE_ENV !== "production") {
       const org = await prisma.organisation.findFirst({
-        where: { deletedAt: null },
+        where: { deletedAt: null, demoData: true },
         orderBy: { createdAt: "asc" },
       });
       organisationId = org?.id;
     }
 
     if (!organisationId) {
-      return Response.json({ error: "No organisation configured" }, { status: 400 });
+      return Response.json(
+        { error: "organisationId required (or map channel_id to an organisation)" },
+        { status: 400 },
+      );
     }
 
     const subscriberId = data.subscriber_id ? String(data.subscriber_id) : undefined;

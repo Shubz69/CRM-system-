@@ -70,12 +70,13 @@ export class ManyChatAdapter implements MessagingAdapter {
   }
 }
 
-export function getMessagingAdapter(preferLive = false): MessagingAdapter {
+export function getMessagingAdapter(preferLive?: boolean): MessagingAdapter {
   const env = getEnv();
-  if (preferLive && env.MANYCHAT_API_TOKEN) {
-    return new ManyChatAdapter();
+  if (preferLive === false || !env.MANYCHAT_API_TOKEN) {
+    return new MockManyChatAdapter();
   }
-  return new MockManyChatAdapter();
+  // Token present: use live unless explicitly forced to mock
+  return new ManyChatAdapter();
 }
 
 export { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";

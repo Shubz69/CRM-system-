@@ -78,13 +78,13 @@ export class MockAiProvider implements AiProvider {
 
     if (asksHuman) {
       reply =
-        "Absolutely — I will connect you with a teammate who can help. Someone will pick this up shortly.";
+        "Absolutely - I will connect you with a teammate who can help. Someone will pick this up shortly.";
     } else if (optOut) {
       reply = "Understood. I will stop messaging you. Take care!";
     } else if (asksPrice) {
       reply = hasPricingGuidance
-        ? "Great question on pricing. Based on our current packages, pricing depends on volume and setup needs — I can share guidance and book a short call to map the best option for you."
-        : "Pricing depends on your setup and volume. I do not want to guess — the best next step is a short call so we can tailor this properly. Would you like a booking link?";
+        ? "Great question on pricing. Based on our current packages, pricing depends on volume and setup needs - I can share guidance and book a short call to map the best option for you."
+        : "Pricing depends on your setup and volume. I do not want to guess - the best next step is a short call so we can tailor this properly. Would you like a booking link?";
     } else if (recommended_next_action === "send_booking_link") {
       reply =
         "You sound like a strong fit. Here is a link to book a quick intro call when you are free.";

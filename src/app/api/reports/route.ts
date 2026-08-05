@@ -2,14 +2,35 @@ import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
 import { QualificationStatus, BookingStatus } from "@prisma/client";
 
-export async function GET(req: Request) {
+export async function GET() {
+  try {
+    const session = await requirePermission("reports:read");
+    const reports = await prisma.report.findMany({
+      where: { organisationId: session.organisationId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+    return Response.json({ reports });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed";
+    if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    return jsonError(message, 500);
+  }
+}
+
+export async function POST(req: Request) {
   try {
     const session = await requirePermission("reports:read");
     const { searchParams } = new URL(req.url);
-    const type = searchParams.get("type") === "weekly" ? "weekly" : "daily";
+    const requestBody = await req.json().catch(() => ({})) as { type?: string };
+    const type = requestBody.type === "weekly" || searchParams.get("type") === "weekly" ? "weekly" : "daily";
     const days = type === "weekly" ? 7 : 1;
     const periodEnd = new Date();
     const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const generatedDay = new Date();
+    generatedDay.setHours(0, 0, 0, 0);
+    const nextDay = new Date(generatedDay);
+    nextDay.setDate(nextDay.getDate() + 1);
     const orgId = session.organisationId;
 
     const dateFilter = { createdAt: { gte: periodStart, lte: periodEnd } };
@@ -74,6 +95,11 @@ export async function GET(req: Request) {
       adSuggestions: objections.slice(0, 3).map((o) => `Ad angle addressing ${o.category} objection`),
     };
 
+    const existing = await prisma.report.findFirst({
+      where: { organisationId: orgId, type, createdAt: { gte: generatedDay, lt: nextDay } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existing) return Response.json({ report: existing, payload: existing.payload });
     const report = await prisma.report.create({
       data: {
         organisationId: orgId,

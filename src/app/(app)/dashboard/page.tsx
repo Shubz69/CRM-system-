@@ -37,15 +37,23 @@ function MetricCard({ label, value }: { label: string; value: string | number })
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
 
-  useEffect(() => {
-    fetch("/api/dashboard")
+  async function load() {
+    setError(null);
+    fetch(`/api/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json()).error || "Failed to load");
         return r.json();
       })
       .then(setData)
       .catch((e) => setError(e.message));
+  }
+  useEffect(() => {
+    void load();
+    // initial load only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (error) {
@@ -67,6 +75,11 @@ export default function DashboardPage() {
         </div>
         {data.demoMode && <span className="badge badge-warn">Demo data mode enabled</span>}
       </div>
+      <form className="surface flex flex-wrap items-end gap-3 p-4" onSubmit={(event) => { event.preventDefault(); void load(); }}>
+        <label className="text-sm">From<input className="input mt-1" type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label>
+        <label className="text-sm">To<input className="input mt-1" type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
+        <button className="btn btn-secondary" type="submit">Apply dates</button>
+      </form>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Conversations" value={m.totalConversations} />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 type Contact = {
@@ -41,6 +42,7 @@ export default function ContactsPage() {
           <h1 className="h-display text-4xl">Contacts</h1>
           <p className="text-[var(--muted)]">People who messaged your Instagram account.</p>
         </div>
+        <div className="flex gap-2">
         <form
           className="flex gap-2"
           onSubmit={(e) => {
@@ -58,6 +60,10 @@ export default function ContactsPage() {
             Search
           </button>
         </form>
+        <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>
+          Export CSV
+        </a>
+        </div>
       </div>
 
       <div className="surface overflow-x-auto">
@@ -83,7 +89,7 @@ export default function ContactsPage() {
             {contacts.map((c) => (
               <tr key={c.id} className="border-b border-[var(--border)]">
                 <td className="px-4 py-3">
-                  <div className="font-medium">{c.fullName || "Unknown"}</div>
+                  <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.fullName || "Unknown"}</Link>
                   <div className="text-xs text-[var(--muted)]">
                     @{c.instagramUsername || "—"} · {c.email || "no email"}
                   </div>

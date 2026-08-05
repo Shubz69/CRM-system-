@@ -125,6 +125,7 @@ async function main() {
       organisationId: org.id,
       name: "Default Agent",
       isActive: true,
+      isDraft: false,
       aiProvider: process.env.AI_PROVIDER || "mock",
       model: process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "mock-v1",
       brandTone: "professional, warm, clear",
