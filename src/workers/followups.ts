@@ -1,0 +1,166 @@
+import { Queue, Worker, type JobsOptions } from "bullmq";
+import IORedis from "ioredis";
+import { FollowUpStatus, MessageDirection, MessageSenderType } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { getMessagingAdapter } from "@/adapters/messaging";
+import { writeAuditLog } from "@/services/audit";
+
+const connectionUrl = process.env.REDIS_URL || "redis://localhost:6379";
+
+let connection: IORedis | null = null;
+let followUpQueue: Queue | null = null;
+
+function getConnection() {
+  if (!connection) {
+    connection = new IORedis(connectionUrl, { maxRetriesPerRequest: null });
+  }
+  return connection;
+}
+
+export function getFollowUpQueue() {
+  if (!followUpQueue) {
+    followUpQueue = new Queue("follow-ups", { connection: getConnection() });
+  }
+  return followUpQueue;
+}
+
+export async function enqueueFollowUpCheck(opts?: JobsOptions) {
+  try {
+    await getFollowUpQueue().add(
+      "process-due-followups",
+      {},
+      {
+        repeat: { every: 60_000 },
+        removeOnComplete: 100,
+        removeOnFail: 100,
+        ...opts,
+      },
+    );
+  } catch (error) {
+    logger.warn("Could not enqueue follow-up job (Redis unavailable?)", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
+}
+
+export async function processDueFollowUps(): Promise<number> {
+  const due = await prisma.followUp.findMany({
+    where: {
+      status: FollowUpStatus.SCHEDULED,
+      scheduledFor: { lte: new Date() },
+      contact: { optedOut: false },
+    },
+    include: {
+      contact: { include: { identifiers: true } },
+      conversation: true,
+    },
+    take: 50,
+  });
+
+  let sent = 0;
+  const adapter = getMessagingAdapter(false);
+
+  for (const followUp of due) {
+    if (!followUp.conversation || followUp.conversation.aiPaused) {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: { status: FollowUpStatus.CANCELLED, cancelReason: "AI paused or missing conversation" },
+      });
+      continue;
+    }
+
+    const identifier = followUp.contact.identifiers.find((i) => i.channel === "manychat");
+    const externalId = identifier?.identifier.replace(/^manychat:/, "") || followUp.contactId;
+    const body =
+      followUp.messageBody ||
+      "Just checking in — happy to answer any questions or share a booking link when you are ready.";
+
+    const result = await adapter.sendMessage({
+      organisationId: followUp.organisationId,
+      contactExternalId: externalId,
+      text: body,
+      threadId: followUp.conversation.externalThreadId ?? undefined,
+    });
+
+    if (!result.ok) {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: { status: FollowUpStatus.FAILED },
+      });
+      continue;
+    }
+
+    await prisma.$transaction([
+      prisma.followUp.update({
+        where: { id: followUp.id },
+        data: { status: FollowUpStatus.SENT, sentAt: new Date() },
+      }),
+      prisma.message.create({
+        data: {
+          conversationId: followUp.conversationId!,
+          organisationId: followUp.organisationId,
+          externalId: result.externalMessageId,
+          direction: MessageDirection.OUTBOUND,
+          senderType: MessageSenderType.SYSTEM,
+          body,
+          deliveryStatus: "sent",
+        },
+      }),
+      prisma.conversation.update({
+        where: { id: followUp.conversationId! },
+        data: {
+          lastMessageAt: new Date(),
+          lastMessagePreview: body.slice(0, 140),
+        },
+      }),
+    ]);
+
+    await writeAuditLog({
+      organisationId: followUp.organisationId,
+      action: "followup.sent",
+      entityType: "FollowUp",
+      entityId: followUp.id,
+    });
+
+    sent += 1;
+  }
+
+  return sent;
+}
+
+/** In-process fallback when Redis is unavailable (local/dev). */
+export function startInProcessFollowUpLoop(intervalMs = 60_000) {
+  const timer = setInterval(() => {
+    processDueFollowUps()
+      .then((sent) => {
+        if (sent > 0) logger.info("In-process follow-ups sent", { sent });
+      })
+      .catch((error) =>
+        logger.error("In-process follow-up loop failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        }),
+      );
+  }, intervalMs);
+  return timer;
+}
+
+export function startBullWorker() {
+  const worker = new Worker(
+    "follow-ups",
+    async () => {
+      const sent = await processDueFollowUps();
+      return { sent };
+    },
+    { connection: getConnection() },
+  );
+
+  worker.on("failed", (job, err) => {
+    logger.error("Follow-up worker failed", {
+      jobId: job?.id,
+      message: err.message,
+    });
+  });
+
+  return worker;
+}
