@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+const BUILD_PLACEHOLDER_DATABASE_URL =
+  "postgresql://build:build@127.0.0.1:5432/build?schema=public";
+
+function isProductionBuild(): boolean {
+  return process.env.NEXT_PHASE === "phase-production-build";
+}
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default("redis://localhost:6379"),
@@ -43,6 +50,19 @@ const DEV_WEBHOOK_SECRETS = new Set([
 
 export function getEnv(): AppEnv {
   if (cached) return cached;
+
+  // Vercel/Next collect page data during `next build` without runtime secrets.
+  // Provide safe placeholders so compile succeeds; runtime still requires real values.
+  if (isProductionBuild()) {
+    if (!process.env.DATABASE_URL) {
+      process.env.DATABASE_URL = BUILD_PLACEHOLDER_DATABASE_URL;
+    }
+    if (!process.env.AUTH_SECRET && !process.env.NEXTAUTH_SECRET) {
+      process.env.AUTH_SECRET = "build-only-auth-secret-not-for-runtime";
+      process.env.NEXTAUTH_SECRET = process.env.AUTH_SECRET;
+    }
+  }
+
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues
@@ -52,14 +72,17 @@ export function getEnv(): AppEnv {
   }
   const data = parsed.data;
   if (!data.AUTH_SECRET && !data.NEXTAUTH_SECRET) {
-    if (data.NODE_ENV === "production") {
+    if (data.NODE_ENV === "production" && !isProductionBuild()) {
       throw new Error("AUTH_SECRET or NEXTAUTH_SECRET is required in production");
     }
     data.AUTH_SECRET = "dev-only-auth-secret-change-me";
     data.NEXTAUTH_SECRET = data.AUTH_SECRET;
   }
 
-  if (data.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
+  if (data.NODE_ENV === "production" && !isProductionBuild()) {
+    if (data.DATABASE_URL === BUILD_PLACEHOLDER_DATABASE_URL) {
+      throw new Error("DATABASE_URL must be set to a real Postgres URL in production");
+    }
     if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
       throw new Error("MANYCHAT_WEBHOOK_SECRET must be rotated away from the default in production");
     }

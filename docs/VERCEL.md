@@ -7,11 +7,13 @@ This app is a Next.js frontend + API that deploys cleanly to Vercel. Postgres mu
 1. Open [vercel.com/new](https://vercel.com/new)
 2. Import **`Shubz69/CRM-system-`** from GitHub
 3. Framework preset: **Next.js** (uses `vercel.json`)
-4. Set Environment Variables (Production + Preview):
+4. Set Environment Variables (Production + Preview) before the first **runtime** request.
+   The build can compile without them (placeholders are used during `next build` only),
+   but the live app will fail until at least these are set:
 
 | Variable | Notes |
 |----------|--------|
-| `DATABASE_URL` | Pooled Postgres URL (Neon “pooled” recommended) |
+| `DATABASE_URL` | **Required at runtime.** Pooled Postgres URL (Neon “pooled” recommended) |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
 | `NEXTAUTH_URL` | `https://YOUR_PROJECT.vercel.app` |
 | `APP_URL` | Same as `NEXTAUTH_URL` |
@@ -22,6 +24,8 @@ This app is a Next.js frontend + API that deploys cleanly to Vercel. Postgres mu
 | `AI_PROVIDER` | `mock` until keys exist |
 | `CRON_SECRET` | Protects `/api/cron` |
 | `REDIS_URL` | Optional; cron route covers follow-ups without Redis |
+
+> Tip: In Vercel → Settings → Environment Variables, add `DATABASE_URL` for Production + Preview, then Redeploy.
 
 5. Deploy
 6. After first deploy, run migrations against the production DB:
