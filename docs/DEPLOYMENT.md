@@ -1,40 +1,50 @@
 # Deployment
 
-## Vercel
+## Vercel + Supabase
 
-See [VERCEL.md](./VERCEL.md) for importing `Shubz69/CRM-system-` into Vercel, required env vars, Prisma migrate, and the `/api/cron` worker substitute.
+Recommended production stack:
+
+1. **Vercel** — Next.js app ([VERCEL.md](./VERCEL.md))
+2. **Supabase** — PostgreSQL ([SUPABASE.md](./SUPABASE.md))
+3. **Redis** (optional on Vercel when using `/api/cron` for follow-ups)
 
 ## Components
 
 1. **Next.js web app** (`npm run build` / `npm run start`)
-2. **PostgreSQL 16+** (UTF-8)
-3. **Redis 7+** for BullMQ in production
-4. **Worker process** (`npm run worker`)
+2. **PostgreSQL 16+** via **Supabase** (UTF-8)
+3. **Redis 7+** for BullMQ when not using the cron fallback
+4. **Worker process** (`npm run worker`) or Vercel Cron → `/api/cron`
 
 ## Environment
 
 Copy `.env.example`. Required production values:
 
-- `DATABASE_URL`
-- `REDIS_URL`
+- `DATABASE_URL` (Supabase — pooled on Vercel, direct for migrations)
 - `AUTH_SECRET` / `NEXTAUTH_SECRET`
 - `NEXTAUTH_URL` / `APP_URL`
 - `ENCRYPTION_KEY`
 - `MANYCHAT_WEBHOOK_SECRET`
 - `BOOKING_WEBHOOK_SECRET`
+- `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD` / `ADMIN_FORCE_PASSWORD_CHANGE`
+- `ADMIN_BOOTSTRAP_SECRET` (for hosted admin bootstrap)
 
 Optional:
 
+- `REDIS_URL`
 - `AI_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 - `MANYCHAT_API_TOKEN`, `MANYCHAT_API_BASE_URL`
 - `DEFAULT_BOOKING_URL`
+- `DEMO_MODE`
 
 ## Database
+
+Against Supabase (prefer **direct** connection for push/migrate):
 
 ```bash
 npx prisma migrate deploy
 # or for controlled environments:
 npx prisma db push
+npm run seed:admin
 npm run db:seed   # only for demo/staging
 ```
 
@@ -44,6 +54,7 @@ After additive schema changes without migrate history, local/dev can run:
 npx tsx scripts/apply-schema-upgrade.ts
 ```
 
+See [SUPABASE.md](./SUPABASE.md) for dashboard links and connection string formats.
 ## Processes
 
 ```bash

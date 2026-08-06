@@ -3,14 +3,19 @@
 ## Prerequisites
 
 - Node.js 20+
-- PostgreSQL 16+
+- PostgreSQL — **[Supabase](./SUPABASE.md) recommended** for hosted/Preview/Production; local Docker or embedded Postgres is fine for development
 - Redis 7+ (optional in local mock mode; required for workers)
 
-## Quick start
+## Hosted database (Supabase)
+
+For Vercel and long-term production, create a Supabase project and set `DATABASE_URL`.  
+Follow **[SUPABASE.md](./SUPABASE.md)** step by step (dashboard links included).
+
+## Quick start (local)
 
 ```bash
 cp .env.example .env
-# Edit DATABASE_URL, AUTH_SECRET / NEXTAUTH_SECRET, ENCRYPTION_KEY
+# Edit DATABASE_URL (local Postgres or Supabase direct URI), AUTH_SECRET / NEXTAUTH_SECRET, ENCRYPTION_KEY
 
 npm install
 npx prisma generate
@@ -26,16 +31,17 @@ Open `http://localhost:3000`. Demo login (when seeded): `demo@dminelligence.loca
 
 | Variable | Notes |
 |----------|--------|
-| `DATABASE_URL` | Postgres connection string |
+| `DATABASE_URL` | Postgres connection string (Supabase pooled for Vercel; direct for `prisma db push`) |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | Session signing |
 | `DEMO_MODE` | `true` to allow demo seed/login |
 | `ADMIN_EMAIL` | Super admin email (default in example) |
 | `ADMIN_INITIAL_PASSWORD` | Required for `npm run seed:admin` — leave blank in `.env.example` |
 | `ADMIN_FORCE_PASSWORD_CHANGE` | Default `true` |
+| `ADMIN_BOOTSTRAP_SECRET` | Enables `POST /api/admin/bootstrap` on Vercel |
 | `MANYCHAT_WEBHOOK_SECRET` | Inbound webhook verification |
 | `ENCRYPTION_KEY` | 64 hex chars for secret-at-rest |
 
-See `.env.example` for the full list and [ADMIN.md](./ADMIN.md) for platform admin seeding.
+See `.env.example` for the full list, [SUPABASE.md](./SUPABASE.md) for the database, [ADMIN.md](./ADMIN.md) for platform admin seeding, and [VERCEL.md](./VERCEL.md) for deploy.
 
 ## Scripts
 

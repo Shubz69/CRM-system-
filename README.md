@@ -7,13 +7,21 @@ Temporary product name: **DM Intelligence CRM** (easy to rename later).
 ## Stack
 
 - Next.js App Router + TypeScript (strict)
-- PostgreSQL + Prisma
+- PostgreSQL + Prisma (**[Supabase](docs/SUPABASE.md) recommended** for hosted/production)
 - Auth.js / NextAuth (credentials)
-- Redis + BullMQ (with in-process fallback when Redis is down)
+- Redis + BullMQ (with in-process / Vercel cron fallback when Redis is down)
 - Zod validation
 - Vitest + Playwright
-- Docker Compose for Postgres/Redis (recommended)
+- Docker Compose for local Postgres/Redis (optional)
 - Optional embedded Postgres for local setup without Docker (install separately — see below)
+
+## Hosted deploy (Vercel + Supabase)
+
+1. Create a Supabase project — [docs/SUPABASE.md](docs/SUPABASE.md)
+2. Deploy on Vercel — [docs/VERCEL.md](docs/VERCEL.md)
+3. Set `DATABASE_URL` to the Supabase pooled URI, seed the super admin, then sign in
+
+Docs: [SETUP](docs/SETUP.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md)
 
 ## Quick start (Windows / local without Docker)
 
