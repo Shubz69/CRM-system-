@@ -12,13 +12,33 @@
  */
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
+import { createRequire } from "module";
 
-async function main() {
-  let EmbeddedPostgres: typeof import("embedded-postgres").default;
+type EmbeddedPostgresInstance = {
+  initialise(): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  createDatabase(name: string): Promise<void>;
+};
+
+type EmbeddedPostgresConstructor = new (options: {
+  databaseDir: string;
+  user: string;
+  password: string;
+  port: number;
+  persistent: boolean;
+}) => EmbeddedPostgresInstance;
+
+async function loadEmbeddedPostgres(): Promise<EmbeddedPostgresConstructor> {
+  const require = createRequire(import.meta.url);
   try {
-    ({ default: EmbeddedPostgres } = await import("embedded-postgres"));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("embedded-postgres") as {
+      default?: EmbeddedPostgresConstructor;
+    } & EmbeddedPostgresConstructor;
+    return (mod.default ?? mod) as EmbeddedPostgresConstructor;
   } catch {
-    console.error(
+    throw new Error(
       [
         "embedded-postgres is not installed.",
         "Install platform packages locally (not required for Vercel):",
@@ -27,8 +47,11 @@ async function main() {
         "Or use Docker: docker compose up -d",
       ].join("\n"),
     );
-    process.exit(1);
   }
+}
+
+async function main() {
+  const EmbeddedPostgres = await loadEmbeddedPostgres();
 
   const dataDir = join(process.cwd(), ".data", "pg");
   mkdirSync(dataDir, { recursive: true });
