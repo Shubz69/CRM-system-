@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "crypto";
 import { NextRequest } from "next/server";
-import { getEnv } from "@/lib/env";
+import { getEnv, isDemoModeEnabled } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { manychatWebhookSchema } from "@/schemas/webhook";
@@ -39,24 +39,33 @@ export async function POST(req: NextRequest) {
 
     const data = parsed.data;
     let organisationId = data.organisationId;
+    let channelExternalId: string | undefined = data.channel_id;
 
-    if (!organisationId) {
-      // Resolve via messaging channel external id when available; never fall back to "first org" silently.
-      const channelId = typeof body.channel_id === "string" ? body.channel_id : undefined;
-      if (channelId) {
-        const channel = await prisma.messagingChannel.findFirst({
-          where: { provider: "manychat", externalId: channelId, isActive: true },
-        });
-        organisationId = channel?.organisationId;
+    if (!organisationId && channelExternalId) {
+      const matches = await prisma.messagingChannel.findMany({
+        where: { provider: "manychat", externalId: channelExternalId, isActive: true },
+        take: 5,
+      });
+      if (matches.length === 1) {
+        organisationId = matches[0]?.organisationId;
+      } else if (matches.length > 1) {
+        return Response.json(
+          {
+            error:
+              "channel_id maps to multiple organisations; include organisationId in the payload",
+          },
+          { status: 400 },
+        );
       }
     }
 
-    if (!organisationId && process.env.NODE_ENV !== "production") {
+    if (!organisationId && isDemoModeEnabled()) {
       const org = await prisma.organisation.findFirst({
         where: { deletedAt: null, demoData: true },
         orderBy: { createdAt: "asc" },
       });
       organisationId = org?.id;
+      channelExternalId = channelExternalId ?? "default";
     }
 
     if (!organisationId) {
@@ -64,6 +73,15 @@ export async function POST(req: NextRequest) {
         { error: "organisationId required (or map channel_id to an organisation)" },
         { status: 400 },
       );
+    }
+
+    // Prefer the channel external id mapped for this org when organisationId was provided.
+    if (!channelExternalId) {
+      const channel = await prisma.messagingChannel.findFirst({
+        where: { organisationId, provider: "manychat", isActive: true },
+        orderBy: { createdAt: "asc" },
+      });
+      channelExternalId = channel?.externalId ?? undefined;
     }
 
     const subscriberId = data.subscriber_id ? String(data.subscriber_id) : undefined;
@@ -87,6 +105,7 @@ export async function POST(req: NextRequest) {
     const result = await processInboundMessage(
       {
         organisationId,
+        channelExternalId,
         idempotencyKey: data.id || createHash("sha256").update(idempotencySeed).digest("hex"),
         contact: {
           externalId: subscriberId,

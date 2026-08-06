@@ -20,6 +20,14 @@ const DEFAULT_STAGES = [
 ];
 
 async function main() {
+  const isProduction = process.env.NODE_ENV === "production";
+  const demoMode = process.env.DEMO_MODE === "true";
+
+  if (isProduction && !demoMode) {
+    console.log("Skipping demo seed in production with DEMO_MODE=false");
+    return;
+  }
+
   const passwordHash = await hash("demo1234", 10);
 
   const org = await prisma.organisation.upsert({
@@ -116,6 +124,117 @@ async function main() {
       displayName: "Demo Instagram",
       instagramUsername: "demo_brand",
       isActive: true,
+    },
+  });
+
+  // Second org + membership so multi-org switcher can be exercised in demo.
+  const secondOrg = await prisma.organisation.upsert({
+    where: { slug: "northstar-studio" },
+    update: { demoData: true },
+    create: {
+      name: "Northstar Studio",
+      slug: "northstar-studio",
+      timezone: "Europe/London",
+      demoData: true,
+    },
+  });
+
+  await prisma.organisationMember.upsert({
+    where: {
+      organisationId_userId: {
+        organisationId: secondOrg.id,
+        userId: user.id,
+      },
+    },
+    update: { role: MemberRole.OWNER },
+    create: {
+      organisationId: secondOrg.id,
+      userId: user.id,
+      role: MemberRole.OWNER,
+    },
+  });
+
+  const secondPipeline = await prisma.pipeline.upsert({
+    where: {
+      organisationId_name: {
+        organisationId: secondOrg.id,
+        name: "Default Sales Pipeline",
+      },
+    },
+    update: { isDefault: true },
+    create: {
+      organisationId: secondOrg.id,
+      name: "Default Sales Pipeline",
+      isDefault: true,
+    },
+  });
+
+  for (const stage of DEFAULT_STAGES) {
+    await prisma.pipelineStage.upsert({
+      where: {
+        pipelineId_slug: {
+          pipelineId: secondPipeline.id,
+          slug: stage.slug,
+        },
+      },
+      update: {
+        name: stage.name,
+        position: stage.position,
+        color: stage.color,
+        isWon: stage.isWon ?? false,
+        isLost: stage.isLost ?? false,
+      },
+      create: {
+        pipelineId: secondPipeline.id,
+        name: stage.name,
+        slug: stage.slug,
+        position: stage.position,
+        color: stage.color,
+        isWon: stage.isWon ?? false,
+        isLost: stage.isLost ?? false,
+      },
+    });
+  }
+
+  await prisma.messagingChannel.upsert({
+    where: {
+      organisationId_provider_externalId: {
+        organisationId: secondOrg.id,
+        provider: "manychat",
+        externalId: "northstar_ig",
+      },
+    },
+    update: { displayName: "Northstar Instagram", isActive: true },
+    create: {
+      organisationId: secondOrg.id,
+      provider: "manychat",
+      externalId: "northstar_ig",
+      displayName: "Northstar Instagram",
+      instagramUsername: "northstar_studio",
+      isActive: true,
+    },
+  });
+
+  await prisma.agentConfiguration.deleteMany({ where: { organisationId: secondOrg.id } });
+  await prisma.agentConfiguration.create({
+    data: {
+      organisationId: secondOrg.id,
+      name: "Default Agent",
+      isActive: true,
+      isDraft: false,
+      aiProvider: process.env.AI_PROVIDER || "mock",
+      model: process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "mock-v1",
+      brandTone: "professional, warm, clear",
+      formality: "professional",
+      responseLength: "medium",
+      emojiUsage: "minimal",
+      qualificationQuestions: ["What type of business do you run?"],
+      scoringRules: { weights: { businessFit: 20, need: 15, urgency: 10, budget: 15 } },
+      bookingUrl: process.env.DEFAULT_BOOKING_URL || "https://calendly.com/example/intro-call",
+      confidenceThreshold: 0.65,
+      maxFollowUps: 3,
+      followUpDelaysMinutes: [60, 1440, 4320],
+      restrictedTopics: ["medical advice"],
     },
   });
 
@@ -278,6 +397,7 @@ async function main() {
   console.log("Seed complete");
   console.log("Demo login: demo@dminelligence.local / demo1234");
   console.log(`Organisation: ${org.name} (${org.id})`);
+  console.log(`Second organisation: ${secondOrg.name} (${secondOrg.id})`);
 }
 
 main()

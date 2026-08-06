@@ -50,10 +50,11 @@ npm run worker     # queues / follow-ups
 
 ## Health checks
 
+- `GET /api/health` returns `{ ok, checks.database, checks.redis, demoMode, aiProvider }`
 - `GET /login` returns 200
 - `GET /api/auth/providers` returns 200
 - Postgres accepts connections
-- Redis `PING` succeeds
+- Redis `PING` succeeds (degraded allowed in local/dev)
 - Worker logs "ready" or in-process fallback warning (dev only)
 
 ## Webhooks

@@ -61,10 +61,25 @@ Events: `created`, `rescheduled`, `cancelled`, `attended`, `no_show`.
 
 ## Google Sheets / Email
 
-Report generation stores a JSON payload and supports CSV export now.
-Google Sheets and email delivery are adapter placeholders in the Reports UI — wire credentials later without changing report generation logic.
+Report generation stores a JSON payload and supports CSV download in the UI.
+
+Server export:
+
+```text
+POST /api/reports/export
+{ "reportId": "...", "destination": "sheets" | "email" | "csv", "emailTo": ["ops@example.com"] }
+```
+
+- Without `GOOGLE_SHEETS_*` credentials the **mock Sheets adapter** records the export (for tests/dev).
+- Without `EMAIL_SMTP_URL` the **mock email adapter** records the send.
+- Live googleapis/SMTP transports are credential-gated and intentionally fail closed until those libraries are wired.
+
+## Messaging channels
+
+Map ManyChat `channel_id` values in **Settings → Messaging channels**, or send `organisationId` on every webhook.
 
 ## Redis
 
 Production: run Redis and `npm run worker`.
 Local without Redis: worker falls back to an in-process interval loop.
+The worker also periodically runs daily insights aggregation.

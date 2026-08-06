@@ -29,6 +29,7 @@ export const manychatWebhookSchema = z.object({
   organisationId: z.string().optional(),
   event: z.string().optional(),
   id: z.string().optional(),
+  channel_id: z.string().optional(),
   subscriber_id: z.union([z.string(), z.number()]).optional(),
   first_name: z.string().optional(),
   last_name: z.string().optional(),

@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Inbox,
@@ -17,6 +19,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -33,6 +36,13 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+type OrgOption = {
+  id: string;
+  name: string;
+  role: string;
+  isActive: boolean;
+};
+
 export function AppShell({
   children,
   orgName,
@@ -43,6 +53,41 @@ export function AppShell({
   userName?: string | null;
 }) {
   const pathname = usePathname();
+  const { data: session, update } = useSession();
+  const [orgs, setOrgs] = useState<OrgOption[]>([]);
+
+  useEffect(() => {
+    fetch("/api/organisations")
+      .then(async (r) => {
+        if (!r.ok) return;
+        const j = await r.json();
+        setOrgs(j.organisations || []);
+      })
+      .catch(() => undefined);
+  }, [session?.user?.organisationId]);
+
+  async function switchOrg(organisationId: string) {
+    try {
+      const res = await fetch("/api/session/organisation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ organisationId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Switch failed");
+      await update({ organisationId });
+      toast.success(`Switched to ${json.organisationName}`);
+      window.location.reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not switch organisation");
+    }
+  }
+
+  const activeName =
+    orgs.find((o) => o.isActive)?.name ||
+    session?.user?.organisationName ||
+    orgName ||
+    "CRM";
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
@@ -52,7 +97,25 @@ export function AppShell({
           <h1 className="mt-1 font-[family-name:var(--font-fraunces)] text-2xl text-white">
             DM Intelligence
           </h1>
-          <p className="mt-1 text-sm text-emerald-100/70">{orgName || "CRM"}</p>
+          {orgs.length > 1 ? (
+            <label className="mt-3 block text-xs text-emerald-100/70">
+              Organisation
+              <select
+                className="mt-1 w-full rounded-lg border border-white/15 bg-white/10 px-2 py-1.5 text-sm text-white"
+                value={session?.user?.organisationId || ""}
+                onChange={(e) => switchOrg(e.target.value)}
+                aria-label="Switch organisation"
+              >
+                {orgs.map((org) => (
+                  <option key={org.id} value={org.id} className="text-black">
+                    {org.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="mt-1 text-sm text-emerald-100/70">{activeName}</p>
+          )}
         </div>
         <nav className="flex gap-1 overflow-x-auto px-3 py-4 lg:flex-col">
           {NAV.map((item) => {
@@ -76,7 +139,7 @@ export function AppShell({
           })}
         </nav>
         <div className="hidden border-t border-white/10 px-5 py-4 text-sm text-emerald-100/70 lg:block">
-          Signed in as {userName || "User"}
+          Signed in as {userName || session?.user?.name || "User"}
         </div>
       </aside>
       <main className="min-w-0 p-4 md:p-6 lg:p-8">{children}</main>

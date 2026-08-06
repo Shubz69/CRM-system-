@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { createNotification, notifyOrganisationOwners } from "@/services/notifications";
 import { scheduleFollowUps, cancelPendingFollowUps } from "@/services/followups";
+import { getBookingProvider } from "@/adapters/booking";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { MessageDirection, MessageSenderType, NotificationType } from "@prisma/client";
 import { writeAuditLog } from "@/services/audit";
@@ -243,7 +244,17 @@ async function executeAction(action: AutomationAction, context: AutomationContex
       const agent = await prisma.agentConfiguration.findFirst({
         where: { organisationId: context.organisationId, isActive: true },
       });
-      const bookingUrl = agent?.bookingUrl || process.env.DEFAULT_BOOKING_URL || "";
+      let bookingUrl = agent?.bookingUrl || process.env.DEFAULT_BOOKING_URL || "";
+      if (action.type === "send_booking_link") {
+        const link = await getBookingProvider().createBookingLink({
+          organisationId: context.organisationId,
+          contactId: context.contactId,
+          conversationId: context.conversationId,
+          leadId: context.leadId,
+          bookingUrl: bookingUrl || undefined,
+        });
+        bookingUrl = link.url;
+      }
       const text =
         action.message ||
         (action.type === "send_booking_link"

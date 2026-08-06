@@ -17,6 +17,16 @@ export type ParsedBookingWebhook = {
 };
 
 export interface BookingProvider {
+  readonly name?: string;
   createBookingLink(input: BookingLinkInput): Promise<BookingLinkResult>;
   parseWebhook(payload: unknown): ParsedBookingWebhook | null;
+}
+
+export type MockBookingRecord = BookingLinkInput & { url: string };
+
+/** In-memory log of mock booking link creations for tests/dev. */
+export const mockBookingLog: MockBookingRecord[] = [];
+
+export function clearMockBookingLog(): void {
+  mockBookingLog.length = 0;
 }

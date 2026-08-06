@@ -9,5 +9,13 @@ export default defineConfig({
     baseURL: process.env.APP_URL || "http://localhost:3000",
     trace: "on-first-retry",
   },
+  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
+    ? undefined
+    : {
+        command: "npm run dev",
+        url: process.env.APP_URL || "http://localhost:3000",
+        reuseExistingServer: true,
+        timeout: 180_000,
+      },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

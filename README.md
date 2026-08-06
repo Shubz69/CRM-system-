@@ -120,8 +120,8 @@ npm run test:e2e
 
 **Phase 1:** complete and verified (simulator → pipeline → AI → inbox → dashboard).
 
-**Phase 2:** largely complete (qualification builder, automations engine, notifications, opt-out, booking adapters, assignment, follow-ups).
+**Phase 2:** complete (qualification builder, automations engine, notifications, opt-out, booking adapters, assignment, follow-ups, multi-org switch).
 
-**Phase 3:** implemented in working form (insights aggregation helpers, content/ad idea APIs, reports POST/CSV, campaign attribution). Live Sheets/email remain credential-gated.
+**Phase 3:** complete in working form (insights aggregation + UI, content/ad idea APIs, reports POST/CSV/Sheets/email adapters, campaign attribution, health checks). Live Sheets/email/ManyChat/OpenAI remain credential-gated.
 
 See `docs/PHASE-AUDIT.md` for evidence-based status.

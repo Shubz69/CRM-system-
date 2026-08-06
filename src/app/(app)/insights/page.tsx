@@ -39,12 +39,34 @@ export default function InsightsPage() {
       fetch("/api/insights/content").then(async (r) => {
         const j = await r.json();
         if (!r.ok) return [] as Idea[];
-        return (j.ideas || j.contentIdeas || []) as Idea[];
+        const raw = (j.suggestions || j.ideas || j.contentIdeas || []) as Array<
+          Idea & { type?: string; evidence?: string }
+        >;
+        return raw.map((item) => ({
+          title: item.title,
+          format: item.type || item.format,
+          hook: item.evidence || item.hook || item.recommendedAction,
+          evidenceCount: item.evidenceCount,
+          confidence: item.confidence ?? 0.7,
+          aiGenerated: item.aiGenerated,
+          recommendedAction: item.recommendedAction,
+        }));
       }),
       fetch("/api/insights/ads").then(async (r) => {
         const j = await r.json();
         if (!r.ok) return [] as Idea[];
-        return (j.ideas || j.adIdeas || []) as Idea[];
+        const raw = (j.suggestions || j.ideas || j.adIdeas || []) as Array<
+          Idea & { headline?: string }
+        >;
+        return raw.map((item) => ({
+          title: item.headline || item.title,
+          angle: item.angle || item.headline || item.title,
+          hook: item.hook || item.angle || item.recommendedAction,
+          evidenceCount: item.evidenceCount,
+          confidence: item.confidence ?? 0.7,
+          aiGenerated: item.aiGenerated !== false,
+          recommendedAction: item.recommendedAction,
+        }));
       }),
     ])
       .then(([i, c, a]) => {
@@ -62,6 +84,28 @@ export default function InsightsPage() {
         <p className="text-[var(--muted)]">
           Aggregated conversation intelligence with evidence counts and recommended actions.
         </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          className="btn btn-secondary"
+          type="button"
+          onClick={async () => {
+            try {
+              const res = await fetch("/api/insights/aggregate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || "Aggregate failed");
+              toast.success("Daily insights aggregated");
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Aggregate failed");
+            }
+          }}
+        >
+          Run daily aggregation
+        </button>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         {insights.map((insight) => (

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { KnowledgeDocStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
-import { upsertKnowledgeDocument, chunkText } from "@/services/knowledge";
+import { upsertKnowledgeDocument, chunkText, updateKnowledgeDocument, archiveKnowledgeDocument } from "@/services/knowledge";
 
 export async function GET() {
   try {
@@ -124,12 +124,14 @@ export async function PATCH(req: NextRequest) {
     if (!existing) return jsonError("Document not found", 404);
 
     if (body.content && body.content !== existing.content) {
-      await upsertKnowledgeDocument({
+      await updateKnowledgeDocument({
+        id: existing.id,
         organisationId: session.organisationId,
-        title: body.title || existing.title,
-        category: body.category || existing.category,
+        title: body.title,
+        category: body.category,
         content: body.content,
-        tags: body.tags || existing.tags,
+        tags: body.tags,
+        status: body.status,
       });
     } else {
       await prisma.knowledgeDocument.update({
@@ -147,6 +149,22 @@ export async function PATCH(req: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    return jsonError(message, 500);
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const session = await requirePermission("knowledge:manage");
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+    if (!id) return jsonError("id is required", 400);
+    await archiveKnowledgeDocument({ id, organisationId: session.organisationId });
+    return Response.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed";
+    if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message === "Document not found") return jsonError(message, 404);
     return jsonError(message, 500);
   }
 }

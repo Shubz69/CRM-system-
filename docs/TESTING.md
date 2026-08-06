@@ -24,10 +24,11 @@ npm run test:e2e      # requires app + DB running
 |------|-------|
 | AI Zod validation + scoring | `tests/ai-and-scoring.test.ts` |
 | Mock messaging + permissions | `tests/adapters-and-permissions.test.ts` |
+| Booking / Sheets / Email / knowledge chunking | `tests/adapters-extended.test.ts` |
 | Inbound pipeline + idempotency + org isolation | `tests/inbound-pipeline.integration.test.ts` |
 | Opt-out keywords | `tests/opt-out.test.ts` |
 | Automation triggers | `tests/automations.test.ts` |
-| Login → simulator → inbox → pipeline | `e2e/smoke.spec.ts` |
+| Login → simulator → inbox → pipeline; opt-out; knowledge; reports; insights; org switch | `e2e/smoke.spec.ts` |
 
 ## Manual verification checklist
 
@@ -37,6 +38,8 @@ npm run test:e2e      # requires app + DB running
 4. Pause AI and send manual reply
 5. Send "stop" and confirm opt-out + cancelled follow-ups
 6. Move lead stage in pipeline
-7. Generate daily report and export CSV
+7. Generate daily report and export CSV / Sheets (mock)
 8. Create qualification field and confirm it appears
 9. Toggle an automation rule
+10. Switch organisation via sidebar when multi-org seeded
+11. `GET /api/health` returns healthy when Postgres is up
