@@ -1,6 +1,6 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { assertPermission, type Permission } from "@/lib/permissions";
+import { assertPermission, roleHasPermission, type Permission } from "@/lib/permissions";
 import type { MemberRole } from "@prisma/client";
 
 export async function requireSession() {
@@ -14,12 +14,27 @@ export async function requireSession() {
     role: session.user.role as MemberRole,
     email: session.user.email,
     name: session.user.name,
+    mustChangePassword: Boolean(session.user.mustChangePassword),
+    isPlatformAdmin: Boolean(session.user.isPlatformAdmin),
   };
 }
 
 export async function requirePermission(permission: Permission) {
   const session = await requireSession();
   assertPermission(session.role, permission);
+  return session;
+}
+
+export async function requirePlatformAccess() {
+  const session = await requireSession();
+  const allowed =
+    session.isPlatformAdmin ||
+    session.role === "SUPER_ADMIN" ||
+    roleHasPermission(session.role, "platform:manage") ||
+    session.role === "OWNER";
+  if (!allowed) {
+    throw new Error("Forbidden: missing permission platform:manage");
+  }
   return session;
 }
 

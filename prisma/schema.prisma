@@ -8,6 +8,7 @@ datasource db {
 }
 
 enum MemberRole {
+  SUPER_ADMIN
   OWNER
   ADMINISTRATOR
   MANAGER
@@ -132,18 +133,26 @@ model Organisation {
   conversationInsights ConversationInsight[]
   notes                Note[]
   attributions         Attribution[]
+  knowledgeRecommendations KnowledgeRecommendation[]
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  passwordHash  String?
-  image         String?
-  emailVerified DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  deletedAt     DateTime?
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  name                 String?
+  passwordHash         String?
+  image                String?
+  emailVerified        DateTime?
+  mustChangePassword   Boolean   @default(false)
+  isActive             Boolean   @default(true)
+  isSuspended          Boolean   @default(false)
+  isPlatformAdmin      Boolean   @default(false)
+  failedLoginAttempts  Int       @default(0)
+  lockedUntil          DateTime?
+  lastLoginAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  deletedAt            DateTime?
 
   accounts              Account[]
   sessions              Session[]
@@ -311,25 +320,30 @@ model ContactIdentifier {
 }
 
 model Conversation {
-  id                 String       @id @default(cuid())
-  organisationId     String
-  contactId          String
-  messagingChannelId String?
-  externalThreadId   String?
-  subject            String?
-  handlingMode       HandlingMode @default(AI)
-  unreadCount        Int          @default(0)
-  lastMessageAt      DateTime?
-  lastMessagePreview String?
-  aiPaused           Boolean      @default(false)
-  needsHumanReview   Boolean      @default(false)
-  summary            String?      @db.Text
-  intent             String?
-  sentiment          String?
-  metadata           Json         @default("{}")
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
-  deletedAt          DateTime?
+  id                             String       @id @default(cuid())
+  organisationId                 String
+  contactId                      String
+  messagingChannelId             String?
+  externalThreadId               String?
+  subject                        String?
+  handlingMode                   HandlingMode @default(AI)
+  unreadCount                    Int          @default(0)
+  lastMessageAt                  DateTime?
+  lastMessagePreview             String?
+  lastInboundAt                  DateTime?
+  lastOutboundAt                 DateTime?
+  messagingWindowExpiresAt       DateTime?
+  humanMessagingWindowExpiresAt  DateTime?
+  handoffReason                  String?
+  aiPaused                       Boolean      @default(false)
+  needsHumanReview               Boolean      @default(false)
+  summary                        String?      @db.Text
+  intent                         String?
+  sentiment                      String?
+  metadata                       Json         @default("{}")
+  createdAt                      DateTime     @default(now())
+  updatedAt                      DateTime     @updatedAt
+  deletedAt                      DateTime?
 
   organisation     Organisation             @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   contact          Contact                  @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -447,6 +461,7 @@ model Lead {
   stage          PipelineStage?        @relation(fields: [stageId], references: [id])
   campaign       Campaign?             @relation(fields: [campaignId], references: [id])
   scores         LeadScore[]
+  scoreEvents    LeadScoreEvent[]
   answers        QualificationAnswer[]
   bookings       Booking[]
   followUps      FollowUp[]
@@ -928,4 +943,69 @@ model Notification {
   user         User?        @relation(fields: [userId], references: [id])
 
   @@index([organisationId, userId, readAt])
+}
+
+model KnowledgeRecommendation {
+  id             String   @id @default(cuid())
+  organisationId String
+  conversationId String?
+  question       String
+  draftAnswer    String?
+  reason         String?
+  status         String   @default("NEW") // NEW REVIEWED APPROVED DISMISSED USED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, status])
+}
+
+model LeadScoreEvent {
+  id            String   @id @default(cuid())
+  leadId        String
+  previousScore Int
+  newScore      Int
+  delta         Int
+  reason        String
+  ruleKey       String?
+  messageId     String?
+  createdAt     DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model FailedJob {
+  id             String    @id @default(cuid())
+  organisationId String?
+  queue          String
+  jobName        String
+  payload        Json      @default("{}")
+  error          String
+  attempts       Int       @default(0)
+  createdAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  @@index([queue, createdAt])
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  organisationId String?
+  feature        String
+  provider       String?
+  quantity       Int      @default(1)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([organisationId, feature, createdAt])
 }

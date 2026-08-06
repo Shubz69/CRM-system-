@@ -58,16 +58,21 @@ export function AppShell({
   children,
   orgName,
   userName,
+  isPlatformAdmin,
 }: {
   children: React.ReactNode;
   orgName?: string;
   userName?: string | null;
+  isPlatformAdmin?: boolean;
 }) {
   const pathname = usePathname();
   const { data: session, update } = useSession();
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const isSuperAdmin =
-    session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "OWNER";
+    Boolean(isPlatformAdmin) ||
+    Boolean(session?.user?.isPlatformAdmin) ||
+    session?.user?.role === "SUPER_ADMIN" ||
+    session?.user?.role === "OWNER";
 
   useEffect(() => {
     fetch("/api/organisations")

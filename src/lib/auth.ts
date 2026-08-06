@@ -21,6 +21,8 @@ declare module "next-auth" {
       organisationName?: string;
       role?: MemberRole;
       memberships?: SessionMembership[];
+      mustChangePassword?: boolean;
+      isPlatformAdmin?: boolean;
     };
   }
 
@@ -32,6 +34,8 @@ declare module "next-auth" {
     organisationName?: string;
     role?: MemberRole;
     memberships?: SessionMembership[];
+    mustChangePassword?: boolean;
+    isPlatformAdmin?: boolean;
   }
 }
 
@@ -42,10 +46,14 @@ declare module "next-auth/jwt" {
     organisationName?: string;
     role?: MemberRole;
     memberships?: SessionMembership[];
+    mustChangePassword?: boolean;
+    isPlatformAdmin?: boolean;
   }
 }
 
 const DEMO_EMAIL = "demo@dminelligence.local";
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_DURATION_MS = 15 * 60 * 1000;
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
@@ -81,24 +89,61 @@ export const authOptions: NextAuthOptions = {
         });
 
         if (!user?.passwordHash) return null;
+
+        if (user.isSuspended || !user.isActive || user.deletedAt) {
+          return null;
+        }
+
+        if (user.lockedUntil && user.lockedUntil > new Date()) {
+          return null;
+        }
+
         const valid = await compare(credentials.password, user.passwordHash);
-        if (!valid) return null;
+        if (!valid) {
+          const attempts = user.failedLoginAttempts + 1;
+          const lock =
+            attempts >= MAX_FAILED_ATTEMPTS
+              ? new Date(Date.now() + LOCK_DURATION_MS)
+              : null;
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              failedLoginAttempts: attempts,
+              lockedUntil: lock,
+            },
+          });
+          return null;
+        }
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+            lastLoginAt: new Date(),
+          },
+        });
 
         const memberships: SessionMembership[] = user.memberships.map((m) => ({
           organisationId: m.organisationId,
           organisationName: m.organisation.name,
           role: m.role,
         }));
-        const membership = memberships[0];
+
+        // Prefer SUPER_ADMIN membership when present
+        const preferred =
+          memberships.find((m) => m.role === "SUPER_ADMIN") ?? memberships[0];
 
         return {
           id: user.id,
           email: user.email,
           name: user.name,
-          organisationId: membership?.organisationId,
-          organisationName: membership?.organisationName,
-          role: membership?.role,
+          organisationId: preferred?.organisationId,
+          organisationName: preferred?.organisationName,
+          role: preferred?.role,
           memberships,
+          mustChangePassword: user.mustChangePassword,
+          isPlatformAdmin: user.isPlatformAdmin,
         };
       },
     }),
@@ -111,9 +156,15 @@ export const authOptions: NextAuthOptions = {
         token.organisationName = user.organisationName;
         token.role = user.role;
         token.memberships = user.memberships ?? [];
+        token.mustChangePassword = user.mustChangePassword ?? false;
+        token.isPlatformAdmin = user.isPlatformAdmin ?? false;
       }
 
       if (trigger === "update" && session && typeof session === "object") {
+        if ("mustChangePassword" in session && typeof session.mustChangePassword === "boolean") {
+          token.mustChangePassword = session.mustChangePassword;
+        }
+
         const nextOrgId =
           "organisationId" in session && typeof session.organisationId === "string"
             ? session.organisationId
@@ -132,7 +183,6 @@ export const authOptions: NextAuthOptions = {
             token.organisationId = membership.organisationId;
             token.organisationName = membership.organisation.name;
             token.role = membership.role;
-            // Refresh memberships list
             const all = await prisma.organisationMember.findMany({
               where: { userId: token.id },
               include: { organisation: true },
@@ -156,6 +206,8 @@ export const authOptions: NextAuthOptions = {
         session.user.organisationName = token.organisationName;
         session.user.role = token.role;
         session.user.memberships = token.memberships ?? [];
+        session.user.mustChangePassword = token.mustChangePassword ?? false;
+        session.user.isPlatformAdmin = token.isPlatformAdmin ?? false;
       }
       return session;
     },

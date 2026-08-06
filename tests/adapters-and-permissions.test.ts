@@ -65,4 +65,10 @@ describe("Permissions", () => {
   it("prevents read-only users from writing inbox", () => {
     expect(roleHasPermission(MemberRole.READ_ONLY, "inbox:write")).toBe(false);
   });
+
+  it("gives super admin platform permissions", () => {
+    expect(roleHasPermission(MemberRole.SUPER_ADMIN, "platform:manage")).toBe(true);
+    expect(roleHasPermission(MemberRole.SUPER_ADMIN, "system:health")).toBe(true);
+    expect(roleHasPermission(MemberRole.OWNER, "platform:manage")).toBe(false);
+  });
 });
