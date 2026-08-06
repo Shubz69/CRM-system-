@@ -48,11 +48,10 @@ export function AppShell({
     <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
       <aside className="bg-[var(--sidebar)] text-[var(--sidebar-text)] lg:min-h-screen">
         <div className="border-b border-white/10 px-5 py-5">
-          <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">Product</p>
-          <h1 className="mt-1 font-[family-name:var(--font-fraunces)] text-2xl text-white">
+          <p className="font-[family-name:var(--font-fraunces)] text-2xl text-white">
             DM Intelligence
-          </h1>
-          <p className="mt-1 text-sm text-emerald-100/70">{orgName || "CRM"}</p>
+          </p>
+          <p className="mt-1 text-sm text-teal-100/70">{orgName || "CRM"}</p>
         </div>
         <nav className="flex gap-1 overflow-x-auto px-3 py-4 lg:flex-col">
           {NAV.map((item) => {
@@ -66,7 +65,7 @@ export function AppShell({
                   "flex items-center gap-2 rounded-xl px-3 py-2 text-sm whitespace-nowrap transition",
                   active
                     ? "bg-white/12 text-white"
-                    : "text-emerald-50/70 hover:bg-white/8 hover:text-white",
+                    : "text-teal-50/70 hover:bg-white/8 hover:text-white",
                 )}
               >
                 <Icon size={16} />
@@ -75,11 +74,11 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="hidden border-t border-white/10 px-5 py-4 text-sm text-emerald-100/70 lg:block">
+        <div className="hidden border-t border-white/10 px-5 py-4 text-sm text-teal-100/70 lg:block">
           Signed in as {userName || "User"}
         </div>
       </aside>
-      <main className="min-w-0 p-4 md:p-6 lg:p-8">{children}</main>
+      <main className="animate-rise min-w-0 p-4 md:p-6 lg:p-8">{children}</main>
     </div>
   );
 }

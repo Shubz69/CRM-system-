@@ -1,5 +1,9 @@
 # Deployment
 
+## Vercel
+
+See [VERCEL.md](./VERCEL.md) for importing `Shubz69/CRM-system-` into Vercel, required env vars, Prisma migrate, and the `/api/cron` worker substitute.
+
 ## Components
 
 1. **Next.js web app** (`npm run build` / `npm run start`)
@@ -50,10 +54,11 @@ npm run worker     # queues / follow-ups
 
 ## Health checks
 
+- `GET /api/health` returns `{ ok, checks.database, checks.redis, demoMode, aiProvider }`
 - `GET /login` returns 200
 - `GET /api/auth/providers` returns 200
 - Postgres accepts connections
-- Redis `PING` succeeds
+- Redis `PING` succeeds (degraded allowed in local/dev)
 - Worker logs "ready" or in-process fallback warning (dev only)
 
 ## Webhooks

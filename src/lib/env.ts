@@ -16,6 +16,11 @@ const envSchema = z.object({
   BOOKING_PROVIDER: z.string().default("link"),
   BOOKING_WEBHOOK_SECRET: z.string().default("dev-booking-webhook-secret"),
   DEFAULT_BOOKING_URL: z.string().optional(),
+  GOOGLE_SHEETS_CREDENTIALS_JSON: z.string().optional(),
+  GOOGLE_SHEETS_SPREADSHEET_ID: z.string().optional(),
+  EMAIL_SMTP_URL: z.string().optional(),
+  EMAIL_FROM: z.string().optional(),
+  CRON_SECRET: z.string().optional(),
   ENCRYPTION_KEY: z
     .string()
     .length(64)
@@ -30,6 +35,11 @@ const envSchema = z.object({
 export type AppEnv = z.infer<typeof envSchema>;
 
 let cached: AppEnv | null = null;
+
+const DEV_WEBHOOK_SECRETS = new Set([
+  "dev-manychat-webhook-secret",
+  "dev-booking-webhook-secret",
+]);
 
 export function getEnv(): AppEnv {
   if (cached) return cached;
@@ -48,11 +58,38 @@ export function getEnv(): AppEnv {
     data.AUTH_SECRET = "dev-only-auth-secret-change-me";
     data.NEXTAUTH_SECRET = data.AUTH_SECRET;
   }
+
+  if (data.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
+    if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
+      throw new Error("MANYCHAT_WEBHOOK_SECRET must be rotated away from the default in production");
+    }
+    if (DEV_WEBHOOK_SECRETS.has(data.BOOKING_WEBHOOK_SECRET)) {
+      throw new Error("BOOKING_WEBHOOK_SECRET must be rotated away from the default in production");
+    }
+    if (
+      data.ENCRYPTION_KEY ===
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ) {
+      throw new Error("ENCRYPTION_KEY must be unique in production");
+    }
+  }
+
   cached = data;
   return cached;
+}
+
+/** Test helper to clear cached env between cases. */
+export function resetEnvCache(): void {
+  cached = null;
 }
 
 export function getAuthSecret(): string {
   const env = getEnv();
   return env.NEXTAUTH_SECRET || env.AUTH_SECRET || "dev-only-auth-secret-change-me";
+}
+
+export function isDemoModeEnabled(): boolean {
+  const env = getEnv();
+  if (env.NODE_ENV === "production" && !env.DEMO_MODE) return false;
+  return Boolean(env.DEMO_MODE) || env.NODE_ENV === "development" || env.NODE_ENV === "test";
 }

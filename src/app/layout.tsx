@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { DM_Sans, Fraunces } from "next/font/google";
+import { Fraunces, Outfit } from "next/font/google";
 import { Toaster } from "sonner";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-const dmSans = DM_Sans({
-  variable: "--font-dm-sans",
+const outfit = Outfit({
+  variable: "--font-outfit",
   subsets: ["latin"],
 });
 
@@ -25,7 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${dmSans.variable} ${fraunces.variable} h-full`}>
+    <html lang="en" className={`${outfit.variable} ${fraunces.variable} h-full`}>
       <body className="min-h-full bg-[var(--background)] text-[var(--foreground)] antialiased">
         <Providers>
           {children}

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm install --force
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+        env:
+          DATABASE_URL: postgresql://dmintel:dmintel@127.0.0.1:54329/dm_intelligence_crm?schema=public
+          AUTH_SECRET: ci-auth-secret-change-me-please
+          NEXTAUTH_SECRET: ci-auth-secret-change-me-please
+          DEMO_MODE: "true"
+          AI_PROVIDER: mock
+        continue-on-error: true

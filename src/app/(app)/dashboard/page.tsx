@@ -57,17 +57,17 @@ export default function DashboardPage() {
   }, []);
 
   if (error) {
-    return <div className="surface p-6 text-[var(--danger)]">{error}</div>;
+    return <div className="surface animate-rise p-6 text-[var(--danger)]">{error}</div>;
   }
 
   if (!data) {
-    return <div className="surface p-6 text-[var(--muted)]">Loading dashboard…</div>;
+    return <div className="surface animate-rise p-6 text-[var(--muted)]">Loading dashboard…</div>;
   }
 
   const m = data.metrics;
 
   return (
-    <div className="space-y-6">
+    <div className="animate-rise space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="h-display text-4xl">Dashboard</h1>
