@@ -2,12 +2,22 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { getMissingRuntimeConfig } from "@/lib/env";
 
 export default async function HomePage() {
-  const session = await getServerSession(authOptions);
-  if (session?.user) {
+  let signedIn = false;
+  try {
+    const session = await getServerSession(authOptions);
+    signedIn = Boolean(session?.user);
+  } catch (error) {
+    console.error("Session check failed on home page", error);
+  }
+
+  if (signedIn) {
     redirect("/dashboard");
   }
+
+  const missing = getMissingRuntimeConfig();
 
   return (
     <main className="relative min-h-screen overflow-hidden">
@@ -30,6 +40,16 @@ export default async function HomePage() {
             Sign in
           </Link>
         </header>
+
+        {missing.length > 0 && (
+          <div className="animate-rise mt-6 rounded-2xl border border-amber-300/40 bg-amber-400/15 px-4 py-3 text-sm text-amber-50">
+            <p className="font-semibold">Deployment needs environment variables</p>
+            <p className="mt-1 text-amber-50/85">
+              Add these in Vercel → Settings → Environment Variables, then redeploy:{" "}
+              {missing.join(", ")}.
+            </p>
+          </div>
+        )}
 
         <section className="grid flex-1 items-center gap-10 py-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14">
           <div>

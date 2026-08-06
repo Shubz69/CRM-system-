@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "crypto";
 import { NextRequest } from "next/server";
-import { getEnv } from "@/lib/env";
+import { getEnv, assertWebhookSecretsConfigured } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { manychatWebhookSchema } from "@/schemas/webhook";
@@ -16,6 +16,7 @@ function safeEqual(a: string, b: string): boolean {
 
 export async function POST(req: NextRequest) {
   try {
+    assertWebhookSecretsConfigured();
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     if (!rateLimit(`manychat:${ip}`, 120, 60_000)) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });

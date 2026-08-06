@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { BookingStatus } from "@prisma/client";
-import { getEnv } from "@/lib/env";
+import { getEnv, assertWebhookSecretsConfigured } from "@/lib/env";
 import { prisma } from "@/lib/db";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
@@ -35,6 +35,7 @@ const statusMap: Record<string, BookingStatus> = {
 
 export async function POST(req: NextRequest) {
   try {
+    assertWebhookSecretsConfigured();
     const env = getEnv();
     const secret = req.headers.get("x-booking-secret") || "";
     if (!safeEqual(secret, env.BOOKING_WEBHOOK_SECRET)) {

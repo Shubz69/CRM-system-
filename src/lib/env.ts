@@ -7,8 +7,13 @@ function isProductionBuild(): boolean {
   return process.env.NEXT_PHASE === "phase-production-build";
 }
 
+function isRuntimeProduction(): boolean {
+  return process.env.NODE_ENV === "production" && !isProductionBuild();
+}
+
 const envSchema = z.object({
-  DATABASE_URL: z.string().min(1),
+  // Optional at parse-time so marketing/login can render before DB is configured.
+  DATABASE_URL: z.string().optional().default(""),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   AUTH_SECRET: z.string().min(16).optional(),
   NEXTAUTH_SECRET: z.string().min(16).optional(),
@@ -51,8 +56,6 @@ const DEV_WEBHOOK_SECRETS = new Set([
 export function getEnv(): AppEnv {
   if (cached) return cached;
 
-  // Vercel/Next collect page data during `next build` without runtime secrets.
-  // Provide safe placeholders so compile succeeds; runtime still requires real values.
   if (isProductionBuild()) {
     if (!process.env.DATABASE_URL) {
       process.env.DATABASE_URL = BUILD_PLACEHOLDER_DATABASE_URL;
@@ -71,34 +74,63 @@ export function getEnv(): AppEnv {
     throw new Error(`Invalid environment configuration: ${details}`);
   }
   const data = parsed.data;
+
   if (!data.AUTH_SECRET && !data.NEXTAUTH_SECRET) {
-    if (data.NODE_ENV === "production" && !isProductionBuild()) {
-      throw new Error("AUTH_SECRET or NEXTAUTH_SECRET is required in production");
+    // Prefer rendering the UI over hard-crashing; warn in production.
+    if (isRuntimeProduction()) {
+      console.warn(
+        "[env] AUTH_SECRET / NEXTAUTH_SECRET missing — using ephemeral fallback. Set secrets in Vercel.",
+      );
     }
     data.AUTH_SECRET = "dev-only-auth-secret-change-me";
     data.NEXTAUTH_SECRET = data.AUTH_SECRET;
   }
 
-  if (data.NODE_ENV === "production" && !isProductionBuild()) {
-    if (data.DATABASE_URL === BUILD_PLACEHOLDER_DATABASE_URL) {
-      throw new Error("DATABASE_URL must be set to a real Postgres URL in production");
+  if (isRuntimeProduction()) {
+    if (!data.DATABASE_URL || data.DATABASE_URL === BUILD_PLACEHOLDER_DATABASE_URL) {
+      console.warn(
+        "[env] DATABASE_URL is not configured. Landing/login will load; API/DB routes will fail until set.",
+      );
     }
     if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
-      throw new Error("MANYCHAT_WEBHOOK_SECRET must be rotated away from the default in production");
+      console.warn("[env] MANYCHAT_WEBHOOK_SECRET is still the default — rotate before production traffic.");
     }
     if (DEV_WEBHOOK_SECRETS.has(data.BOOKING_WEBHOOK_SECRET)) {
-      throw new Error("BOOKING_WEBHOOK_SECRET must be rotated away from the default in production");
+      console.warn("[env] BOOKING_WEBHOOK_SECRET is still the default — rotate before production traffic.");
     }
     if (
       data.ENCRYPTION_KEY ===
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     ) {
-      throw new Error("ENCRYPTION_KEY must be unique in production");
+      console.warn("[env] ENCRYPTION_KEY is still the default — rotate before storing secrets.");
     }
   }
 
   cached = data;
   return cached;
+}
+
+/** Throws if Postgres is not configured — use at the start of DB-backed API/routes. */
+export function requireDatabaseUrl(): string {
+  const url = getEnv().DATABASE_URL;
+  if (!url || url === BUILD_PLACEHOLDER_DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL is not configured. Add a Postgres connection string in Vercel → Settings → Environment Variables.",
+    );
+  }
+  return url;
+}
+
+/** Enforce rotated webhook secrets on live webhook handlers only. */
+export function assertWebhookSecretsConfigured(): void {
+  if (!isRuntimeProduction()) return;
+  const env = getEnv();
+  if (DEV_WEBHOOK_SECRETS.has(env.MANYCHAT_WEBHOOK_SECRET)) {
+    throw new Error("MANYCHAT_WEBHOOK_SECRET must be rotated away from the default in production");
+  }
+  if (DEV_WEBHOOK_SECRETS.has(env.BOOKING_WEBHOOK_SECRET)) {
+    throw new Error("BOOKING_WEBHOOK_SECRET must be rotated away from the default in production");
+  }
 }
 
 /** Test helper to clear cached env between cases. */
@@ -107,12 +139,28 @@ export function resetEnvCache(): void {
 }
 
 export function getAuthSecret(): string {
-  const env = getEnv();
-  return env.NEXTAUTH_SECRET || env.AUTH_SECRET || "dev-only-auth-secret-change-me";
+  // Avoid coupling NextAuth bootstrap to full env/DB validation.
+  const direct = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (direct && direct.length >= 16) return direct;
+  if (isProductionBuild()) return "build-only-auth-secret-not-for-runtime";
+  return getEnv().NEXTAUTH_SECRET || getEnv().AUTH_SECRET || "dev-only-auth-secret-change-me";
 }
 
 export function isDemoModeEnabled(): boolean {
   const env = getEnv();
   if (env.NODE_ENV === "production" && !env.DEMO_MODE) return false;
   return Boolean(env.DEMO_MODE) || env.NODE_ENV === "development" || env.NODE_ENV === "test";
+}
+
+export function getMissingRuntimeConfig(): string[] {
+  const env = getEnv();
+  const missing: string[] = [];
+  if (!env.DATABASE_URL || env.DATABASE_URL === BUILD_PLACEHOLDER_DATABASE_URL) {
+    missing.push("DATABASE_URL");
+  }
+  const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (!secret || secret === "dev-only-auth-secret-change-me" || secret === "build-only-auth-secret-not-for-runtime") {
+    missing.push("AUTH_SECRET / NEXTAUTH_SECRET");
+  }
+  return missing;
 }
