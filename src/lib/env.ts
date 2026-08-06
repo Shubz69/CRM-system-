@@ -12,7 +12,6 @@ function isRuntimeProduction(): boolean {
 }
 
 const envSchema = z.object({
-  // Optional at parse-time so marketing/login can render before DB is configured.
   DATABASE_URL: z.string().optional().default(""),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   AUTH_SECRET: z.string().min(16).optional(),
@@ -33,6 +32,12 @@ const envSchema = z.object({
   EMAIL_SMTP_URL: z.string().optional(),
   EMAIL_FROM: z.string().optional(),
   CRON_SECRET: z.string().optional(),
+  ADMIN_EMAIL: z.string().email().optional(),
+  ADMIN_INITIAL_PASSWORD: z.string().optional(),
+  ADMIN_FORCE_PASSWORD_CHANGE: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false"),
   ENCRYPTION_KEY: z
     .string()
     .length(64)
@@ -76,7 +81,6 @@ export function getEnv(): AppEnv {
   const data = parsed.data;
 
   if (!data.AUTH_SECRET && !data.NEXTAUTH_SECRET) {
-    // Prefer rendering the UI over hard-crashing; warn in production.
     if (isRuntimeProduction()) {
       console.warn(
         "[env] AUTH_SECRET / NEXTAUTH_SECRET missing — using ephemeral fallback. Set secrets in Vercel.",
@@ -110,7 +114,6 @@ export function getEnv(): AppEnv {
   return cached;
 }
 
-/** Throws if Postgres is not configured — use at the start of DB-backed API/routes. */
 export function requireDatabaseUrl(): string {
   const url = getEnv().DATABASE_URL;
   if (!url || url === BUILD_PLACEHOLDER_DATABASE_URL) {
@@ -121,7 +124,6 @@ export function requireDatabaseUrl(): string {
   return url;
 }
 
-/** Enforce rotated webhook secrets on live webhook handlers only. */
 export function assertWebhookSecretsConfigured(): void {
   if (!isRuntimeProduction()) return;
   const env = getEnv();
@@ -133,13 +135,11 @@ export function assertWebhookSecretsConfigured(): void {
   }
 }
 
-/** Test helper to clear cached env between cases. */
 export function resetEnvCache(): void {
   cached = null;
 }
 
 export function getAuthSecret(): string {
-  // Avoid coupling NextAuth bootstrap to full env/DB validation.
   const direct = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
   if (direct && direct.length >= 16) return direct;
   if (isProductionBuild()) return "build-only-auth-secret-not-for-runtime";
@@ -159,7 +159,11 @@ export function getMissingRuntimeConfig(): string[] {
     missing.push("DATABASE_URL");
   }
   const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
-  if (!secret || secret === "dev-only-auth-secret-change-me" || secret === "build-only-auth-secret-not-for-runtime") {
+  if (
+    !secret ||
+    secret === "dev-only-auth-secret-change-me" ||
+    secret === "build-only-auth-secret-not-for-runtime"
+  ) {
     missing.push("AUTH_SECRET / NEXTAUTH_SECRET");
   }
   return missing;

@@ -1,22 +1,14 @@
 import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
-import { z } from "zod";
 import { BookingStatus } from "@prisma/client";
-import { getEnv, assertWebhookSecretsConfigured } from "@/lib/env";
+import { getBookingProvider } from "@/adapters/booking";
+import { getEnv, isDemoModeEnabled, assertWebhookSecretsConfigured } from "@/lib/env";
 import { prisma } from "@/lib/db";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
+import { notifyOnBooking } from "@/services/notifications";
 import { logger } from "@/lib/logger";
-
-const bookingWebhookSchema = z.object({
-  organisationId: z.string().optional(),
-  event: z.enum(["created", "rescheduled", "cancelled", "attended", "no_show"]),
-  externalId: z.string(),
-  contactEmail: z.string().email().optional(),
-  contactExternalId: z.string().optional(),
-  scheduledAt: z.string().datetime().optional(),
-  bookingUrl: z.string().optional(),
-});
+import { rateLimit } from "@/lib/rate-limit";
 
 function safeEqual(a: string, b: string): boolean {
   const aBuf = Buffer.from(a);
@@ -25,33 +17,56 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(aBuf, bBuf);
 }
 
-const statusMap: Record<string, BookingStatus> = {
-  created: BookingStatus.CREATED,
-  rescheduled: BookingStatus.RESCHEDULED,
-  cancelled: BookingStatus.CANCELLED,
-  attended: BookingStatus.ATTENDED,
-  no_show: BookingStatus.NO_SHOW,
-};
-
 export async function POST(req: NextRequest) {
   try {
     assertWebhookSecretsConfigured();
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+    if (!rateLimit(`booking:${ip}`, 60, 60_000)) {
+      return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const env = getEnv();
     const secret = req.headers.get("x-booking-secret") || "";
     if (!safeEqual(secret, env.BOOKING_WEBHOOK_SECRET)) {
       return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
     }
 
-    const body = bookingWebhookSchema.parse(await req.json());
-    const org =
-      (body.organisationId &&
-        (await prisma.organisation.findUnique({ where: { id: body.organisationId } }))) ||
-      (await prisma.organisation.findFirst({ where: { deletedAt: null } }));
+    const rawBody = await req.json();
+    const provider = getBookingProvider();
+    const parsed = provider.parseWebhook(rawBody);
+    if (!parsed) {
+      return Response.json({ error: "Invalid booking webhook payload" }, { status: 400 });
+    }
 
-    if (!org) return Response.json({ error: "Organisation not found" }, { status: 400 });
+    const organisationIdFromBody =
+      rawBody && typeof rawBody === "object" && "organisationId" in rawBody
+        ? String((rawBody as { organisationId?: unknown }).organisationId || "")
+        : "";
 
+    let org =
+      organisationIdFromBody
+        ? await prisma.organisation.findFirst({
+            where: { id: organisationIdFromBody, deletedAt: null },
+          })
+        : null;
+
+    if (!org && isDemoModeEnabled()) {
+      org = await prisma.organisation.findFirst({
+        where: { deletedAt: null, demoData: true },
+        orderBy: { createdAt: "asc" },
+      });
+    }
+
+    if (!org) {
+      return Response.json(
+        { error: "organisationId required (no silent first-org fallback)" },
+        { status: 400 },
+      );
+    }
+
+    const eventKey = parsed.status.toLowerCase();
     const idempotencyKey = createHash("sha256")
-      .update(`booking:${body.event}:${body.externalId}`)
+      .update(`booking:${eventKey}:${parsed.externalId}`)
       .digest("hex");
 
     const existingEvent = await prisma.webhookEvent.findUnique({
@@ -66,26 +81,31 @@ export async function POST(req: NextRequest) {
       create: {
         organisationId: org.id,
         provider: "booking",
-        eventType: body.event,
+        eventType: eventKey,
         idempotencyKey,
-        payload: body,
+        payload: rawBody as object,
         status: "PROCESSING",
       },
-      update: { status: "PROCESSING", payload: body },
+      update: { status: "PROCESSING", payload: rawBody as object },
     });
 
-    let contact = body.contactEmail
+    const contactEmail =
+      rawBody && typeof rawBody === "object" && typeof (rawBody as { contactEmail?: unknown }).contactEmail === "string"
+        ? (rawBody as { contactEmail: string }).contactEmail
+        : undefined;
+
+    let contact = contactEmail
       ? await prisma.contact.findFirst({
-          where: { organisationId: org.id, email: body.contactEmail },
+          where: { organisationId: org.id, email: contactEmail },
         })
       : null;
 
-    if (!contact && body.contactExternalId) {
+    if (!contact && parsed.contactExternalId) {
       const ident = await prisma.contactIdentifier.findFirst({
         where: {
           organisationId: org.id,
           channel: "manychat",
-          identifier: `manychat:${body.contactExternalId}`,
+          identifier: `manychat:${parsed.contactExternalId}`,
         },
         include: { contact: true },
       });
@@ -108,12 +128,19 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const bookingUrl =
+      rawBody && typeof rawBody === "object" && typeof (rawBody as { bookingUrl?: unknown }).bookingUrl === "string"
+        ? (rawBody as { bookingUrl: string }).bookingUrl
+        : undefined;
+
+    const bookingProviderName = env.BOOKING_PROVIDER === "mock" ? "mock" : "link";
+
     const booking = await prisma.booking.upsert({
       where: {
         organisationId_provider_externalId: {
           organisationId: org.id,
-          provider: "link",
-          externalId: body.externalId,
+          provider: bookingProviderName,
+          externalId: parsed.externalId,
         },
       },
       create: {
@@ -121,36 +148,42 @@ export async function POST(req: NextRequest) {
         contactId: contact.id,
         conversationId: lead?.conversationId ?? undefined,
         leadId: lead?.id,
-        provider: "link",
-        externalId: body.externalId,
-        status: statusMap[body.event],
-        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-        bookingUrl: body.bookingUrl,
+        provider: bookingProviderName,
+        externalId: parsed.externalId,
+        status: parsed.status as BookingStatus,
+        scheduledAt: parsed.scheduledAt ?? null,
+        bookingUrl,
       },
       update: {
-        status: statusMap[body.event],
-        scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
-        bookingUrl: body.bookingUrl,
+        status: parsed.status as BookingStatus,
+        scheduledAt: parsed.scheduledAt,
+        bookingUrl,
       },
     });
 
-    if (lead?.conversationId && ["created", "rescheduled"].includes(body.event)) {
+    if (lead?.conversationId && ["CREATED", "RESCHEDULED"].includes(parsed.status)) {
       await cancelPendingFollowUps({
         conversationId: lead.conversationId,
         reason: "Booking webhook update",
       });
     }
 
-    if (lead && bookedStage && body.event === "created") {
+    if (lead && bookedStage && parsed.status === "CREATED") {
       await prisma.lead.update({
         where: { id: lead.id },
         data: { stageId: bookedStage.id },
       });
     }
 
+    await notifyOnBooking({
+      organisationId: org.id,
+      bookingId: booking.id,
+      event: eventKey,
+    });
+
     await writeAuditLog({
       organisationId: org.id,
-      action: `booking.${body.event}`,
+      action: `booking.${eventKey}`,
       entityType: "Booking",
       entityId: booking.id,
     });

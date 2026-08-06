@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requirePermission, jsonError } from "@/lib/session";
 import { processInboundMessage } from "@/services/inbound-pipeline";
+import { isDemoModeEnabled } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
 const simulatorSchema = z.object({
@@ -16,6 +17,9 @@ const simulatorSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    if (!isDemoModeEnabled() && process.env.NODE_ENV === "production") {
+      return jsonError("Simulator disabled outside demo mode", 403);
+    }
     const session = await requirePermission("inbox:write");
     const body = await req.json();
     const parsed = simulatorSchema.safeParse(body);

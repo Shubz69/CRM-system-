@@ -5,8 +5,11 @@ import { toast } from "sonner";
 
 export default function ReportsPage() {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
+  const [activeReportId, setActiveReportId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [reports, setReports] = useState<Array<{ id: string; title: string; type: string; createdAt: string; payload: Record<string, unknown> }>>([]);
+  const [reports, setReports] = useState<
+    Array<{ id: string; title: string; type: string; createdAt: string; payload: Record<string, unknown> }>
+  >([]);
 
   async function loadReports() {
     const response = await fetch("/api/reports");
@@ -15,15 +18,22 @@ export default function ReportsPage() {
     setReports(json.reports);
   }
 
-  useEffect(() => { loadReports().catch((error) => toast.error(error.message)); }, []);
+  useEffect(() => {
+    loadReports().catch((error) => toast.error(error.message));
+  }, []);
 
   async function generate(type: "daily" | "weekly") {
     setLoading(true);
     try {
-      const res = await fetch(`/api/reports?type=${type}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type }) });
+      const res = await fetch(`/api/reports?type=${type}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
       setPayload(json.payload);
+      setActiveReportId(json.report?.id ?? null);
       await loadReports();
       toast.success(`${type} report generated`);
     } catch (e) {
@@ -53,10 +63,27 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   }
 
-  function exportSheetsPlaceholder() {
-    toast.message("Google Sheets adapter placeholder", {
-      description: "Report payload is ready; connect Sheets credentials in Settings to enable export.",
-    });
+  async function exportSheets() {
+    if (!activeReportId) {
+      toast.error("Generate or select a report first");
+      return;
+    }
+    try {
+      const res = await fetch("/api/reports/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reportId: activeReportId, destination: "sheets" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Export failed");
+      toast.success(
+        json.result?.destination
+          ? `Exported via ${json.result.provider}`
+          : "Sheets export recorded",
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Export failed");
+    }
   }
 
   return (
@@ -75,7 +102,7 @@ export default function ReportsPage() {
         <button className="btn btn-secondary" disabled={!payload} type="button" onClick={exportCsv}>
           Export CSV
         </button>
-        <button className="btn btn-secondary" disabled={!payload} type="button" onClick={exportSheetsPlaceholder}>
+        <button className="btn btn-secondary" disabled={!activeReportId} type="button" onClick={exportSheets}>
           Export to Google Sheets
         </button>
       </div>
@@ -85,7 +112,20 @@ export default function ReportsPage() {
       <section className="surface p-5">
         <h2 className="h-display text-2xl">Generated reports</h2>
         <ul className="mt-3 space-y-2">
-          {reports.map((report) => <li key={report.id}><button className="text-left hover:underline" onClick={() => setPayload(report.payload)}>{report.title} · {report.type} · {new Date(report.createdAt).toLocaleString()}</button></li>)}
+          {reports.map((report) => (
+            <li key={report.id}>
+              <button
+                className="text-left hover:underline"
+                type="button"
+                onClick={() => {
+                  setPayload(report.payload);
+                  setActiveReportId(report.id);
+                }}
+              >
+                {report.title} · {report.type} · {new Date(report.createdAt).toLocaleString()}
+              </button>
+            </li>
+          ))}
           {!reports.length && <li className="text-[var(--muted)]">No reports generated yet.</li>}
         </ul>
       </section>

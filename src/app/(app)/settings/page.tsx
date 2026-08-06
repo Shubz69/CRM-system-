@@ -1,26 +1,91 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/db";
+"use client";
 
-export default async function SettingsPage() {
-  const session = await getServerSession(authOptions);
-  const orgId = session?.user.organisationId;
+import { FormEvent, useEffect, useState } from "react";
+import { toast } from "sonner";
 
-  const [org, members, integrations, auditLogs] = orgId
-    ? await Promise.all([
-        prisma.organisation.findUnique({ where: { id: orgId } }),
-        prisma.organisationMember.findMany({
-          where: { organisationId: orgId },
-          include: { user: { select: { email: true, name: true } } },
-        }),
-        prisma.integration.findMany({ where: { organisationId: orgId } }),
-        prisma.auditLog.findMany({
-          where: { organisationId: orgId },
-          orderBy: { createdAt: "desc" },
-          take: 20,
-        }),
-      ])
-    : [null, [], [], []];
+type Channel = {
+  id: string;
+  provider: string;
+  externalId: string | null;
+  displayName: string;
+  instagramUsername: string | null;
+  isActive: boolean;
+};
+
+type Member = {
+  id: string;
+  role: string;
+  user: { email: string; name: string | null };
+};
+
+type OrgInfo = {
+  name?: string;
+  slug?: string;
+  timezone?: string;
+  dataRetentionDays?: number;
+};
+
+type Integration = { id: string; name: string; type: string; isActive: boolean };
+type Audit = {
+  id: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  createdAt: string;
+};
+
+export default function SettingsPage() {
+  const [org, setOrg] = useState<OrgInfo | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [auditLogs, setAuditLogs] = useState<Audit[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [externalId, setExternalId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  async function load() {
+    const [settingsRes, channelsRes] = await Promise.all([
+      fetch("/api/settings"),
+      fetch("/api/messaging-channels"),
+    ]);
+    if (settingsRes.ok) {
+      const json = await settingsRes.json();
+      setOrg(json.organisation);
+      setMembers(json.members || []);
+      setIntegrations(json.integrations || []);
+      setAuditLogs(json.auditLogs || []);
+    }
+    if (channelsRes.ok) {
+      const json = await channelsRes.json();
+      setChannels(json.channels || []);
+    }
+  }
+
+  useEffect(() => {
+    load().catch((e) => toast.error(e.message));
+  }, []);
+
+  async function saveChannel(e: FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/messaging-channels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "manychat",
+        externalId,
+        displayName: displayName || externalId,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error(json.error || "Save failed");
+      return;
+    }
+    toast.success("Messaging channel saved");
+    setExternalId("");
+    setDisplayName("");
+    await load();
+  }
 
   return (
     <div className="space-y-6">
@@ -52,6 +117,53 @@ export default async function SettingsPage() {
       </section>
 
       <section className="surface p-5">
+        <h2 className="h-display text-2xl">Messaging channels</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Map ManyChat <code>channel_id</code> values to this organisation for webhook routing.
+        </p>
+        <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-3">
+          <label className="text-sm font-medium">
+            External channel id
+            <input
+              className="input mt-2"
+              value={externalId}
+              onChange={(e) => setExternalId(e.target.value)}
+              required
+              placeholder="ig_channel_123"
+            />
+          </label>
+          <label className="text-sm font-medium">
+            Display name
+            <input
+              className="input mt-2"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Main Instagram"
+            />
+          </label>
+          <div className="flex items-end">
+            <button className="btn btn-primary w-full" type="submit">
+              Save channel mapping
+            </button>
+          </div>
+        </form>
+        <ul className="mt-4 space-y-2 text-sm">
+          {channels.map((channel) => (
+            <li key={channel.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-2">
+              <span>
+                {channel.displayName}
+                <span className="block text-xs text-[var(--muted)]">
+                  {channel.provider}:{channel.externalId}
+                </span>
+              </span>
+              <span className="badge">{channel.isActive ? "Active" : "Inactive"}</span>
+            </li>
+          ))}
+          {!channels.length && <li className="text-[var(--muted)]">No channels configured yet.</li>}
+        </ul>
+      </section>
+
+      <section className="surface p-5">
         <h2 className="h-display text-2xl">Team members</h2>
         <ul className="mt-3 space-y-2 text-sm">
           {members.map((m) => (
@@ -70,10 +182,10 @@ export default async function SettingsPage() {
         <h2 className="h-display text-2xl">Integrations</h2>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {[
-            ["ManyChat / Instagram", "Use mock transport locally. Set MANYCHAT_* env vars for live."],
+            ["ManyChat / Instagram", "Mock transport locally. Set MANYCHAT_* for live. Map channel_id above."],
             ["AI providers", "Configure mock, OpenAI, or Anthropic in AI Agent settings."],
-            ["Booking", "DEFAULT_BOOKING_URL + booking webhook at /api/webhooks/booking"],
-            ["Google Sheets", "Adapter placeholder — export hooks ready in Reports."],
+            ["Booking", "DEFAULT_BOOKING_URL + booking webhook; adapter creates tracked links."],
+            ["Google Sheets / Email", "Reports export uses mock adapters until credentials are set."],
             ["Redis / BullMQ", "Required for production workers. Optional locally with in-process fallback."],
           ].map(([title, body]) => (
             <div key={title} className="rounded-xl border border-[var(--border)] p-4">

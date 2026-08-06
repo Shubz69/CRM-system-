@@ -96,6 +96,72 @@ export function chunkText(content: string, size = 800): string[] {
   return parts;
 }
 
+async function replaceChunks(documentId: string, content: string) {
+  const chunks = chunkText(content);
+  await prisma.knowledgeChunk.deleteMany({ where: { documentId } });
+  if (chunks.length) {
+    await prisma.knowledgeChunk.createMany({
+      data: chunks.map((chunkContent) => ({ documentId, content: chunkContent })),
+    });
+  }
+}
+
+export async function updateKnowledgeDocument(input: {
+  id: string;
+  organisationId: string;
+  title?: string;
+  category?: string;
+  content?: string;
+  tags?: string[];
+  status?: KnowledgeDocStatus;
+}): Promise<string> {
+  const existing = await prisma.knowledgeDocument.findFirst({
+    where: { id: input.id, organisationId: input.organisationId },
+  });
+  if (!existing) {
+    throw new Error("Document not found");
+  }
+
+  const nextContent = input.content ?? existing.content;
+  const contentChanged = input.content !== undefined && input.content !== existing.content;
+
+  if (contentChanged) {
+    await prisma.$transaction([
+      prisma.knowledgeVersion.create({
+        data: {
+          documentId: existing.id,
+          version: existing.version,
+          content: existing.content,
+        },
+      }),
+      prisma.knowledgeDocument.update({
+        where: { id: existing.id },
+        data: {
+          title: input.title ?? existing.title,
+          category: input.category ?? existing.category,
+          content: nextContent,
+          tags: input.tags ?? existing.tags,
+          version: existing.version + 1,
+          status: input.status ?? existing.status,
+        },
+      }),
+    ]);
+    await replaceChunks(existing.id, nextContent);
+  } else {
+    await prisma.knowledgeDocument.update({
+      where: { id: existing.id },
+      data: {
+        title: input.title,
+        category: input.category,
+        tags: input.tags,
+        status: input.status,
+      },
+    });
+  }
+
+  return existing.id;
+}
+
 export async function upsertKnowledgeDocument(input: {
   organisationId: string;
   title: string;
@@ -111,35 +177,15 @@ export async function upsertKnowledgeDocument(input: {
   });
 
   if (existing) {
-    const version = existing.version + 1;
-    await prisma.$transaction([
-      prisma.knowledgeVersion.create({
-        data: {
-          documentId: existing.id,
-          version: existing.version,
-          content: existing.content,
-        },
-      }),
-      prisma.knowledgeChunk.deleteMany({ where: { documentId: existing.id } }),
-      prisma.knowledgeDocument.update({
-        where: { id: existing.id },
-        data: {
-          content: input.content,
-          category: input.category,
-          tags: input.tags ?? existing.tags,
-          version,
-          status: KnowledgeDocStatus.ACTIVE,
-        },
-      }),
-    ]);
-
-    const chunks = chunkText(input.content);
-    if (chunks.length) {
-      await prisma.knowledgeChunk.createMany({
-        data: chunks.map((content) => ({ documentId: existing.id, content })),
-      });
-    }
-    return existing.id;
+    return updateKnowledgeDocument({
+      id: existing.id,
+      organisationId: input.organisationId,
+      title: input.title,
+      category: input.category,
+      content: input.content,
+      tags: input.tags,
+      status: KnowledgeDocStatus.ACTIVE,
+    });
   }
 
   const created = await prisma.knowledgeDocument.create({
@@ -156,3 +202,18 @@ export async function upsertKnowledgeDocument(input: {
   });
   return created.id;
 }
+
+export async function archiveKnowledgeDocument(input: {
+  id: string;
+  organisationId: string;
+}): Promise<void> {
+  const existing = await prisma.knowledgeDocument.findFirst({
+    where: { id: input.id, organisationId: input.organisationId },
+  });
+  if (!existing) throw new Error("Document not found");
+  await prisma.knowledgeDocument.update({
+    where: { id: existing.id },
+    data: { status: KnowledgeDocStatus.ARCHIVED },
+  });
+}
+

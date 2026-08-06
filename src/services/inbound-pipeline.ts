@@ -6,6 +6,7 @@ import {
   WebhookProcessingStatus,
 } from "@prisma/client";
 import { analyseWithValidation, buildAgentSystemPrompt, getAiProvider } from "@/adapters/ai";
+import { getBookingProvider } from "@/adapters/booking";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { hashForIdempotency } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
@@ -630,13 +631,16 @@ export async function processInboundMessage(
 
     if (!forceHandover) {
       let reply = analysis.reply;
-      if (
-        analysis.recommended_next_action === "send_booking_link" &&
-        (agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL)
-      ) {
-        const url = agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL;
-        if (url && !reply.includes(url)) {
-          reply = `${reply}\n\nBook here: ${url}`;
+      if (analysis.recommended_next_action === "send_booking_link") {
+        const booking = await getBookingProvider().createBookingLink({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+          conversationId: result.conversation.id,
+          leadId: result.lead.id,
+          bookingUrl: agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL,
+        });
+        if (booking.url && !reply.includes(booking.url)) {
+          reply = `${reply}\n\nBook here: ${booking.url}`;
         }
       }
 

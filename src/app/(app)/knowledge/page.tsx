@@ -152,6 +152,23 @@ export default function KnowledgePage() {
               >
                 {doc.status === "ACTIVE" ? "Deactivate" : "Activate"}
               </button>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={async () => {
+                  const res = await fetch(`/api/knowledge?id=${encodeURIComponent(doc.id)}`, {
+                    method: "DELETE",
+                  });
+                  if (!res.ok) {
+                    toast.error("Archive failed");
+                    return;
+                  }
+                  toast.success("Archived");
+                  await load();
+                }}
+              >
+                Archive
+              </button>
             </div>
             <p className="mt-3 whitespace-pre-wrap text-sm text-[var(--muted)] line-clamp-6">
               {doc.content}

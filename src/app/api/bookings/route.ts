@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { BookingStatus } from "@prisma/client";
+import { getBookingProvider } from "@/adapters/booking";
 import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
+import { notifyOnBooking } from "@/services/notifications";
 
 const createSchema = z.object({
   contactId: z.string(),
@@ -33,6 +35,14 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const link = await getBookingProvider().createBookingLink({
+      organisationId: session.organisationId,
+      contactId: body.contactId,
+      conversationId: body.conversationId,
+      leadId: body.leadId,
+      bookingUrl: body.bookingUrl ?? process.env.DEFAULT_BOOKING_URL,
+    });
+
     const booking = await prisma.$transaction(async (tx) => {
       const created = await tx.booking.create({
         data: {
@@ -42,9 +52,9 @@ export async function POST(req: NextRequest) {
           leadId: body.leadId,
           status: body.status ?? BookingStatus.CREATED,
           scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-          bookingUrl: body.bookingUrl ?? process.env.DEFAULT_BOOKING_URL,
+          bookingUrl: link.url,
           externalId: body.externalId ?? `booking_${Date.now()}`,
-          provider: "link",
+          provider: link.provider,
         },
       });
 
@@ -64,6 +74,12 @@ export async function POST(req: NextRequest) {
         reason: "Booking confirmed",
       });
     }
+
+    await notifyOnBooking({
+      organisationId: session.organisationId,
+      bookingId: booking.id,
+      event: "created",
+    });
 
     await writeAuditLog({
       organisationId: session.organisationId,
