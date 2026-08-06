@@ -46,7 +46,11 @@ export default function LoginPage() {
           <p className="text-sm font-medium text-[var(--accent)] lg:hidden">DM Intelligence</p>
           <h1 className="h-display mt-1 text-3xl">Sign in</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Demo: demo@dminelligence.local / demo1234
+            Demo (local/DEMO_MODE): demo@dminelligence.local / demo1234
+          </p>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Hosted preview: seed the admin via Vercel env +{" "}
+            <code>/api/admin/bootstrap</code> before signing in.
           </p>
           <label className="mt-6 block text-sm font-medium">
             Email

@@ -24,20 +24,37 @@ This app is a Next.js frontend + API that deploys cleanly to Vercel. Postgres mu
 | `AI_PROVIDER` | `mock` until keys exist |
 | `CRON_SECRET` | Protects `/api/cron` |
 | `REDIS_URL` | Optional; cron route covers follow-ups without Redis |
+| `ADMIN_EMAIL` | Super admin email (e.g. `1230shobhit@gmail.com`) |
+| `ADMIN_INITIAL_PASSWORD` | Strong password — **server-only**, never expose to client |
+| `ADMIN_FORCE_PASSWORD_CHANGE` | `true` recommended |
+| `ADMIN_BOOTSTRAP_SECRET` | Random 16+ char secret to unlock one-time admin seed API |
 
 > Tip: In Vercel → Settings → Environment Variables, add `DATABASE_URL` for Production + Preview, then Redeploy.
 
 5. Deploy
-6. After first deploy, run migrations against the production DB:
+6. After first deploy, sync schema and create the super admin:
 
 ```bash
-DATABASE_URL="…" npx prisma migrate deploy
-# or
+# Option A — from your machine against the hosted DB
 DATABASE_URL="…" npx prisma db push
-DEMO_MODE=true DATABASE_URL="…" npm run db:seed   # staging only
+ADMIN_EMAIL=1230shobhit@gmail.com ADMIN_INITIAL_PASSWORD='…' npm run seed:admin
+
+# Option B — bootstrap API after env vars are set (password stays in Vercel env)
+curl -X POST "https://YOUR_DEPLOYMENT.vercel.app/api/admin/bootstrap" \
+  -H "x-admin-bootstrap-secret: YOUR_ADMIN_BOOTSTRAP_SECRET"
 ```
 
+Check status (no secrets returned):
+
+```bash
+curl "https://YOUR_DEPLOYMENT.vercel.app/api/admin/bootstrap"
+```
+
+Then sign in at `/login` with `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`. Rotate or remove `ADMIN_BOOTSTRAP_SECRET` after success.
+
 7. In Vercel → Settings → Domains, confirm the production URL matches `NEXTAUTH_URL` / `APP_URL`.
+
+**Why login fails on a fresh preview:** the admin user is not created until you seed/bootstrap against the **Vercel** database. Seeding on your laptop only updates your local DB.
 
 ## CLI (optional)
 
