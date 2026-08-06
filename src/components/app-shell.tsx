@@ -42,9 +42,12 @@ const ADMIN_NAV = [
   { href: "/admin", label: "Platform Overview", icon: Shield },
   { href: "/admin/workspaces", label: "Workspaces", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/usage", label: "AI Usage", icon: Bot },
   { href: "/admin/health", label: "System Health", icon: Sparkles },
   { href: "/admin/webhooks", label: "Webhook Events", icon: Workflow },
+  { href: "/admin/failed-jobs", label: "Failed Jobs", icon: ListChecks },
   { href: "/admin/audit", label: "Audit Logs", icon: FileBarChart },
+  { href: "/admin/settings", label: "Global Settings", icon: Settings },
 ];
 
 type OrgOption = {

@@ -21,21 +21,34 @@ The seed is idempotent: it upserts the user, hashes the password with bcrypt cos
 
 ## First login
 
-If `ADMIN_FORCE_PASSWORD_CHANGE` is not `"false"`, the user must visit `/account/change-password` before using the rest of the app. Middleware and `(app)/layout` enforce this.
+1. Open [http://localhost:3000/login](http://localhost:3000/login)
+2. Sign in with `ADMIN_EMAIL` and `ADMIN_INITIAL_PASSWORD`
+3. If `ADMIN_FORCE_PASSWORD_CHANGE` is not `"false"`, you must visit `/account/change-password` before using the rest of the app
 
 ## Admin console
-
-Authenticated platform admins can open:
 
 | Path | Purpose |
 |------|---------|
 | `/admin` | Platform counts |
 | `/admin/users` | User list |
 | `/admin/workspaces` | Organisations |
+| `/admin/usage` | AI & feature usage |
 | `/admin/health` | DB/Redis/failed jobs |
+| `/admin/failed-jobs` | Failed background jobs |
 | `/admin/webhooks` | Recent webhook events |
 | `/admin/audit` | Audit trail |
+| `/admin/settings` | Global SystemSetting keys |
+
+## Impersonation
+
+`POST /api/admin/impersonate` records start/end in the audit log. Super admins cannot impersonate other platform admins. Passwords are never revealed.
+
+## Password reset
+
+- Request: `POST /api/auth/password-reset` with `{ email }`
+- Complete: `POST /api/auth/password-reset` with `{ token, password }`
+- UI: `/forgot-password` and `/reset-password?token=…`
 
 ## Account lockout
 
-Credentials auth locks an account for 15 minutes after 5 failed login attempts. Suspended or inactive users cannot sign in.
+After repeated failed logins the account is temporarily locked (`failedLoginAttempts` / `lockedUntil`). Successful login clears the counters.

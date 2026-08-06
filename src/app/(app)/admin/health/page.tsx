@@ -40,6 +40,8 @@ export default async function AdminHealthPage() {
 
   const redis = await checkRedis();
   const env = getEnv();
+  const usageSince = new Date();
+  usageSince.setUTCHours(usageSince.getUTCHours() - 24);
 
   const [failedJobs, recentFailures, usageLast24h] = await Promise.all([
     prisma.failedJob.count({ where: { resolvedAt: null } }),
@@ -49,7 +51,7 @@ export default async function AdminHealthPage() {
       take: 20,
     }),
     prisma.usageRecord.count({
-      where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      where: { createdAt: { gte: usageSince } },
     }),
   ]);
 

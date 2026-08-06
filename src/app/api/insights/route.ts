@@ -29,13 +29,11 @@ export async function GET() {
           orderBy: { _count: { text: "desc" } },
           take: 10,
         }),
-        prisma.conversation.findMany({
-          where: {
-            organisationId: orgId,
-            needsHumanReview: true,
-          },
-          select: { id: true, summary: true, intent: true },
-          take: 10,
+        prisma.knowledgeRecommendation.findMany({
+          where: { organisationId: orgId, status: { in: ["NEW", "REVIEWED"] } },
+          select: { id: true, question: true, reason: true, status: true },
+          orderBy: { createdAt: "desc" },
+          take: 20,
         }),
         prisma.lead.findMany({
           where: { organisationId: orgId, qualificationStatus: "DISQUALIFIED" },
@@ -80,14 +78,17 @@ export async function GET() {
       },
       {
         type: "knowledge_gap",
-        title: "Conversations where AI struggled",
+        title: "Knowledge gaps requiring approval",
         evidenceCount: knowledgeGaps.length,
         trend: "stable",
         confidence: 0.7,
-        recommendedAction: "Add missing SOPs/FAQs for these intents",
+        recommendedAction: "Review Knowledge recommendations and publish approved answers",
         items: knowledgeGaps.map((g) => ({
-          label: g.intent || g.summary || g.id,
+          label: g.question,
           count: 1,
+          reason: g.reason,
+          status: g.status,
+          id: g.id,
         })),
       },
       {

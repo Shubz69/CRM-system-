@@ -3,8 +3,10 @@ import IORedis from "ioredis";
 import { FollowUpStatus, MessageDirection, MessageSenderType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { evaluateMessagingWindow } from "@/lib/messaging-window";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { writeAuditLog } from "@/services/audit";
+import { recordFailedJob } from "@/services/failed-jobs";
 
 const connectionUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
@@ -70,6 +72,33 @@ export async function processDueFollowUps(): Promise<number> {
       continue;
     }
 
+    const windowState = evaluateMessagingWindow({
+      lastInboundAt: followUp.conversation.lastInboundAt,
+      messagingWindowExpiresAt: followUp.conversation.messagingWindowExpiresAt,
+      humanMessagingWindowExpiresAt: followUp.conversation.humanMessagingWindowExpiresAt,
+      aiPaused: followUp.conversation.aiPaused,
+      handlingMode: followUp.conversation.handlingMode,
+      optedOut: followUp.contact.optedOut,
+    });
+
+    if (!windowState.automatedReplyAllowed) {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: {
+          status: FollowUpStatus.CANCELLED,
+          cancelReason: windowState.automatedBlockedReason || "Messaging window closed",
+        },
+      });
+      await writeAuditLog({
+        organisationId: followUp.organisationId,
+        action: "followup.blocked_messaging_window",
+        entityType: "FollowUp",
+        entityId: followUp.id,
+        metadata: { reason: windowState.automatedBlockedReason },
+      });
+      continue;
+    }
+
     const identifier = followUp.contact.identifiers.find((i) => i.channel === "manychat");
     const externalId = identifier?.identifier.replace(/^manychat:/, "") || followUp.contactId;
     const body =
@@ -88,13 +117,21 @@ export async function processDueFollowUps(): Promise<number> {
         where: { id: followUp.id },
         data: { status: FollowUpStatus.FAILED },
       });
+      await recordFailedJob({
+        organisationId: followUp.organisationId,
+        queue: "follow-ups",
+        jobName: "send-followup",
+        payload: { followUpId: followUp.id },
+        error: result.error || "Outbound send failed",
+      });
       continue;
     }
 
+    const outboundAt = new Date();
     await prisma.$transaction([
       prisma.followUp.update({
         where: { id: followUp.id },
-        data: { status: FollowUpStatus.SENT, sentAt: new Date() },
+        data: { status: FollowUpStatus.SENT, sentAt: outboundAt },
       }),
       prisma.message.create({
         data: {
@@ -110,8 +147,9 @@ export async function processDueFollowUps(): Promise<number> {
       prisma.conversation.update({
         where: { id: followUp.conversationId! },
         data: {
-          lastMessageAt: new Date(),
+          lastMessageAt: outboundAt,
           lastMessagePreview: body.slice(0, 140),
+          lastOutboundAt: outboundAt,
         },
       }),
     ]);
@@ -159,6 +197,13 @@ export function startBullWorker() {
     logger.error("Follow-up worker failed", {
       jobId: job?.id,
       message: err.message,
+    });
+    void recordFailedJob({
+      queue: "follow-ups",
+      jobName: job?.name || "process-due-followups",
+      payload: { jobId: job?.id },
+      error: err.message,
+      attempts: job?.attemptsMade,
     });
   });
 

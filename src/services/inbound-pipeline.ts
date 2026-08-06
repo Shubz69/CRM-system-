@@ -1,4 +1,5 @@
 import {
+  BookingStatus,
   HandlingMode,
   MessageDirection,
   MessageSenderType,
@@ -11,6 +12,7 @@ import { getMessagingAdapter } from "@/adapters/messaging";
 import { hashForIdempotency } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { evaluateMessagingWindow, openMessagingWindows } from "@/lib/messaging-window";
 import type { InboundMessageInput } from "@/schemas/webhook";
 import { writeAuditLog } from "@/services/audit";
 import { upsertCampaignAttribution } from "@/services/attribution";
@@ -26,6 +28,7 @@ import {
 import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/opt-out";
 import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
+import { recordUsage } from "@/services/usage";
 import { NotificationType } from "@prisma/client";
 
 function mapQualificationStatus(status: string): QualificationStatus {
@@ -229,6 +232,7 @@ export async function processInboundMessage(
       });
 
       if (!conversation) {
+        const windows = openMessagingWindows();
         conversation = await tx.conversation.create({
           data: {
             organisationId: input.organisationId,
@@ -237,18 +241,25 @@ export async function processInboundMessage(
             externalThreadId: threadKey,
             handlingMode: HandlingMode.AI,
             unreadCount: 1,
-            lastMessageAt: new Date(),
+            lastMessageAt: windows.lastInboundAt,
             lastMessagePreview: input.message.text.slice(0, 140),
+            lastInboundAt: windows.lastInboundAt,
+            messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
+            humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
           },
         });
       } else {
+        const windows = openMessagingWindows();
         conversation = await tx.conversation.update({
           where: { id: conversation.id },
           data: {
             unreadCount: { increment: 1 },
-            lastMessageAt: new Date(),
+            lastMessageAt: windows.lastInboundAt,
             lastMessagePreview: input.message.text.slice(0, 140),
             externalThreadId: conversation.externalThreadId || threadKey,
+            lastInboundAt: windows.lastInboundAt,
+            messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
+            humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
           },
         });
       }
@@ -426,6 +437,16 @@ export async function processInboundMessage(
           needsHumanReview: true,
           handlingMode: HandlingMode.HUMAN,
           aiPaused: true,
+          handoffReason: analysisResult.reason,
+        },
+      });
+      await prisma.knowledgeRecommendation.create({
+        data: {
+          organisationId: input.organisationId,
+          conversationId: result.conversation.id,
+          question: input.message.text.slice(0, 280),
+          reason: `AI validation failed: ${analysisResult.reason}`,
+          status: "NEW",
         },
       });
       await writeAuditLog({
@@ -492,8 +513,11 @@ export async function processInboundMessage(
           needsHumanReview: forceHandover,
           handlingMode: forceHandover ? HandlingMode.HUMAN : HandlingMode.AI,
           aiPaused: forceHandover,
+          handoffReason: forceHandover ? analysis.handover_reason : undefined,
         },
       });
+
+      const previousScore = result.lead.score ?? 0;
 
       await tx.lead.update({
         where: { id: result.lead.id },
@@ -520,6 +544,20 @@ export async function processInboundMessage(
           },
         },
       });
+
+      if (previousScore !== score.totalScore) {
+        await tx.leadScoreEvent.create({
+          data: {
+            leadId: result.lead.id,
+            previousScore,
+            newScore: score.totalScore,
+            delta: score.totalScore - previousScore,
+            reason: score.explanation || "Lead score recalculated from conversation analysis",
+            ruleKey: "deterministic_scoring",
+            messageId: result.inboundMessage.id,
+          },
+        });
+      }
 
       for (const objection of analysis.objections_detected) {
         await tx.objection.create({
@@ -551,6 +589,40 @@ export async function processInboundMessage(
           },
         });
       }
+
+      const knowledgeGap =
+        knowledge.chunks.length === 0 ||
+        analysis.confidence < threshold ||
+        (analysis.questions_detected.length > 0 && knowledge.documentTitles.length === 0);
+
+      if (knowledgeGap) {
+        const gapQuestion =
+          analysis.questions_detected[0] ||
+          input.message.text.slice(0, 280) ||
+          "Unanswered prospect question";
+        await tx.knowledgeRecommendation.create({
+          data: {
+            organisationId: input.organisationId,
+            conversationId: result.conversation.id,
+            question: gapQuestion,
+            draftAnswer: null,
+            reason:
+              knowledge.chunks.length === 0
+                ? "No relevant knowledge chunks retrieved"
+                : analysis.confidence < threshold
+                  ? "AI confidence below threshold"
+                  : "Question detected without supporting documents",
+            status: "NEW",
+          },
+        });
+      }
+    });
+
+    await recordUsage({
+      organisationId: input.organisationId,
+      feature: "ai_analysis",
+      provider: providerClient.name,
+      metadata: { conversationId: result.conversation.id, confidence: analysis.confidence },
     });
 
     await upsertCampaignAttribution({
@@ -630,6 +702,35 @@ export async function processInboundMessage(
     let outboundMessageId: string | undefined;
 
     if (!forceHandover) {
+      const windowState = evaluateMessagingWindow({
+        lastInboundAt: result.conversation.lastInboundAt,
+        messagingWindowExpiresAt: result.conversation.messagingWindowExpiresAt,
+        humanMessagingWindowExpiresAt: result.conversation.humanMessagingWindowExpiresAt,
+        aiPaused: false,
+        handlingMode: HandlingMode.AI,
+        optedOut: result.contact.optedOut,
+      });
+
+      if (!windowState.automatedReplyAllowed) {
+        await prisma.conversation.update({
+          where: { id: result.conversation.id },
+          data: { needsHumanReview: true },
+        });
+        await notifyOrganisationOwners({
+          organisationId: input.organisationId,
+          type: NotificationType.AI_FAILURE,
+          title: "AI reply blocked by messaging window",
+          body: windowState.automatedBlockedReason || "Messaging window closed",
+          metadata: { conversationId: result.conversation.id },
+        });
+        await writeAuditLog({
+          organisationId: input.organisationId,
+          action: "outbound.blocked_messaging_window",
+          entityType: "Conversation",
+          entityId: result.conversation.id,
+          metadata: { reason: windowState.automatedBlockedReason },
+        });
+      } else {
       let reply = analysis.reply;
       if (analysis.recommended_next_action === "send_booking_link") {
         const booking = await getBookingProvider().createBookingLink({
@@ -642,6 +743,29 @@ export async function processInboundMessage(
         if (booking.url && !reply.includes(booking.url)) {
           reply = `${reply}\n\nBook here: ${booking.url}`;
         }
+        await prisma.booking.create({
+          data: {
+            organisationId: input.organisationId,
+            contactId: result.contact.id,
+            conversationId: result.conversation.id,
+            leadId: result.lead.id,
+            provider: process.env.BOOKING_PROVIDER || "link",
+            status: BookingStatus.OFFERED,
+            bookingUrl: booking.url || agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL,
+            attribution: {
+              source: input.leadSource || "instagram_manychat",
+              campaign: input.campaignSource || null,
+            },
+          },
+        });
+        await runAutomations({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+          conversationId: result.conversation.id,
+          leadId: result.lead.id,
+          triggerType: "booking_link_sent",
+          payload: { bookingUrl: booking.url },
+        });
       }
 
       const adapter = getMessagingAdapter();
@@ -653,6 +777,7 @@ export async function processInboundMessage(
       });
 
       if (sendResult.ok) {
+        const outboundAt = new Date();
         const outbound = await prisma.message.create({
           data: {
             conversationId: result.conversation.id,
@@ -679,9 +804,17 @@ export async function processInboundMessage(
         await prisma.conversation.update({
           where: { id: result.conversation.id },
           data: {
-            lastMessageAt: new Date(),
+            lastMessageAt: outboundAt,
             lastMessagePreview: reply.slice(0, 140),
+            lastOutboundAt: outboundAt,
           },
+        });
+
+        await recordUsage({
+          organisationId: input.organisationId,
+          feature: "ai_reply",
+          provider: providerClient.name,
+          metadata: { conversationId: result.conversation.id, messageId: outbound.id },
         });
       } else {
         logger.error("Failed to send AI reply", { error: sendResult.error });
@@ -710,6 +843,7 @@ export async function processInboundMessage(
         delaysMinutes: delays,
         maxFollowUps: agentConfig?.maxFollowUps ?? 3,
       });
+      }
     } else {
       await writeAuditLog({
         organisationId: input.organisationId,

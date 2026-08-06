@@ -36,6 +36,19 @@ Open [http://localhost:3000](http://localhost:3000)
 
 **Demo login:** `demo@dminelligence.local` / `demo1234`
 
+**Super admin** (after seed — never hard-code the password):
+
+```bash
+export ADMIN_EMAIL="1230shobhit@gmail.com"
+export ADMIN_INITIAL_PASSWORD="your-strong-password"
+export ADMIN_FORCE_PASSWORD_CHANGE="true"
+npm run seed:admin
+```
+
+Then sign in at `/login` and complete `/account/change-password` when forced.
+
+Docs: [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md)
+
 Then open **Simulator**, send a DM, and confirm the conversation appears in **Inbox**.
 
 ## Quick start (Docker)

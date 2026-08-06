@@ -28,6 +28,8 @@ npm run test:e2e      # requires app + DB running
 | Inbound pipeline + idempotency + org isolation | `tests/inbound-pipeline.integration.test.ts` |
 | Opt-out keywords | `tests/opt-out.test.ts` |
 | Automation triggers | `tests/automations.test.ts` |
+| Messaging windows | `tests/messaging-window.test.ts` |
+| ManyChat secret masking | `tests/manychat-secrets.test.ts` |
 | Login → simulator → inbox → pipeline; opt-out; knowledge; reports; insights; org switch | `e2e/smoke.spec.ts` |
 
 ## Manual verification checklist

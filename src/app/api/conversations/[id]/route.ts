@@ -7,6 +7,7 @@ import { getMessagingAdapter } from "@/adapters/messaging";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
+import { evaluateMessagingWindow } from "@/lib/messaging-window";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -36,6 +37,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
               include: { components: true },
             },
             bookings: { orderBy: { createdAt: "desc" } },
+            scoreEvents: { orderBy: { createdAt: "desc" }, take: 10 },
           },
         },
         objections: { orderBy: { detectedAt: "desc" }, take: 20 },
@@ -153,6 +155,19 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
 
     if (body.reply) {
+      const windowState = evaluateMessagingWindow({
+        lastInboundAt: conversation.lastInboundAt,
+        messagingWindowExpiresAt: conversation.messagingWindowExpiresAt,
+        humanMessagingWindowExpiresAt: conversation.humanMessagingWindowExpiresAt,
+        optedOut: conversation.contact.optedOut,
+      });
+      if (!windowState.humanReplyAllowed) {
+        return jsonError(
+          windowState.humanBlockedReason || "Human messaging window has closed",
+          403,
+        );
+      }
+
       const identifier = conversation.contact.identifiers.find((i) => i.channel === "manychat");
       const adapter = getMessagingAdapter(false);
       const sendResult = await adapter.sendMessage({
@@ -162,6 +177,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         threadId: conversation.externalThreadId ?? undefined,
       });
 
+      const outboundAt = new Date();
       await prisma.message.create({
         data: {
           conversationId: id,
@@ -177,8 +193,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       await prisma.conversation.update({
         where: { id },
         data: {
-          lastMessageAt: new Date(),
+          lastMessageAt: outboundAt,
           lastMessagePreview: body.reply.slice(0, 140),
+          lastOutboundAt: outboundAt,
           aiPaused: true,
           handlingMode: HandlingMode.HUMAN,
         },

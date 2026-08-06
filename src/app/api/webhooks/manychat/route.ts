@@ -6,6 +6,8 @@ import { rateLimit } from "@/lib/rate-limit";
 import { manychatWebhookSchema } from "@/schemas/webhook";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { prisma } from "@/lib/db";
+import { validateManyChatSecret } from "@/services/manychat-secrets";
+import { recordUsage } from "@/services/usage";
 
 function safeEqual(a: string, b: string): boolean {
   const aBuf = Buffer.from(a);
@@ -28,10 +30,6 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-webhook-secret") ||
       "";
 
-    if (!safeEqual(secretHeader, env.MANYCHAT_WEBHOOK_SECRET)) {
-      return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
-    }
-
     const body = await req.json();
     const parsed = manychatWebhookSchema.safeParse(body);
     if (!parsed.success) {
@@ -41,6 +39,18 @@ export async function POST(req: NextRequest) {
     const data = parsed.data;
     let organisationId = data.organisationId;
     let channelExternalId: string | undefined = data.channel_id;
+
+    // Fast-path: env secret always accepted; otherwise require org id then org secret.
+    const envOk = safeEqual(secretHeader, env.MANYCHAT_WEBHOOK_SECRET);
+    if (!envOk) {
+      if (!organisationId) {
+        return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
+      }
+      const orgOk = await validateManyChatSecret(secretHeader, organisationId);
+      if (!orgOk) {
+        return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
+      }
+    }
 
     if (!organisationId && channelExternalId) {
       const matches = await prisma.messagingChannel.findMany({
@@ -76,7 +86,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prefer the channel external id mapped for this org when organisationId was provided.
     if (!channelExternalId) {
       const channel = await prisma.messagingChannel.findFirst({
         where: { organisationId, provider: "manychat", isActive: true },
@@ -122,6 +131,13 @@ export async function POST(req: NextRequest) {
       },
       { provider: "manychat", rawPayload: body },
     );
+
+    await recordUsage({
+      organisationId,
+      feature: "webhook_inbound",
+      provider: "manychat",
+      metadata: { duplicate: result.duplicate },
+    });
 
     return Response.json({ ok: true, result });
   } catch (error) {

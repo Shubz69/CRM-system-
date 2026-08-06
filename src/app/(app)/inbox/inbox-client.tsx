@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import { evaluateMessagingWindow, formatDurationRemaining } from "@/lib/messaging-window";
 
 type ConversationListItem = {
   id: string;
@@ -14,6 +15,9 @@ type ConversationListItem = {
   handlingMode: string;
   aiPaused: boolean;
   needsHumanReview: boolean;
+  messagingWindowExpiresAt?: string | null;
+  humanMessagingWindowExpiresAt?: string | null;
+  lastInboundAt?: string | null;
   lead: {
     id: string;
     score: number;
@@ -31,6 +35,10 @@ type ConversationDetail = {
   handlingMode: string;
   aiPaused: boolean;
   needsHumanReview: boolean;
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
+  messagingWindowExpiresAt?: string | null;
+  humanMessagingWindowExpiresAt?: string | null;
   contact: {
     id: string;
     fullName: string | null;
@@ -55,11 +63,19 @@ type ConversationDetail = {
     stageId: string | null;
     stage?: { id: string; name: string } | null;
     bookings: Array<{ id: string; status: string; bookingUrl: string | null }>;
+    scoreEvents?: Array<{
+      id: string;
+      previousScore: number;
+      newScore: number;
+      delta: number;
+      reason: string;
+      createdAt: string;
+    }>;
   }>;
   objections: Array<{ id: string; category: string; text: string }>;
   questions: Array<{ id: string; text: string }>;
   buyingSignals: Array<{ id: string; text: string }>;
-  followUps: Array<{ id: string; status: string; scheduledFor: string; attemptNumber: number }>;
+  followUps: Array<{ id: string; status: string; scheduledFor: string; attemptNumber: number; cancelReason?: string | null }>;
   assignments?: Array<{ user: { id: string; name: string | null; email: string } }>;
 };
 
@@ -115,6 +131,22 @@ export default function InboxPage() {
   }, [selectedId, loadDetail]);
 
   const lead = detail?.leads?.[0];
+
+  const messagingWindow = useMemo(() => {
+    if (!detail) return null;
+    return evaluateMessagingWindow({
+      lastInboundAt: detail.lastInboundAt ? new Date(detail.lastInboundAt) : null,
+      messagingWindowExpiresAt: detail.messagingWindowExpiresAt
+        ? new Date(detail.messagingWindowExpiresAt)
+        : null,
+      humanMessagingWindowExpiresAt: detail.humanMessagingWindowExpiresAt
+        ? new Date(detail.humanMessagingWindowExpiresAt)
+        : null,
+      aiPaused: detail.aiPaused,
+      handlingMode: detail.handlingMode,
+      optedOut: detail.contact.optedOut,
+    });
+  }, [detail]);
 
   async function patch(body: Record<string, unknown>) {
     if (!selectedId) return;
@@ -276,6 +308,37 @@ export default function InboxPage() {
           ) : (
             <div className="space-y-4 text-sm">
               <div>
+                <h3 className="font-semibold">Messaging window</h3>
+                {messagingWindow ? (
+                  <ul className="mt-2 space-y-1 text-xs">
+                    <li>
+                      AI reply:{" "}
+                      <span className={messagingWindow.automatedReplyAllowed ? "badge badge-success" : "badge badge-danger"}>
+                        {messagingWindow.automatedReplyAllowed ? "Allowed" : "Blocked"}
+                      </span>
+                      {" · "}
+                      {formatDurationRemaining(messagingWindow.automatedMsRemaining)} left
+                    </li>
+                    <li>
+                      Manual reply:{" "}
+                      <span className={messagingWindow.humanReplyAllowed ? "badge badge-success" : "badge badge-warn"}>
+                        {messagingWindow.humanReplyAllowed ? "Allowed" : "Blocked"}
+                      </span>
+                      {" · "}
+                      {formatDurationRemaining(messagingWindow.humanMsRemaining)} left
+                    </li>
+                    {messagingWindow.automatedBlockedReason && (
+                      <li className="text-[var(--danger)]">{messagingWindow.automatedBlockedReason}</li>
+                    )}
+                    {messagingWindow.humanBlockedReason && (
+                      <li className="text-[var(--muted)]">{messagingWindow.humanBlockedReason}</li>
+                    )}
+                  </ul>
+                ) : (
+                  <p className="text-[var(--muted)]">No window data</p>
+                )}
+              </div>
+              <div>
                 <h3 className="font-semibold">Contact</h3>
                 <p>{detail.contact.email || "No email"}</p>
                 <p>{detail.contact.phone || "No phone"}</p>
@@ -301,6 +364,26 @@ export default function InboxPage() {
                   Score: <span className="badge badge-success">{lead?.score ?? 0}</span>
                 </p>
                 <p className="mt-1 text-xs text-[var(--muted)]">{lead?.scoreExplanation}</p>
+                {lead?.scoreEvents && lead.scoreEvents.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">
+                    {lead.scoreEvents.slice(0, 5).map((ev) => (
+                      <li key={ev.id}>
+                        {ev.previousScore} → {ev.newScore} ({ev.delta >= 0 ? "+" : ""}
+                        {ev.delta}): {ev.reason}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {lead?.bookings && lead.bookings.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-xs">
+                    {lead.bookings.map((b) => (
+                      <li key={b.id}>
+                        Booking <span className="badge">{b.status}</span>
+                        {b.bookingUrl ? ` · ${b.bookingUrl}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div>
                 <h3 className="font-semibold">Pipeline stage</h3>

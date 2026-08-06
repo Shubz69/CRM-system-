@@ -13,10 +13,13 @@ const DEFAULT_STAGES = [
   { name: "Qualified", slug: "qualified", position: 4, color: "#34d399" },
   { name: "Booking offered", slug: "booking_offered", position: 5, color: "#fbbf24" },
   { name: "Booked", slug: "booked", position: 6, color: "#f59e0b", isWon: false },
-  { name: "Nurture", slug: "nurture", position: 7, color: "#c084fc" },
-  { name: "Won", slug: "won", position: 8, color: "#22c55e", isWon: true },
-  { name: "Lost", slug: "lost", position: 9, color: "#ef4444", isLost: true },
-  { name: "Disqualified", slug: "disqualified", position: 10, color: "#78716c", isLost: true },
+  { name: "Attended", slug: "attended", position: 7, color: "#10b981" },
+  { name: "No-show", slug: "no_show", position: 8, color: "#f97316", isLost: true },
+  { name: "Nurture", slug: "nurture", position: 9, color: "#c084fc" },
+  { name: "Won", slug: "won", position: 10, color: "#22c55e", isWon: true },
+  { name: "Lost", slug: "lost", position: 11, color: "#ef4444", isLost: true },
+  { name: "Disqualified", slug: "disqualified", position: 12, color: "#78716c", isLost: true },
+  { name: "Human review", slug: "human_review", position: 13, color: "#e11d48" },
 ];
 
 async function main() {

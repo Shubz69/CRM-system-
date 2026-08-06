@@ -73,6 +73,10 @@ export default function LoginPage() {
             {loading ? "Signing in…" : "Sign in"}
           </button>
           <p className="mt-4 text-center text-sm text-[var(--muted)]">
+            <Link href="/forgot-password" className="underline-offset-2 hover:underline">
+              Forgot password?
+            </Link>
+            {" · "}
             <Link href="/" className="underline-offset-2 hover:underline">
               Back to home
             </Link>

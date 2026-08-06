@@ -13,17 +13,34 @@ type Doc = {
   _count: { chunks: number; versions: number };
 };
 
+type Recommendation = {
+  id: string;
+  question: string;
+  draftAnswer: string | null;
+  reason: string | null;
+  status: string;
+  createdAt: string;
+};
+
 export default function KnowledgePage() {
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("faq");
   const [content, setContent] = useState("");
 
   async function load() {
-    const res = await fetch("/api/knowledge");
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed");
-    setDocs(json.documents);
+    const [docsRes, recRes] = await Promise.all([
+      fetch("/api/knowledge"),
+      fetch("/api/knowledge/recommendations"),
+    ]);
+    const docsJson = await docsRes.json();
+    if (!docsRes.ok) throw new Error(docsJson.error || "Failed");
+    setDocs(docsJson.documents);
+    if (recRes.ok) {
+      const recJson = await recRes.json();
+      setRecommendations(recJson.recommendations || []);
+    }
   }
 
   useEffect(() => {
@@ -121,6 +138,49 @@ export default function KnowledgePage() {
           Upload & extract
         </button>
       </form>
+
+      <section className="space-y-3">
+        <h2 className="h-display text-2xl">Knowledge gaps</h2>
+        <p className="text-sm text-[var(--muted)]">
+          Recommendations require approval before becoming knowledge. The AI does not auto-publish.
+        </p>
+        {recommendations.length === 0 && (
+          <div className="surface p-4 text-sm text-[var(--muted)]">No open knowledge gaps.</div>
+        )}
+        {recommendations.map((rec) => (
+          <article key={rec.id} className="surface p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="badge">{rec.status}</span>
+              <p className="font-medium">{rec.question}</p>
+            </div>
+            {rec.reason && <p className="mt-2 text-xs text-[var(--muted)]">{rec.reason}</p>}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(["APPROVED", "DISMISSED", "REVIEWED"] as const).map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    const res = await fetch("/api/knowledge/recommendations", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ id: rec.id, status }),
+                    });
+                    if (!res.ok) {
+                      toast.error("Update failed");
+                      return;
+                    }
+                    toast.success(`Marked ${status.toLowerCase()}`);
+                    await load();
+                  }}
+                >
+                  {status.charAt(0) + status.slice(1).toLowerCase()}
+                </button>
+              ))}
+            </div>
+          </article>
+        ))}
+      </section>
 
       <div className="grid gap-3">
         {docs.map((doc) => (
