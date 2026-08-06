@@ -49,8 +49,6 @@ vercel --prod
 
 Connect the Vercel project to `main` for production, or to `cursor/frontend-vercel-deploy-668b` while reviewing this PR.
 
-## Notes
+## Install note (Windows Postgres package)
 
-- `@embedded-postgres/*` is Windows-local only and installed with `--force` on Vercel via `installCommand`.
-- Long-running `npm run worker` is optional on Vercel; `/api/cron` runs follow-ups + insight aggregation every 5 minutes.
-- Health check: `GET /api/health`
+`@embedded-postgres/windows-x64` is **not** listed in `package.json` because it breaks Linux/Vercel installs (`EBADPLATFORM`). Use Neon/Supabase/`DATABASE_URL` on Vercel. For local embedded Postgres only, install the platform package manually (see README).

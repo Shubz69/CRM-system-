@@ -2,13 +2,34 @@
  * Starts an embedded PostgreSQL instance for local development when Docker
  * is unavailable. Persists data under .data/pg.
  *
+ * These packages are intentionally NOT in package.json (they break Vercel/Linux
+ * installs when the Windows binary is declared). Install locally when needed:
+ *
+ *   npm install -D embedded-postgres @embedded-postgres/linux-x64
+ *   # Windows: npm install -D embedded-postgres @embedded-postgres/windows-x64
+ *
  * Usage: npx tsx scripts/dev-db.ts
  */
 import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import EmbeddedPostgres from "embedded-postgres";
 
 async function main() {
+  let EmbeddedPostgres: typeof import("embedded-postgres").default;
+  try {
+    ({ default: EmbeddedPostgres } = await import("embedded-postgres"));
+  } catch {
+    console.error(
+      [
+        "embedded-postgres is not installed.",
+        "Install platform packages locally (not required for Vercel):",
+        "  npm install -D embedded-postgres @embedded-postgres/linux-x64",
+        "  # Windows: npm install -D embedded-postgres @embedded-postgres/windows-x64",
+        "Or use Docker: docker compose up -d",
+      ].join("\n"),
+    );
+    process.exit(1);
+  }
+
   const dataDir = join(process.cwd(), ".data", "pg");
   mkdirSync(dataDir, { recursive: true });
 

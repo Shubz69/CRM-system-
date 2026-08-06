@@ -13,12 +13,15 @@ Temporary product name: **DM Intelligence CRM** (easy to rename later).
 - Zod validation
 - Vitest + Playwright
 - Docker Compose for Postgres/Redis (recommended)
-- Embedded Postgres script for Windows local setup without Docker
+- Optional embedded Postgres for local setup without Docker (install separately — see below)
 
-## Quick start (Windows without Docker)
+## Quick start (Windows / local without Docker)
 
 ```bash
 npm install
+# Embedded Postgres is optional and platform-specific (kept out of package.json for Vercel):
+npm install -D embedded-postgres @embedded-postgres/windows-x64
+# Linux local: npm install -D embedded-postgres @embedded-postgres/linux-x64
 copy .env.example .env
 
 # Terminal 1 — embedded Postgres
