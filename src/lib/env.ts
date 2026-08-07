@@ -18,8 +18,17 @@ const envSchema = z.object({
   NEXTAUTH_SECRET: z.string().min(16).optional(),
   NEXTAUTH_URL: z.string().default("http://localhost:3000"),
   APP_URL: z.string().default("http://localhost:3000"),
-  AI_PROVIDER: z.enum(["mock", "openai", "anthropic"]).default("mock"),
+  // Primary AI provider is Anthropic Claude. OpenAI is optional and never required.
+  AI_PROVIDER: z.enum(["mock", "openai", "anthropic"]).default("anthropic"),
   ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_DEFAULT_MODEL: z.string().optional(),
+  ANTHROPIC_ECONOMY_MODEL: z.string().optional(),
+  ANTHROPIC_ADVANCED_MODEL: z.string().optional(),
+  ANTHROPIC_MAX_TOKENS: z.string().optional(),
+  ANTHROPIC_TIMEOUT_MS: z.string().optional(),
+  ANTHROPIC_RETRIES: z.string().optional(),
+  ANTHROPIC_TEMPERATURE: z.string().optional(),
+  /** OPTIONAL — not required for production. Kept only for the optional OpenAI adapter. */
   OPENAI_API_KEY: z.string().optional(),
   MANYCHAT_API_BASE_URL: z.string().default("https://api.manychat.com"),
   MANYCHAT_API_TOKEN: z.string().optional(),

@@ -1,26 +1,9 @@
-# Knowledge & SOPs
+# Knowledge retrieval
 
-## Managing documents
+DM Intelligence retrieves approved business knowledge with **lexical token ranking** over `KnowledgeDocument` / `KnowledgeChunk` rows in Postgres (`src/services/knowledge.ts`).
 
-Administrators can create, upload (PDF/TXT/MD), categorise, activate/deactivate, and archive documents at `/knowledge`.
+## Embeddings
 
-Documents are chunked for retrieval. Only relevant chunks are injected into the AI prompt.
+**OpenAI embeddings are not used.** Knowledge works without `OPENAI_API_KEY`.
 
-## Knowledge gaps
-
-When retrieval is empty or AI confidence is low, the inbound pipeline creates a `KnowledgeRecommendation`.
-
-Recommendations appear under **Knowledge gaps** on `/knowledge`. Statuses:
-
-- `NEW`
-- `REVIEWED`
-- `APPROVED`
-- `DISMISSED`
-- `USED`
-
-Nothing is published automatically — an administrator must approve and add the content as a document.
-
-## API
-
-- `GET/POST/PATCH/DELETE /api/knowledge`
-- `GET/PATCH /api/knowledge/recommendations`
+Claude receives the top ranked chunks and must not invent prices, policies, or availability outside that context. Missing facts create Knowledge Gaps (`KnowledgeRecommendation`).

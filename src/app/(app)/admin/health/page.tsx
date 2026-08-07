@@ -121,20 +121,22 @@ export default async function AdminHealthPage() {
       summary: "Supabase Realtime not wired in this app yet",
     },
     {
-      name: "OpenAI",
-      status: statusFor({
-        configured: Boolean(env.OPENAI_API_KEY),
-        liveOk: ai.name === "openai" ? true : undefined,
-      }),
-      summary: env.OPENAI_API_KEY ? "API key present (no secret shown)" : "No OPENAI_API_KEY",
+      name: "Anthropic (Claude)",
+      status: !env.ANTHROPIC_API_KEY
+        ? "Not Configured"
+        : ai.name === "anthropic" || ai.name === "mock"
+          ? "Operational"
+          : ai.name === "not_configured"
+            ? "Error"
+            : "Degraded",
+      summary: env.ANTHROPIC_API_KEY
+        ? `Primary AI · adapter ${ai.name} · models via ANTHROPIC_*_MODEL`
+        : "ANTHROPIC_API_KEY missing — required for production AI",
     },
     {
-      name: "Anthropic",
-      status: statusFor({
-        configured: Boolean(env.ANTHROPIC_API_KEY),
-        liveOk: ai.name === "anthropic" ? true : undefined,
-      }),
-      summary: env.ANTHROPIC_API_KEY ? "API key present (no secret shown)" : "No ANTHROPIC_API_KEY",
+      name: "OpenAI (optional)",
+      status: env.OPENAI_API_KEY ? "Operational" : "Not Configured",
+      summary: "Optional adapter only — not required for DM Intelligence",
     },
     {
       name: "ManyChat",

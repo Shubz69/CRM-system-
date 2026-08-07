@@ -35,6 +35,7 @@ export const WORKSPACE_NAV: NavItem[] = [
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/agent", label: "AI Agent", icon: Bot },
+  { href: "/setup", label: "Setup Assistant", icon: ListChecks },
   { href: "/autopilot", label: "Autopilot", icon: Sparkles },
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },

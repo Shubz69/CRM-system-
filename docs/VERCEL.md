@@ -23,7 +23,12 @@ This app is a Next.js frontend + API on Vercel. **Postgres is hosted on [Supabas
 | `MANYCHAT_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
 | `BOOKING_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
 | `DEMO_MODE` | `true` for demo staging; `false` for real prod |
-| `AI_PROVIDER` | `mock` until keys exist |
+| `AI_PROVIDER` | `anthropic` (Claude primary). OpenAI not required |
+| `ANTHROPIC_API_KEY` | **Required for live AI** |
+| `ANTHROPIC_DEFAULT_MODEL` | Optional — default `claude-sonnet-4-20250514` |
+| `ANTHROPIC_ECONOMY_MODEL` | Optional — default `claude-3-5-haiku-latest` |
+| `ANTHROPIC_ADVANCED_MODEL` | Optional — default `claude-opus-4-20250514` |
+| `OPENAI_API_KEY` | **Optional** — leave unset |
 | `CRON_SECRET` | Protects `/api/cron` |
 | `REDIS_URL` | Optional; cron route covers follow-ups without Redis |
 | `ADMIN_EMAIL` | Super admin email (e.g. `1230shobhit@gmail.com`) |

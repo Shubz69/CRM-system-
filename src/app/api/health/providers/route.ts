@@ -13,10 +13,14 @@ export async function GET() {
     ok: true,
     providers: {
       ai: {
-        configured: env.AI_PROVIDER,
+        primary: "anthropic",
+        label: "Claude",
+        configured: env.AI_PROVIDER || "anthropic",
         adapter: ai.name,
-        hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
         hasAnthropicKey: Boolean(env.ANTHROPIC_API_KEY),
+        hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
+        openaiRequired: false,
+        ready: Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock",
       },
       manychat: {
         webhookSecretConfigured: Boolean(env.MANYCHAT_WEBHOOK_SECRET),

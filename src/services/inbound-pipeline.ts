@@ -7,7 +7,7 @@ import {
   QualificationStatus,
   WebhookProcessingStatus,
 } from "@prisma/client";
-import { analyseWithValidation, buildAgentSystemPrompt, getAiProvider } from "@/adapters/ai";
+import { buildAgentSystemPrompt } from "@/adapters/ai";
 import { getBookingProvider } from "@/adapters/booking";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { hashForIdempotency } from "@/lib/crypto";
@@ -18,6 +18,8 @@ import type { InboundMessageInput } from "@/schemas/webhook";
 import { writeAuditLog } from "@/services/audit";
 import { upsertCampaignAttribution } from "@/services/attribution";
 import { runAutomations } from "@/services/automations";
+import { routeAndAnalyse } from "@/services/ai-router";
+import { flattenCrmMemory, mergeCrmMemory, readCrmMemory } from "@/services/crm-memory";
 import { cancelFollowUpsOnOptOut, cancelPendingFollowUps, scheduleFollowUps } from "@/services/followups";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import {
@@ -460,7 +462,6 @@ export async function processInboundMessage(
     });
 
     const transcript = recentMessages.map((m) => `${m.senderType}: ${m.body}`).join("\n");
-    const providerClient = getAiProvider(agentConfig?.aiProvider);
     const systemPrompt = buildAgentSystemPrompt({
       brandTone: agentConfig?.brandTone ?? "professional, helpful, concise",
       formality: agentConfig?.formality ?? "professional",
@@ -472,15 +473,21 @@ export async function processInboundMessage(
       systemPromptExtra: agentConfig?.systemPromptExtra,
     });
 
-    const analysisStarted = Date.now();
-    const analysisResult = await analyseWithValidation(providerClient, {
-      model: agentConfig?.model,
+    const existingMemory = readCrmMemory(result.lead.metadata);
+    const routed = await routeAndAnalyse({
+      organisationId: input.organisationId,
+      taskType: "conversation",
+      agentProvider: agentConfig?.aiProvider || "anthropic",
+      modelOverride: agentConfig?.model?.startsWith("claude") ? agentConfig.model : null,
+      leadScore: result.lead.score ?? 0,
       systemPrompt,
       conversationTranscript: transcript,
       knowledgeContext: knowledge.chunks.join("\n\n"),
       leadMessage: input.message.text,
+      crmMemory: flattenCrmMemory(existingMemory),
     });
-    const analysisLatencyMs = Date.now() - analysisStarted;
+    const analysisResult = routed.result;
+    const analysisLatencyMs = routed.latencyMs;
 
     if (!analysisResult.ok) {
       await prisma.conversation.update({
@@ -588,21 +595,25 @@ export async function processInboundMessage(
         result.lead.metadata && typeof result.lead.metadata === "object"
           ? (result.lead.metadata as Record<string, unknown>)
           : {};
-      const crmMemory = {
-        ...(typeof existingMeta.crmMemory === "object" && existingMeta.crmMemory
-          ? (existingMeta.crmMemory as Record<string, unknown>)
-          : {}),
-        need: analysis.intent || undefined,
-        objections: analysis.objections_detected,
-        questions: analysis.questions_detected,
-        previousAnswers: analysis.answers_collected,
-        bookingStatus: analysis.recommended_next_action,
-        lastAction: analysis.recommended_next_action,
-        nextAction: analysis.recommended_next_action,
-        conversationSummary: analysis.conversation_summary,
-        updatedAt: new Date().toISOString(),
-        updatedBy: "AI",
-      };
+      const crmMemory = mergeCrmMemory({
+        existing: existingMemory,
+        updates: {
+          ...(analysis.crm_updates || {}),
+          need: analysis.crm_updates?.need || analysis.intent || undefined,
+          objections: analysis.objections_detected.map((o) => o.text),
+          questions: analysis.questions_detected,
+          previousAnswers: Object.entries(analysis.answers_collected).map(
+            ([k, v]) => `${k}: ${v}`,
+          ),
+          bookingStatus: analysis.recommended_next_action,
+          lastAction: analysis.recommended_next_action,
+          nextAction: analysis.recommended_next_action,
+          conversationSummary: analysis.conversation_summary,
+        },
+        confidence: analysis.confidence,
+        messageId: result.inboundMessage.id,
+        source: "AI",
+      });
 
       await tx.lead.update({
         where: { id: result.lead.id },
@@ -617,6 +628,9 @@ export async function processInboundMessage(
           metadata: {
             ...existingMeta,
             crmMemory,
+            aiProvider: routed.provider,
+            aiModel: routed.model,
+            aiTaskType: routed.taskType,
             stageChangedBy: allowPipeline
               ? "AI"
               : typeof existingMeta.stageChangedBy === "string"
@@ -676,6 +690,28 @@ export async function processInboundMessage(
         });
       }
 
+      if (analysis.knowledge_gap?.detected) {
+        await tx.knowledgeRecommendation.create({
+          data: {
+            organisationId: input.organisationId,
+            conversationId: result.conversation.id,
+            question: (analysis.knowledge_gap.question || input.message.text).slice(0, 280),
+            reason: analysis.knowledge_gap.reason || "Claude detected a knowledge gap",
+            status: "NEW",
+          },
+        });
+        await writeAuditLog({
+          organisationId: input.organisationId,
+          action: "knowledge.gap",
+          entityType: "Conversation",
+          entityId: result.conversation.id,
+          metadata: {
+            question: analysis.knowledge_gap.question,
+            reason: analysis.knowledge_gap.reason,
+          },
+        });
+      }
+
       for (const signal of analysis.buying_signals) {
         await tx.buyingSignal.create({
           data: {
@@ -717,7 +753,7 @@ export async function processInboundMessage(
     await recordUsage({
       organisationId: input.organisationId,
       feature: "ai_analysis",
-      provider: providerClient.name,
+      provider: routed.provider,
       metadata: { conversationId: result.conversation.id, confidence: analysis.confidence },
     });
 
@@ -883,8 +919,10 @@ export async function processInboundMessage(
             senderType: MessageSenderType.AI,
             body: reply,
             aiMetadata: {
-              provider: providerClient.name,
-              model: agentConfig?.model,
+              provider: routed.provider,
+              model: routed.model,
+              taskType: routed.taskType,
+              tier: routed.tier,
               confidence: analysis.confidence,
               repaired: analysisResult.repaired,
               recommended_next_action: analysis.recommended_next_action,
@@ -909,7 +947,7 @@ export async function processInboundMessage(
         await recordUsage({
           organisationId: input.organisationId,
           feature: "ai_reply",
-          provider: providerClient.name,
+          provider: routed.provider,
           metadata: { conversationId: result.conversation.id, messageId: outbound.id },
         });
       } else {
@@ -962,7 +1000,7 @@ export async function processInboundMessage(
         leadId: result.lead.id,
         score: score.totalScore,
         aiReplySent,
-        provider: providerClient.name,
+        provider: routed.provider,
         latencyMs: analysisLatencyMs,
       },
     });

@@ -747,8 +747,8 @@ model AgentConfiguration {
   isDraft                 Boolean  @default(false)
   version                 Int      @default(1)
   publishedVersion        Int?
-  aiProvider              String   @default("mock")
-  model                   String   @default("mock-v1")
+  aiProvider              String   @default("anthropic")
+  model                   String   @default("claude-sonnet-4-20250514")
   brandTone               String   @default("professional, helpful, concise")
   formality               String   @default("professional")
   responseLength          String   @default("medium")
@@ -1029,4 +1029,28 @@ model UsageRecord {
   createdAt      DateTime @default(now())
 
   @@index([organisationId, feature, createdAt])
+}
+
+/// Detailed AI call ledger — Anthropic-first; OpenAI optional if ever enabled.
+model AiExecution {
+  id             String   @id @default(cuid())
+  organisationId String?
+  provider       String
+  model          String
+  taskType       String
+  feature        String?
+  inputTokens    Int?
+  outputTokens   Int?
+  totalTokens    Int?
+  latencyMs      Int?
+  success        Boolean  @default(true)
+  error          String?
+  estimatedCost  Float?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([organisationId, createdAt])
+  @@index([provider, model, createdAt])
+  @@index([taskType, createdAt])
+  @@index([success, createdAt])
 }

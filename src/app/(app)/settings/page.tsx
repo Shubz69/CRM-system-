@@ -104,8 +104,10 @@ export default function SettingsPage() {
     Boolean(providers.manychat?.apiTokenConfigured) ||
     channels.some((c) => c.isActive);
   const aiReady =
-    providers.ai?.adapter &&
-    providers.ai.adapter !== "not_configured";
+    Boolean(providers.ai?.hasAnthropicKey) ||
+    (providers.ai?.adapter &&
+      providers.ai.adapter !== "not_configured" &&
+      providers.ai.adapter !== "openai");
   const calendarConnected = Boolean(providers.booking?.defaultUrlConfigured);
   const emailConnected = Boolean(providers.email?.smtpConfigured);
 
@@ -143,12 +145,15 @@ export default function SettingsPage() {
           Autopilot runs your pipeline. Tune tone and goals in AI Agent when needed.
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <StatusChip ok={Boolean(aiReady)} label={aiReady ? "AI Ready" : "AI Needs Setup"} />
+          <StatusChip ok={Boolean(aiReady)} label={aiReady ? "Claude Ready" : "Claude Needs Setup"} />
           <Link href="/autopilot" className="btn btn-secondary">
             Autopilot
           </Link>
           <Link href="/agent" className="btn btn-secondary">
             Tone & goals
+          </Link>
+          <Link href="/setup" className="btn btn-secondary">
+            Setup Assistant
           </Link>
         </div>
       </section>
@@ -211,9 +216,13 @@ export default function SettingsPage() {
 
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-semibold">AI</h3>
-              <StatusChip ok={Boolean(aiReady)} label={aiReady ? "Ready" : "Needs Setup"} />
+              <h3 className="font-semibold">AI Operator</h3>
+              <StatusChip
+                ok={Boolean(aiReady)}
+                label={aiReady ? "Claude Connected" : "Claude Needs Setup"}
+              />
             </div>
+            <p className="mt-2 text-sm text-[var(--muted)]">Powered by Anthropic Claude.</p>
             <Link href="/agent" className="btn btn-secondary mt-3">
               Manage
             </Link>

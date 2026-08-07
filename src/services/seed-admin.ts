@@ -182,7 +182,8 @@ export async function seedSuperAdmin(input?: {
         isActive: true,
         isDraft: false,
         brandTone: "professional, helpful, concise",
-        aiProvider: "mock",
+        aiProvider: "anthropic",
+        model: process.env.ANTHROPIC_DEFAULT_MODEL || "claude-sonnet-4-20250514",
       },
     });
   }

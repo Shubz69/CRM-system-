@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 type Channel = {
@@ -44,14 +45,22 @@ export default function IntegrationsPage() {
   const [loading, setLoading] = useState(true);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [aiReady, setAiReady] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/integrations/manychat");
+      const [res, providersRes] = await Promise.all([
+        fetch("/api/integrations/manychat"),
+        fetch("/api/health/providers"),
+      ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setStatus(json);
+      if (providersRes.ok) {
+        const p = await providersRes.json();
+        setAiReady(Boolean(p.providers?.ai?.ready || p.providers?.ai?.hasAnthropicKey));
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load integrations");
     } finally {
@@ -127,8 +136,42 @@ export default function IntegrationsPage() {
       <div>
         <h1 className="h-display text-4xl">Integrations</h1>
         <p className="mt-1 text-[var(--muted)]">
-          Connect messaging channels and review webhook configuration.
+          Connect Instagram, Calendar, and your AI Operator (Claude).
         </p>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="surface p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-semibold">Instagram</h2>
+            <span className={status?.connected ? "badge" : "badge badge-warn"}>
+              {status?.connected ? "Connected" : "Not Connected"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">ManyChat Instagram DMs</p>
+        </div>
+        <div className="surface p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-semibold">Calendar</h2>
+            <span className="badge">Booking URL</span>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">Manage in AI Operator / Settings</p>
+          <Link href="/agent" className="btn btn-secondary mt-3">
+            Manage
+          </Link>
+        </div>
+        <div className="surface p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-semibold">AI Operator</h2>
+            <span className={aiReady ? "badge" : "badge badge-warn"}>
+              {aiReady ? "Claude Connected" : "Claude Needs Setup"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">Anthropic Claude — OpenAI not required</p>
+          <Link href="/agent" className="btn btn-secondary mt-3">
+            Manage
+          </Link>
+        </div>
       </div>
 
       <section className="surface space-y-4 p-5">

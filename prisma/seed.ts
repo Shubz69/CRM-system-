@@ -234,8 +234,10 @@ async function main() {
       name: "Default Agent",
       isActive: true,
       isDraft: false,
-      aiProvider: process.env.AI_PROVIDER || "mock",
-      model: process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "mock-v1",
+      aiProvider: process.env.AI_PROVIDER || "anthropic",
+      model:
+        process.env.ANTHROPIC_DEFAULT_MODEL ||
+        (process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "claude-sonnet-4-20250514"),
       brandTone: "professional, warm, clear",
       formality: "professional",
       responseLength: "medium",
@@ -257,8 +259,10 @@ async function main() {
       name: "Default Agent",
       isActive: true,
       isDraft: false,
-      aiProvider: process.env.AI_PROVIDER || "mock",
-      model: process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "mock-v1",
+      aiProvider: process.env.AI_PROVIDER || "anthropic",
+      model:
+        process.env.ANTHROPIC_DEFAULT_MODEL ||
+        (process.env.AI_PROVIDER === "openai" ? "gpt-4o-mini" : "claude-sonnet-4-20250514"),
       brandTone: "professional, warm, clear",
       formality: "professional",
       responseLength: "medium",

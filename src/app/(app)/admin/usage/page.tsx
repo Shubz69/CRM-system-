@@ -23,7 +23,7 @@ export default async function AdminUsagePage() {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - 30);
 
-  const [records, byOrg, recent, aiMessages, failedAi] = await Promise.all([
+  const [records, byOrg, recent, aiMessages, failedAi, executions, byModel] = await Promise.all([
     prisma.usageRecord.groupBy({
       by: ["feature", "provider"],
       where: { createdAt: { gte: since } },
@@ -44,8 +44,19 @@ export default async function AdminUsagePage() {
     prisma.message.count({
       where: { senderType: "AI", createdAt: { gte: since } },
     }),
-    prisma.auditLog.count({
-      where: { action: { contains: "ai." }, createdAt: { gte: since } },
+    prisma.aiExecution.count({
+      where: { createdAt: { gte: since }, success: false },
+    }),
+    prisma.aiExecution.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 40,
+    }),
+    prisma.aiExecution.groupBy({
+      by: ["model", "provider", "taskType"],
+      where: { createdAt: { gte: since } },
+      _count: true,
+      _sum: { inputTokens: true, outputTokens: true, totalTokens: true, estimatedCost: true },
+      _avg: { latencyMs: true },
     }),
   ]);
 
@@ -143,6 +154,75 @@ export default async function AdminUsagePage() {
                 </td>
               </tr>
             )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="surface overflow-x-auto">
+        <h2 className="px-4 pt-4 h-display text-2xl">By Claude model / task</h2>
+        <table className="mt-2 w-full text-left text-sm">
+          <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
+            <tr>
+              <th className="px-4 py-3">Provider</th>
+              <th className="px-4 py-3">Model</th>
+              <th className="px-4 py-3">Task</th>
+              <th className="px-4 py-3">Requests</th>
+              <th className="px-4 py-3">Tokens</th>
+              <th className="px-4 py-3">Avg latency</th>
+              <th className="px-4 py-3">Est. cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byModel.map((row) => (
+              <tr key={`${row.provider}-${row.model}-${row.taskType}`} className="border-b border-[var(--border)]/60">
+                <td className="px-4 py-3">{row.provider}</td>
+                <td className="px-4 py-3">{row.model}</td>
+                <td className="px-4 py-3">{row.taskType}</td>
+                <td className="px-4 py-3">{row._count}</td>
+                <td className="px-4 py-3">{row._sum.totalTokens ?? 0}</td>
+                <td className="px-4 py-3">{Math.round(row._avg.latencyMs || 0)}ms</td>
+                <td className="px-4 py-3">${Math.round((row._sum.estimatedCost || 0) * 10000) / 10000}</td>
+              </tr>
+            ))}
+            {byModel.length === 0 && (
+              <tr>
+                <td className="px-4 py-4 text-[var(--muted)]" colSpan={7}>
+                  No AiExecution rows yet — traffic will appear after Claude handles conversations.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="surface overflow-x-auto">
+        <h2 className="px-4 pt-4 h-display text-2xl">Recent AI executions</h2>
+        <table className="mt-2 w-full text-left text-sm">
+          <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
+            <tr>
+              <th className="px-4 py-3">Provider</th>
+              <th className="px-4 py-3">Model</th>
+              <th className="px-4 py-3">Task</th>
+              <th className="px-4 py-3">Tokens</th>
+              <th className="px-4 py-3">Latency</th>
+              <th className="px-4 py-3">OK</th>
+              <th className="px-4 py-3">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {executions.map((r) => (
+              <tr key={r.id} className="border-b border-[var(--border)]/60">
+                <td className="px-4 py-3">{r.provider}</td>
+                <td className="px-4 py-3">{r.model}</td>
+                <td className="px-4 py-3">{r.taskType}</td>
+                <td className="px-4 py-3">{r.totalTokens ?? "—"}</td>
+                <td className="px-4 py-3">{r.latencyMs != null ? `${r.latencyMs}ms` : "—"}</td>
+                <td className="px-4 py-3">{r.success ? "Yes" : "No"}</td>
+                <td className="px-4 py-3 text-xs text-[var(--muted)]">
+                  {r.createdAt.toLocaleString()}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
