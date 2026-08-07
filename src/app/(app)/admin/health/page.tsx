@@ -2,24 +2,23 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { requirePlatformAccess } from "@/lib/session";
+import { getAiProvider } from "@/adapters/ai";
+import { getMessagingAdapter } from "@/adapters/messaging";
+import { getBookingProvider } from "@/adapters/booking";
+import { getRuntimeMode } from "@/lib/runtime";
 import IORedis from "ioredis";
 
 export const dynamic = "force-dynamic";
 
-async function checkRedis(): Promise<"ok" | "degraded" | "down"> {
+type HealthStatus = "Operational" | "Degraded" | "Disconnected" | "Error" | "Not Configured";
+
+async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number; error?: string; value?: T }> {
+  const start = Date.now();
   try {
-    const env = getEnv();
-    const redis = new IORedis(env.REDIS_URL, {
-      maxRetriesPerRequest: 1,
-      connectTimeout: 1500,
-      lazyConnect: true,
-    });
-    await redis.connect();
-    const pong = await redis.ping();
-    await redis.quit().catch(() => undefined);
-    return pong === "PONG" ? "ok" : "degraded";
-  } catch {
-    return "degraded";
+    const value = await fn();
+    return { ok: true, ms: Date.now() - start, value };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - start, error: e instanceof Error ? e.message : "Error" };
   }
 }
 
@@ -30,105 +29,199 @@ export default async function AdminHealthPage() {
     redirect("/dashboard");
   }
 
-  let database: "ok" | "down" = "down";
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    database = "ok";
-  } catch {
-    database = "down";
+  const env = getEnv();
+  const runtime = getRuntimeMode();
+
+  const db = await timed(() => prisma.$queryRaw`SELECT 1`);
+  const redis = await timed(async () => {
+    const client = new IORedis(env.REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      connectTimeout: 1500,
+      lazyConnect: true,
+    });
+    await client.connect();
+    const pong = await client.ping();
+    await client.quit().catch(() => undefined);
+    if (pong !== "PONG") throw new Error("Unexpected ping");
+    return true;
+  });
+
+  const ai = getAiProvider();
+  const messaging = getMessagingAdapter(true);
+  const booking = getBookingProvider();
+
+  const failedJobs = await prisma.failedJob.count({ where: { resolvedAt: null } });
+  const lastFailure = await prisma.failedJob.findFirst({
+    where: { resolvedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
+  const lastWebhookOk = await prisma.webhookEvent.findFirst({
+    where: { status: "PROCESSED" },
+    orderBy: { processedAt: "desc" },
+  });
+
+  function statusFor(opts: {
+    configured: boolean;
+    liveOk?: boolean;
+    degraded?: boolean;
+  }): HealthStatus {
+    if (!opts.configured) return "Not Configured";
+    if (opts.degraded) return "Degraded";
+    if (opts.liveOk === false) return "Error";
+    return "Operational";
   }
 
-  const redis = await checkRedis();
-  const env = getEnv();
-  const usageSince = new Date();
-  usageSince.setUTCHours(usageSince.getUTCHours() - 24);
-
-  const [failedJobs, recentFailures, usageLast24h] = await Promise.all([
-    prisma.failedJob.count({ where: { resolvedAt: null } }),
-    prisma.failedJob.findMany({
-      where: { resolvedAt: null },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    }),
-    prisma.usageRecord.count({
-      where: { createdAt: { gte: usageSince } },
-    }),
-  ]);
-
-  const checks = [
-    { name: "Database", status: database },
-    { name: "Redis", status: redis },
+  const rows: Array<{
+    name: string;
+    status: HealthStatus;
+    latency?: string;
+    lastSuccess?: string;
+    lastFailure?: string;
+    summary: string;
+  }> = [
+    {
+      name: "Application",
+      status: "Operational",
+      summary: `Runtime ${runtime}`,
+    },
+    {
+      name: "Database",
+      status: db.ok ? "Operational" : "Error",
+      latency: `${db.ms}ms`,
+      lastSuccess: db.ok ? new Date().toISOString() : undefined,
+      lastFailure: db.error,
+      summary: db.ok ? "Postgres reachable via Prisma" : db.error || "Unreachable",
+    },
+    {
+      name: "Authentication",
+      status: env.AUTH_SECRET || env.NEXTAUTH_SECRET ? "Operational" : "Not Configured",
+      summary: "NextAuth credentials JWT",
+    },
+    {
+      name: "Supabase",
+      status: env.DATABASE_URL?.includes("supabase")
+        ? db.ok
+          ? "Operational"
+          : "Error"
+        : "Not Configured",
+      summary: env.DATABASE_URL?.includes("pooler.supabase.com")
+        ? "Using Supabase pooler"
+        : env.DATABASE_URL?.includes("supabase")
+          ? "Supabase URL detected"
+          : "Not using Supabase URI",
+    },
+    {
+      name: "Storage",
+      status: "Not Configured",
+      summary: "Supabase Storage not wired in this app yet",
+    },
+    {
+      name: "Realtime",
+      status: "Not Configured",
+      summary: "Supabase Realtime not wired in this app yet",
+    },
+    {
+      name: "OpenAI",
+      status: statusFor({
+        configured: Boolean(env.OPENAI_API_KEY),
+        liveOk: ai.name === "openai" ? true : undefined,
+      }),
+      summary: env.OPENAI_API_KEY ? "API key present (no secret shown)" : "No OPENAI_API_KEY",
+    },
+    {
+      name: "Anthropic",
+      status: statusFor({
+        configured: Boolean(env.ANTHROPIC_API_KEY),
+        liveOk: ai.name === "anthropic" ? true : undefined,
+      }),
+      summary: env.ANTHROPIC_API_KEY ? "API key present (no secret shown)" : "No ANTHROPIC_API_KEY",
+    },
+    {
+      name: "ManyChat",
+      status: !env.MANYCHAT_API_TOKEN
+        ? "Not Configured"
+        : messaging.name === "manychat"
+          ? "Operational"
+          : messaging.name === "mock"
+            ? "Degraded"
+            : "Error",
+      summary:
+        messaging.name === "manychat"
+          ? "Live adapter selected"
+          : messaging.name === "mock"
+            ? "Mock adapter (non-production only)"
+            : "Not configured — production will not send",
+    },
+    {
+      name: "Booking Provider",
+      status: statusFor({
+        configured: Boolean(env.DEFAULT_BOOKING_URL) || Boolean(env.BOOKING_PROVIDER),
+      }),
+      summary: `Adapter ${booking.name}${env.DEFAULT_BOOKING_URL ? " · URL configured" : ""}`,
+    },
+    {
+      name: "Background Jobs",
+      status: redis.ok ? (failedJobs > 0 ? "Degraded" : "Operational") : "Degraded",
+      latency: redis.ok ? `${redis.ms}ms` : undefined,
+      lastFailure: lastFailure?.error,
+      lastSuccess: lastWebhookOk?.processedAt?.toISOString(),
+      summary: redis.ok
+        ? `Redis reachable · ${failedJobs} open failures`
+        : `Redis unavailable — Vercel cron path used · ${failedJobs} open failures`,
+    },
+    {
+      name: "Email Provider",
+      status: statusFor({ configured: Boolean(env.EMAIL_SMTP_URL) }),
+      summary: env.EMAIL_SMTP_URL ? "SMTP configured" : "Not configured",
+    },
   ];
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="h-display text-4xl">System health</h1>
-        <p className="mt-1 text-[var(--muted)]">Infrastructure status and failed background jobs.</p>
+        <p className="mt-1 text-[var(--muted)]">
+          Safe probes only — secrets are never displayed. Status is not inferred from env alone when a check fails.
+        </p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {checks.map((c) => (
-          <div key={c.name} className="surface p-5">
-            <p className="text-xs uppercase tracking-wide text-[var(--muted)]">{c.name}</p>
-            <p className="mt-2 font-[family-name:var(--font-fraunces)] text-2xl capitalize">{c.status}</p>
-          </div>
-        ))}
-        <div className="surface p-5">
-          <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Open failed jobs</p>
-          <p className="mt-2 font-[family-name:var(--font-fraunces)] text-2xl">{failedJobs}</p>
-        </div>
-        <div className="surface p-5">
-          <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Usage (24h)</p>
-          <p className="mt-2 font-[family-name:var(--font-fraunces)] text-2xl">{usageLast24h}</p>
-        </div>
-      </div>
-      <div className="surface p-5">
-        <h2 className="h-display text-2xl">Runtime</h2>
-        <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
-          <div>
-            <dt className="text-[var(--muted)]">Node env</dt>
-            <dd>{env.NODE_ENV}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">AI provider</dt>
-            <dd>{env.AI_PROVIDER}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Demo mode</dt>
-            <dd>{env.DEMO_MODE ? "enabled" : "disabled"}</dd>
-          </div>
-        </dl>
-      </div>
+
       <div className="surface overflow-x-auto">
-        <h2 className="h-display border-b border-[var(--border)] px-4 py-3 text-2xl">Recent failed jobs</h2>
-        <table className="w-full min-w-[720px] text-left text-sm">
+        <table className="w-full min-w-[900px] text-left text-sm">
           <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
             <tr>
-              <th className="px-4 py-3">Queue</th>
-              <th className="px-4 py-3">Job</th>
-              <th className="px-4 py-3">Error</th>
-              <th className="px-4 py-3">Attempts</th>
-              <th className="px-4 py-3">Created</th>
+              <th className="px-3 py-3">Service</th>
+              <th className="px-3 py-3">Status</th>
+              <th className="px-3 py-3">Latency</th>
+              <th className="px-3 py-3">Last success</th>
+              <th className="px-3 py-3">Last failure</th>
+              <th className="px-3 py-3">Summary</th>
             </tr>
           </thead>
           <tbody>
-            {recentFailures.length === 0 ? (
-              <tr>
-                <td className="px-4 py-4 text-[var(--muted)]" colSpan={5}>
-                  No open failed jobs.
+            {rows.map((row) => (
+              <tr key={row.name} className="border-b border-[var(--border)]/60 align-top">
+                <td className="px-3 py-3 font-medium">{row.name}</td>
+                <td className="px-3 py-3">
+                  <span
+                    className={
+                      row.status === "Operational"
+                        ? "badge"
+                        : row.status === "Not Configured"
+                          ? "badge"
+                          : "badge badge-warn"
+                    }
+                  >
+                    {row.status}
+                  </span>
                 </td>
+                <td className="px-3 py-3 text-[var(--muted)]">{row.latency || "—"}</td>
+                <td className="px-3 py-3 text-xs text-[var(--muted)]">{row.lastSuccess || "—"}</td>
+                <td className="max-w-xs truncate px-3 py-3 text-xs text-[var(--danger)]">
+                  {row.lastFailure || "—"}
+                </td>
+                <td className="px-3 py-3 text-[var(--muted)]">{row.summary}</td>
               </tr>
-            ) : (
-              recentFailures.map((job) => (
-                <tr key={job.id} className="border-b border-[var(--border)]/60">
-                  <td className="px-4 py-3">{job.queue}</td>
-                  <td className="px-4 py-3">{job.jobName}</td>
-                  <td className="max-w-md truncate px-4 py-3 text-[var(--danger)]">{job.error}</td>
-                  <td className="px-4 py-3">{job.attempts}</td>
-                  <td className="px-4 py-3 text-[var(--muted)]">{job.createdAt.toISOString()}</td>
-                </tr>
-              ))
-            )}
+            ))}
           </tbody>
         </table>
       </div>

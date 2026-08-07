@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { UsersClient, type UserRow } from "./users-client";
 
 export const dynamic = "force-dynamic";
 
@@ -17,60 +18,39 @@ export default async function AdminUsersPage() {
     take: 200,
     include: {
       memberships: {
-        include: { organisation: { select: { name: true, slug: true } } },
-        take: 5,
+        include: { organisation: { select: { id: true, name: true, slug: true } } },
       },
+      sessions: { select: { id: true, expires: true }, take: 10 },
     },
   });
+
+  const initial: UserRow[] = users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    isActive: user.isActive,
+    isSuspended: user.isSuspended,
+    isPlatformAdmin: user.isPlatformAdmin,
+    lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+    createdAt: user.createdAt.toISOString(),
+    lockedUntil: user.lockedUntil?.toISOString() ?? null,
+    activeSessions: user.sessions.filter((s) => s.expires > new Date()).length,
+    memberships: user.memberships.map((m) => ({
+      organisationId: m.organisationId,
+      organisationName: m.organisation.name,
+      role: m.role,
+    })),
+  }));
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="h-display text-4xl">Users</h1>
-        <p className="mt-1 text-[var(--muted)]">Platform accounts and membership roles.</p>
+        <p className="mt-1 text-[var(--muted)]">
+          Search, suspend, reset passwords, and manage roles. Mutations are audited.
+        </p>
       </div>
-      <div className="surface overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
-            <tr>
-              <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Platform</th>
-              <th className="px-4 py-3">Memberships</th>
-              <th className="px-4 py-3">Last login</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.id} className="border-b border-[var(--border)]/60">
-                <td className="px-4 py-3 font-medium">{user.email}</td>
-                <td className="px-4 py-3">{user.name || "—"}</td>
-                <td className="px-4 py-3">
-                  {!user.isActive
-                    ? "Inactive"
-                    : user.isSuspended
-                      ? "Suspended"
-                      : user.lockedUntil && user.lockedUntil > new Date()
-                        ? "Locked"
-                        : "Active"}
-                </td>
-                <td className="px-4 py-3">{user.isPlatformAdmin ? "Admin" : "—"}</td>
-                <td className="px-4 py-3">
-                  {user.memberships.length === 0
-                    ? "—"
-                    : user.memberships
-                        .map((m) => `${m.organisation.name} (${m.role})`)
-                        .join(", ")}
-                </td>
-                <td className="px-4 py-3 text-[var(--muted)]">
-                  {user.lastLoginAt ? user.lastLoginAt.toISOString() : "Never"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <UsersClient initial={initial} />
     </div>
   );
 }

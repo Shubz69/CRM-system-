@@ -3,8 +3,10 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Direct (non-pooled) URL for migrations / db push. Fall back to DATABASE_URL locally.
+  directUrl = env("DIRECT_URL")
 }
 
 enum MemberRole {
@@ -96,6 +98,19 @@ enum NotificationType {
   UNASSIGNED_QUALIFIED
 }
 
+enum OrganisationStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AutopilotMode {
+  OFF
+  TEST
+  LIVE
+  PAUSED
+  ATTENTION_REQUIRED
+}
+
 model Organisation {
   id             String   @id @default(cuid())
   name           String
@@ -103,6 +118,12 @@ model Organisation {
   timezone       String   @default("UTC")
   dataRetentionDays Int   @default(365)
   demoData       Boolean  @default(false)
+  status         OrganisationStatus @default(ACTIVE)
+  plan           String   @default("standard")
+  autopilotMode  AutopilotMode @default(LIVE)
+  /// Capability modes: automatic | approval_required | disabled
+  autopilotConfig Json    @default("{}")
+  lastActivityAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   deletedAt      DateTime?

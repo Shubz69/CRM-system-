@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 import { Bell, ChevronsLeft, ChevronsRight, LogOut, Search } from "lucide-react";
+import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { ADMIN_NAV, WORKSPACE_NAV, isNavActive, pageTitleFromPath } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -42,8 +43,7 @@ export function AppShell({
   const isSuperAdmin =
     Boolean(isPlatformAdmin) ||
     Boolean(session?.user?.isPlatformAdmin) ||
-    session?.user?.role === "SUPER_ADMIN" ||
-    session?.user?.role === "OWNER";
+    session?.user?.role === "SUPER_ADMIN";
 
   useEffect(() => {
     if (locked) return;
@@ -250,6 +250,7 @@ export function AppShell({
       )}
 
       <div className="relative z-0 flex min-w-0 flex-col">
+        <ImpersonationBanner />
         <header className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
           <div className="flex items-center gap-3">
             <button
@@ -268,6 +269,16 @@ export function AppShell({
               </h1>
             </div>
             <div className="hidden items-center gap-2 md:flex">
+              <Link
+                href="/autopilot"
+                className="badge border border-teal-700/20 bg-teal-50 text-teal-900"
+                title="Autopilot control centre"
+              >
+                Autopilot
+              </Link>
+              <Link href="/attention" className="badge badge-warn" title="Needs Attention queue">
+                Attention
+              </Link>
               <div className="relative">
                 <Search
                   size={15}

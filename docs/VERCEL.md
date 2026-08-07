@@ -14,7 +14,8 @@ This app is a Next.js frontend + API on Vercel. **Postgres is hosted on [Supabas
 
 | Variable | Notes |
 |----------|--------|
-| `DATABASE_URL` | **Required.** Supabase Postgres URI (pooled port `6543` + `pgbouncer=true` for Vercel) |
+| `DATABASE_URL` | **Required.** Supabase **Transaction** pooler URI (port `6543` + `pgbouncer=true&connection_limit=1`). Session pooler (5432) causes `EMAXCONNSESSION` on Vercel. |
+| `DIRECT_URL` | Direct/session URI for `prisma db push` from a laptop (optional on Vercel) |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
 | `NEXTAUTH_URL` | `https://YOUR_PROJECT.vercel.app` |
 | `APP_URL` | Same as `NEXTAUTH_URL` |

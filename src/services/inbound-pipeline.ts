@@ -3,6 +3,7 @@ import {
   HandlingMode,
   MessageDirection,
   MessageSenderType,
+  Prisma,
   QualificationStatus,
   WebhookProcessingStatus,
 } from "@prisma/client";
@@ -29,6 +30,12 @@ import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/
 import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
 import { recordUsage } from "@/services/usage";
+import {
+  capabilityAllowsAuto,
+  capabilityRequiresApproval,
+  isAutopilotOperating,
+  parseAutopilotConfig,
+} from "@/services/autopilot";
 import { NotificationType } from "@prisma/client";
 
 function mapQualificationStatus(status: string): QualificationStatus {
@@ -118,7 +125,49 @@ export async function processInboundMessage(
     data: { status: WebhookProcessingStatus.PROCESSING },
   });
 
+  const organisation = await prisma.organisation.findFirst({
+    where: { id: input.organisationId, deletedAt: null },
+    select: {
+      id: true,
+      status: true,
+      autopilotMode: true,
+      autopilotConfig: true,
+    },
+  });
+
+  if (!organisation) {
+    await prisma.webhookEvent.update({
+      where: { id: webhookEvent.id },
+      data: {
+        status: WebhookProcessingStatus.FAILED,
+        error: "Organisation not found",
+        processedAt: new Date(),
+      },
+    });
+    throw new Error("Organisation not found");
+  }
+
+  if (organisation.status === "SUSPENDED") {
+    await prisma.webhookEvent.update({
+      where: { id: webhookEvent.id },
+      data: {
+        status: WebhookProcessingStatus.IGNORED,
+        error: "Workspace suspended",
+        processedAt: new Date(),
+      },
+    });
+    return { duplicate: false, webhookEventId: webhookEvent.id };
+  }
+
+  const autopilotConfig = parseAutopilotConfig(organisation.autopilotConfig);
+  const autopilotActive = isAutopilotOperating(organisation.autopilotMode, { provider });
+
   try {
+    await prisma.organisation.update({
+      where: { id: organisation.id },
+      data: { lastActivityAt: new Date() },
+    });
+
     const result = await prisma.$transaction(async (tx) => {
       let channel = await tx.messagingChannel.findFirst({
         where: {
@@ -378,7 +427,10 @@ export async function processInboundMessage(
     });
 
     const aiEnabled =
-      !result.conversation.aiPaused && result.conversation.handlingMode === HandlingMode.AI;
+      autopilotActive &&
+      capabilityAllowsAuto(autopilotConfig, "aiResponses") &&
+      !result.conversation.aiPaused &&
+      result.conversation.handlingMode === HandlingMode.AI;
 
     if (!aiEnabled) {
       await prisma.webhookEvent.update({
@@ -483,11 +535,13 @@ export async function processInboundMessage(
     const threshold = agentConfig?.confidenceThreshold ?? 0.65;
     const forceHandover = analysis.should_handover || analysis.confidence < threshold;
 
-    await syncQualificationAnswers({
-      organisationId: input.organisationId,
-      leadId: result.lead.id,
-      answers: analysis.answers_collected,
-    });
+    if (capabilityAllowsAuto(autopilotConfig, "qualification")) {
+      await syncQualificationAnswers({
+        organisationId: input.organisationId,
+        leadId: result.lead.id,
+        answers: analysis.answers_collected,
+      });
+    }
 
     const score = calculateLeadScore({
       analysis,
@@ -495,13 +549,25 @@ export async function processInboundMessage(
       messageCount: recentMessages.length,
     });
 
+    const allowPipeline = capabilityAllowsAuto(autopilotConfig, "pipelineManagement");
+    const allowScoring = capabilityAllowsAuto(autopilotConfig, "leadScoring");
+    const allowBooking = capabilityAllowsAuto(autopilotConfig, "booking");
+    const bookingNeedsApproval =
+      analysis.recommended_next_action === "send_booking_link" &&
+      !allowBooking &&
+      capabilityRequiresApproval(autopilotConfig, "booking");
+
     let stageSlug = "engaged";
     if (analysis.qualification_status === "qualified") stageSlug = "qualified";
     if (analysis.qualification_status === "disqualified") stageSlug = "disqualified";
-    if (analysis.recommended_next_action === "send_booking_link") stageSlug = "booking_offered";
+    if (analysis.recommended_next_action === "send_booking_link" && allowBooking) {
+      stageSlug = "booking_offered";
+    }
     if (forceHandover) stageSlug = "qualifying";
 
-    const stage = await getDefaultStage(input.organisationId, stageSlug);
+    const stage = allowPipeline
+      ? await getDefaultStage(input.organisationId, stageSlug)
+      : null;
 
     await prisma.$transaction(async (tx) => {
       await tx.conversation.update({
@@ -510,7 +576,7 @@ export async function processInboundMessage(
           summary: analysis.conversation_summary,
           intent: analysis.intent,
           sentiment: analysis.sentiment,
-          needsHumanReview: forceHandover,
+          needsHumanReview: forceHandover || bookingNeedsApproval,
           handlingMode: forceHandover ? HandlingMode.HUMAN : HandlingMode.AI,
           aiPaused: forceHandover,
           handoffReason: forceHandover ? analysis.handover_reason : undefined,
@@ -518,15 +584,45 @@ export async function processInboundMessage(
       });
 
       const previousScore = result.lead.score ?? 0;
+      const existingMeta =
+        result.lead.metadata && typeof result.lead.metadata === "object"
+          ? (result.lead.metadata as Record<string, unknown>)
+          : {};
+      const crmMemory = {
+        ...(typeof existingMeta.crmMemory === "object" && existingMeta.crmMemory
+          ? (existingMeta.crmMemory as Record<string, unknown>)
+          : {}),
+        need: analysis.intent || undefined,
+        objections: analysis.objections_detected,
+        questions: analysis.questions_detected,
+        previousAnswers: analysis.answers_collected,
+        bookingStatus: analysis.recommended_next_action,
+        lastAction: analysis.recommended_next_action,
+        nextAction: analysis.recommended_next_action,
+        conversationSummary: analysis.conversation_summary,
+        updatedAt: new Date().toISOString(),
+        updatedBy: "AI",
+      };
 
       await tx.lead.update({
         where: { id: result.lead.id },
         data: {
           summary: analysis.conversation_summary,
-          qualificationStatus: mapQualificationStatus(analysis.qualification_status),
-          score: score.totalScore,
-          scoreExplanation: score.explanation,
-          stageId: stage?.id,
+          qualificationStatus: capabilityAllowsAuto(autopilotConfig, "qualification")
+            ? mapQualificationStatus(analysis.qualification_status)
+            : undefined,
+          score: allowScoring ? score.totalScore : undefined,
+          scoreExplanation: allowScoring ? score.explanation : undefined,
+          stageId: stage?.id ?? undefined,
+          metadata: {
+            ...existingMeta,
+            crmMemory,
+            stageChangedBy: allowPipeline
+              ? "AI"
+              : typeof existingMeta.stageChangedBy === "string"
+                ? existingMeta.stageChangedBy
+                : null,
+          } as Prisma.InputJsonValue,
         },
       });
 
@@ -732,7 +828,7 @@ export async function processInboundMessage(
         });
       } else {
       let reply = analysis.reply;
-      if (analysis.recommended_next_action === "send_booking_link") {
+      if (analysis.recommended_next_action === "send_booking_link" && allowBooking) {
         const booking = await getBookingProvider().createBookingLink({
           organisationId: input.organisationId,
           contactId: result.contact.id,

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
+import { AutopilotPanel } from "@/components/autopilot-panel";
 import { formatPercent } from "@/lib/utils";
 
 type DashboardData = {
@@ -150,18 +151,44 @@ export default function DashboardPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-sm text-[var(--muted)]">{greeting}</p>
-          <h1 className="h-display text-4xl">Command centre</h1>
+          <h1 className="h-display text-4xl">What is my AI doing?</h1>
           <p className="mt-1 text-[var(--muted)]">
-            {session?.user?.organisationName || "Workspace"} · live metrics from your database
+            {session?.user?.organisationName || "Workspace"} · Autopilot status, exceptions, and results
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {data.demoMode && <span className="badge badge-warn">Demo mode</span>}
+          <Link href="/attention" className="btn btn-secondary">
+            Needs Attention
+          </Link>
           <Link href="/simulator" className="btn btn-primary">
             Test conversation
           </Link>
         </div>
       </div>
+
+      <AutopilotPanel compact />
+
+      {empty && (
+        <div className="surface p-5">
+          <p className="font-[family-name:var(--font-fraunces)] text-2xl">
+            Your AI operator is ready to begin.
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Complete setup, connect Instagram, then turn Autopilot on.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2 text-sm">
+            <span className="badge">Business Knowledge ○</span>
+            <span className="badge">AI Agent ○</span>
+            <span className="badge">Instagram ○</span>
+            <span className="badge">Calendar ○</span>
+            <span className="badge">Autopilot ○</span>
+          </div>
+          <Link href="/settings/go-live" className="btn btn-primary mt-4">
+            Continue Setup
+          </Link>
+        </div>
+      )}
 
       <div className="surface flex flex-wrap items-center gap-2 p-3">
         {(
@@ -203,14 +230,6 @@ export default function DashboardPage() {
           </form>
         )}
       </div>
-
-      {empty && (
-        <EmptyHint
-          title="No conversations yet. Metrics stay at 0 until your first DM — use the Simulator to test the full journey."
-          ctaHref="/simulator"
-          ctaLabel="Open Simulator"
-        />
-      )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard label="Conversations" value={m.totalConversations} href="/inbox" />
@@ -255,8 +274,8 @@ export default function DashboardPage() {
         <section className="surface p-5">
           <div className="flex items-center justify-between gap-2">
             <h2 className="h-display text-2xl">Needs attention</h2>
-            <Link href="/inbox" className="text-sm text-[var(--accent)]">
-              Inbox
+            <Link href="/attention" className="text-sm text-[var(--accent)]">
+              Queue
             </Link>
           </div>
           <ul className="mt-4 space-y-3">

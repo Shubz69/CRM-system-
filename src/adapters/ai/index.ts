@@ -4,19 +4,56 @@ import { OpenAiProvider } from "@/adapters/ai/openai";
 import type { AiProvider, SafeAnalysisResult } from "@/adapters/ai/types";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { allowMockTransports, isProductionRuntime } from "@/lib/runtime";
 import { parseAiAnalysis } from "@/schemas/ai";
 
-export function getAiProvider(override?: string): AiProvider {
-  const provider = (override || getEnv().AI_PROVIDER || "mock").toLowerCase();
-  switch (provider) {
-    case "openai":
-      return new OpenAiProvider();
-    case "anthropic":
-      return new AnthropicProvider();
-    case "mock":
-    default:
-      return new MockAiProvider();
+class NotConfiguredAiProvider implements AiProvider {
+  readonly name = "not_configured";
+  async complete(): Promise<string> {
+    throw new Error("AI Provider Not Configured");
   }
+  async analyseConversation(): Promise<unknown> {
+    throw new Error("AI Provider Not Configured");
+  }
+}
+
+export function getAiProvider(override?: string): AiProvider {
+  const env = getEnv();
+  const configured = (override || env.AI_PROVIDER || "").toLowerCase();
+  const provider = configured || (allowMockTransports() ? "mock" : "");
+
+  if (provider === "openai") {
+    if (!env.OPENAI_API_KEY && !allowMockTransports()) {
+      return new NotConfiguredAiProvider();
+    }
+    if (!env.OPENAI_API_KEY && allowMockTransports()) {
+      logger.warn("OPENAI_API_KEY missing; using mock AI (non-production/demo)");
+      return new MockAiProvider();
+    }
+    return new OpenAiProvider();
+  }
+  if (provider === "anthropic") {
+    if (!env.ANTHROPIC_API_KEY && !allowMockTransports()) {
+      return new NotConfiguredAiProvider();
+    }
+    if (!env.ANTHROPIC_API_KEY && allowMockTransports()) {
+      logger.warn("ANTHROPIC_API_KEY missing; using mock AI (non-production/demo)");
+      return new MockAiProvider();
+    }
+    return new AnthropicProvider();
+  }
+  if (provider === "mock") {
+    if (!allowMockTransports()) {
+      logger.warn("AI_PROVIDER=mock rejected in production without DEMO_MODE");
+      return new NotConfiguredAiProvider();
+    }
+    return new MockAiProvider();
+  }
+  if (allowMockTransports()) {
+    return new MockAiProvider();
+  }
+  logger.warn("AI provider not configured for production runtime");
+  return new NotConfiguredAiProvider();
 }
 
 export async function analyseWithValidation(

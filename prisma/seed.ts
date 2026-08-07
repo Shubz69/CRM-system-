@@ -35,22 +35,31 @@ async function main() {
 
   const org = await prisma.organisation.upsert({
     where: { slug: "demo-agency" },
-    update: { demoData: true },
+    update: { demoData: true, status: "ACTIVE", autopilotMode: "LIVE" },
     create: {
       name: "Demo Agency",
       slug: "demo-agency",
       timezone: "Europe/London",
       demoData: true,
+      status: "ACTIVE",
+      autopilotMode: "LIVE",
     },
   });
 
   const user = await prisma.user.upsert({
     where: { email: "demo@dminelligence.local" },
-    update: { passwordHash, name: "Demo Owner" },
+    update: {
+      passwordHash,
+      name: "Demo Owner",
+      isPlatformAdmin: true,
+      isActive: true,
+      isSuspended: false,
+    },
     create: {
       email: "demo@dminelligence.local",
       name: "Demo Owner",
       passwordHash,
+      isPlatformAdmin: true,
     },
   });
 
@@ -61,11 +70,11 @@ async function main() {
         userId: user.id,
       },
     },
-    update: { role: MemberRole.OWNER },
+    update: { role: MemberRole.SUPER_ADMIN },
     create: {
       organisationId: org.id,
       userId: user.id,
-      role: MemberRole.OWNER,
+      role: MemberRole.SUPER_ADMIN,
     },
   });
 

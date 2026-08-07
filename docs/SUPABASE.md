@@ -42,16 +42,35 @@ For the **pooled** Vercel URL, a common working form is:
 postgresql://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
 ```
 
-> Paste your real password (URL-encode special characters like `@` → `%40`).
+> Paste your real password (URL-encode special characters like `@` → `%40`, `^` → `%5E`, `!` → `%21`).
+
+### Critical: avoid `EMAXCONNSESSION`
+
+If the dashboard shows:
+
+```text
+FATAL: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15
+```
+
+your Vercel `DATABASE_URL` is using the **Session** pooler (port **5432**) under serverless load. Fix it:
+
+1. In Supabase → **Project Settings → Database → Connection string** choose **Transaction** pooler (port **6543**).
+2. Username form is usually `postgres.[PROJECT-REF]`.
+3. Append `?pgbouncer=true&connection_limit=1`.
+4. Also set **`DIRECT_URL`** to a direct/session URI (port **5432**) for `prisma db push` / migrations from your laptop.
+5. Redeploy Vercel after saving env vars.
+
+The app’s Prisma client reuses a single instance per isolate and will warn in production logs if it detects a session-pooler URL.
 
 ## Step 3 — Add `DATABASE_URL` in Vercel
 
 1. Open: https://vercel.com/shobhit-singhs-projects-c3f665ca/crm-system/settings/environment-variables  
 2. **Add Environment Variable**  
    - **Key:** `DATABASE_URL`  
-   - **Value:** Supabase **pooled** URI (port `6543`, with `pgbouncer=true`)  
+   - **Value:** Supabase **Transaction** pooled URI (port `6543`, with `pgbouncer=true&connection_limit=1`)  
    - Environments: **Production** + **Preview**  
-3. Save.
+3. **Add** `DIRECT_URL` with the direct/session URI for migrations (not required by the Vercel runtime if unused there).  
+4. Save and **redeploy**.
 
 ## Step 4 — Apply the schema (from your laptop)
 

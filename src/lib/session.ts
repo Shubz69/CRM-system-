@@ -27,11 +27,11 @@ export async function requirePermission(permission: Permission) {
 
 export async function requirePlatformAccess() {
   const session = await requireSession();
+  // Platform console is for true super admins only — workspace OWNERs stay in workspace UI.
   const allowed =
     session.isPlatformAdmin ||
     session.role === "SUPER_ADMIN" ||
-    roleHasPermission(session.role, "platform:manage") ||
-    session.role === "OWNER";
+    roleHasPermission(session.role, "platform:manage");
   if (!allowed) {
     throw new Error("Forbidden: missing permission platform:manage");
   }

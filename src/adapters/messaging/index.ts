@@ -2,11 +2,11 @@ import { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";
 import type { MessagingAdapter, OutboundMessage, OutboundResult } from "@/adapters/messaging/types";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { allowMockTransports, isProductionRuntime } from "@/lib/runtime";
 
 /**
- * Live ManyChat adapter skeleton.
- * Only uses a clearly marked generic send path — no undocumented endpoints are invented.
- * Prefer the mock adapter until real credentials and confirmed API routes are configured.
+ * Live ManyChat adapter.
+ * In production, missing credentials fail closed — never silently use mock.
  */
 export class ManyChatAdapter implements MessagingAdapter {
   readonly name = "manychat";
@@ -14,13 +14,17 @@ export class ManyChatAdapter implements MessagingAdapter {
   async sendMessage(message: OutboundMessage): Promise<OutboundResult> {
     const env = getEnv();
     if (!env.MANYCHAT_API_TOKEN) {
-      logger.warn("MANYCHAT_API_TOKEN missing; falling back to mock transport");
+      if (isProductionRuntime() || !allowMockTransports()) {
+        return {
+          ok: false,
+          provider: this.name,
+          error: "ManyChat not configured (MANYCHAT_API_TOKEN missing)",
+        };
+      }
+      logger.warn("MANYCHAT_API_TOKEN missing; using mock transport (non-production)");
       return new MockManyChatAdapter().sendMessage(message);
     }
 
-    // ManyChat public sending APIs vary by account setup.
-    // This adapter keeps a single configurable base URL and expects an organisation-specific
-    // integration config to supply the concrete path when available.
     const url = `${env.MANYCHAT_API_BASE_URL.replace(/\/$/, "")}/fb/sending/sendContent`;
 
     try {
@@ -70,13 +74,47 @@ export class ManyChatAdapter implements MessagingAdapter {
   }
 }
 
+/**
+ * Resolve messaging adapter.
+ * - preferLive === false → mock only when mocks are allowed (dev/test)
+ * - production without token → NotConfigured adapter (fails closed)
+ */
 export function getMessagingAdapter(preferLive?: boolean): MessagingAdapter {
   const env = getEnv();
-  if (preferLive === false || !env.MANYCHAT_API_TOKEN) {
-    return new MockManyChatAdapter();
+
+  if (preferLive === false) {
+    if (allowMockTransports()) {
+      return new MockManyChatAdapter();
+    }
+    // Production code paths that previously forced mock must use live or fail.
+    if (!env.MANYCHAT_API_TOKEN) {
+      return new NotConfiguredMessagingAdapter("manychat");
+    }
+    return new ManyChatAdapter();
   }
-  // Token present: use live unless explicitly forced to mock
+
+  if (!env.MANYCHAT_API_TOKEN) {
+    if (allowMockTransports()) {
+      return new MockManyChatAdapter();
+    }
+    return new NotConfiguredMessagingAdapter("manychat");
+  }
+
   return new ManyChatAdapter();
+}
+
+class NotConfiguredMessagingAdapter implements MessagingAdapter {
+  readonly name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  async sendMessage(_message: OutboundMessage): Promise<OutboundResult> {
+    return {
+      ok: false,
+      provider: this.name,
+      error: "Integration not configured",
+    };
+  }
 }
 
 export { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";

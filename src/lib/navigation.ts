@@ -29,11 +29,13 @@ export type NavItem = {
 
 export const WORKSPACE_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/agent", label: "AI Agent", icon: Bot },
+  { href: "/autopilot", label: "Autopilot", icon: Sparkles },
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },
   { href: "/qualification", label: "Qualification", icon: ListChecks },
@@ -41,6 +43,7 @@ export const WORKSPACE_NAV: NavItem[] = [
   { href: "/integrations", label: "Integrations", icon: Settings },
   { href: "/simulator", label: "Simulator", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
 ];
 
 export const ADMIN_NAV: NavItem[] = [

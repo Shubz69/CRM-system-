@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
+import { MemberRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { WorkspacesClient, type WorkspaceRow } from "./workspaces-client";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,17 @@ export default async function AdminWorkspacesPage() {
     orderBy: { createdAt: "desc" },
     take: 200,
     include: {
+      members: {
+        where: { role: { in: [MemberRole.OWNER, MemberRole.SUPER_ADMIN] } },
+        include: { user: { select: { id: true, email: true, name: true } } },
+        take: 3,
+      },
+      integrations: { select: { type: true, isActive: true } },
+      agentConfigurations: {
+        where: { isActive: true },
+        select: { id: true },
+        take: 1,
+      },
       _count: {
         select: {
           members: true,
@@ -27,42 +40,39 @@ export default async function AdminWorkspacesPage() {
     },
   });
 
+  const initial: WorkspaceRow[] = orgs.map((org) => {
+    const owner = org.members[0]?.user;
+    const manychat = org.integrations.find((i) => i.type === "MANYCHAT");
+    const booking = org.integrations.find((i) => i.type === "BOOKING");
+    return {
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      plan: org.plan,
+      status: org.status,
+      autopilotMode: org.autopilotMode,
+      demoData: org.demoData,
+      owner: owner ? { id: owner.id, email: owner.email, name: owner.name } : null,
+      users: org._count.members,
+      contacts: org._count.contacts,
+      conversations: org._count.conversations,
+      aiStatus: org.agentConfigurations[0] ? "Configured" : "Not configured",
+      manychatStatus: manychat?.isActive ? "Connected" : "Not connected",
+      bookingStatus: booking?.isActive ? "Connected" : "Not connected",
+      createdAt: org.createdAt.toISOString(),
+      lastActivityAt: org.lastActivityAt?.toISOString() ?? null,
+    };
+  });
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="h-display text-4xl">Workspaces</h1>
-        <p className="mt-1 text-[var(--muted)]">Organisations on this platform.</p>
+        <p className="mt-1 text-[var(--muted)]">
+          Create, suspend, and inspect organisations. Suspension blocks inbound AI processing.
+        </p>
       </div>
-      <div className="surface overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left text-sm">
-          <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
-            <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Slug</th>
-              <th className="px-4 py-3">Members</th>
-              <th className="px-4 py-3">Contacts</th>
-              <th className="px-4 py-3">Conversations</th>
-              <th className="px-4 py-3">Leads</th>
-              <th className="px-4 py-3">Flags</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orgs.map((org) => (
-              <tr key={org.id} className="border-b border-[var(--border)]/60">
-                <td className="px-4 py-3 font-medium">{org.name}</td>
-                <td className="px-4 py-3 text-[var(--muted)]">{org.slug}</td>
-                <td className="px-4 py-3">{org._count.members}</td>
-                <td className="px-4 py-3">{org._count.contacts}</td>
-                <td className="px-4 py-3">{org._count.conversations}</td>
-                <td className="px-4 py-3">{org._count.leads}</td>
-                <td className="px-4 py-3">
-                  {org.demoData ? <span className="badge badge-warn">Demo</span> : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <WorkspacesClient initial={initial} />
     </div>
   );
 }
