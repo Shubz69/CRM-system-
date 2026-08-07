@@ -2,53 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
-import {
-  LayoutDashboard,
-  Inbox,
-  KanbanSquare,
-  Users,
-  BookOpen,
-  Bot,
-  Sparkles,
-  Workflow,
-  FileBarChart,
-  Settings,
-  FlaskConical,
-  ListChecks,
-  Shield,
-} from "lucide-react";
+import { signOut, useSession } from "next-auth/react";
+import { useEffect, useMemo, useState } from "react";
+import { Bell, ChevronsLeft, ChevronsRight, LogOut, Search } from "lucide-react";
+import { ADMIN_NAV, WORKSPACE_NAV, isNavActive, pageTitleFromPath } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-
-const NAV = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-  { href: "/agent", label: "AI Agent", icon: Bot },
-  { href: "/insights", label: "Insights", icon: Sparkles },
-  { href: "/automations", label: "Automations", icon: Workflow },
-  { href: "/qualification", label: "Qualification", icon: ListChecks },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
-  { href: "/integrations", label: "Integrations", icon: Settings },
-  { href: "/simulator", label: "Simulator", icon: FlaskConical },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
-
-const ADMIN_NAV = [
-  { href: "/admin", label: "Platform Overview", icon: Shield },
-  { href: "/admin/workspaces", label: "Workspaces", icon: LayoutDashboard },
-  { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/usage", label: "AI Usage", icon: Bot },
-  { href: "/admin/health", label: "System Health", icon: Sparkles },
-  { href: "/admin/webhooks", label: "Webhook Events", icon: Workflow },
-  { href: "/admin/failed-jobs", label: "Failed Jobs", icon: ListChecks },
-  { href: "/admin/audit", label: "Audit Logs", icon: FileBarChart },
-  { href: "/admin/settings", label: "Global Settings", icon: Settings },
-];
 
 type OrgOption = {
   id: string;
@@ -62,15 +21,24 @@ export function AppShell({
   orgName,
   userName,
   isPlatformAdmin,
+  navigationLocked = false,
 }: {
   children: React.ReactNode;
   orgName?: string;
   userName?: string | null;
   isPlatformAdmin?: boolean;
+  /** When true (forced password change), hide app nav and only show the lock screen content. */
+  navigationLocked?: boolean;
 }) {
   const pathname = usePathname();
   const { data: session, update } = useSession();
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const locked =
+    navigationLocked || Boolean(session?.user?.mustChangePassword);
+
   const isSuperAdmin =
     Boolean(isPlatformAdmin) ||
     Boolean(session?.user?.isPlatformAdmin) ||
@@ -78,6 +46,7 @@ export function AppShell({
     session?.user?.role === "OWNER";
 
   useEffect(() => {
+    if (locked) return;
     fetch("/api/organisations")
       .then(async (r) => {
         if (!r.ok) return;
@@ -85,7 +54,7 @@ export function AppShell({
         setOrgs(j.organisations || []);
       })
       .catch(() => undefined);
-  }, [session?.user?.organisationId]);
+  }, [session?.user?.organisationId, locked]);
 
   async function switchOrg(organisationId: string) {
     try {
@@ -110,18 +79,62 @@ export function AppShell({
     orgName ||
     "CRM";
 
+  const title = useMemo(() => pageTitleFromPath(pathname), [pathname]);
+
+  if (locked) {
+    return (
+      <div className="relative min-h-screen overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 app-atmosphere" aria-hidden />
+        <div className="relative mx-auto flex min-h-screen max-w-lg flex-col justify-center px-4 py-10">
+          <div className="mb-6 text-center">
+            <p className="font-[family-name:var(--font-fraunces)] text-3xl text-[var(--sidebar)]">
+              DM Intelligence
+            </p>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Security checkpoint — update your password to unlock the workspace.
+            </p>
+          </div>
+          {children}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
-      <aside className="bg-[var(--sidebar)] text-[var(--sidebar-text)] lg:min-h-screen">
-        <div className="border-b border-white/10 px-5 py-5">
-          <p className="font-[family-name:var(--font-fraunces)] text-2xl text-white">
-            DM Intelligence
-          </p>
-          {orgs.length > 1 ? (
-            <label className="mt-3 block text-xs text-teal-100/70">
-              Organisation
+    <div className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]">
+      <div className="pointer-events-none absolute inset-0 app-atmosphere" aria-hidden />
+
+      <aside
+        className={cn(
+          "relative z-20 border-r border-white/8 bg-[var(--sidebar)] text-[var(--sidebar-text)] transition-[width] duration-200 lg:min-h-screen",
+          collapsed ? "lg:w-[84px]" : "lg:w-[272px]",
+          mobileOpen ? "fixed inset-y-0 left-0 w-[272px]" : "hidden lg:flex lg:flex-col",
+        )}
+      >
+        <div className="border-b border-white/10 px-4 py-5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="font-[family-name:var(--font-fraunces)] text-xl text-white">
+                {collapsed ? "DM" : "DM Intelligence"}
+              </p>
+              {!collapsed && (
+                <p className="mt-1 truncate text-xs text-teal-100/60">{activeName}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="hidden rounded-lg p-1.5 text-teal-100/70 hover:bg-white/10 hover:text-white lg:inline-flex"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
+            </button>
+          </div>
+          {!collapsed && orgs.length > 1 && (
+            <label className="mt-3 block text-[11px] uppercase tracking-[0.14em] text-teal-100/50">
+              Workspace
               <select
-                className="mt-1 w-full rounded-xl border border-white/15 bg-white/10 px-2 py-1.5 text-sm text-white"
+                className="mt-1.5 w-full rounded-xl border border-white/12 bg-white/8 px-2.5 py-2 text-sm text-white outline-none focus:border-[var(--accent)]"
                 value={session?.user?.organisationId || ""}
                 onChange={(e) => switchOrg(e.target.value)}
                 aria-label="Switch organisation"
@@ -133,62 +146,149 @@ export function AppShell({
                 ))}
               </select>
             </label>
-          ) : (
-            <p className="mt-1 text-sm text-teal-100/70">{activeName}</p>
           )}
         </div>
-        <nav className="flex gap-1 overflow-x-auto px-3 py-4 lg:flex-col">
-          {NAV.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+          {!collapsed && (
+            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/40">
+              Workspace
+            </p>
+          )}
+          {WORKSPACE_NAV.map((item) => {
+            const active = isNavActive(pathname, item);
             const Icon = item.icon;
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                title={collapsed ? item.label : undefined}
+                onClick={() => setMobileOpen(false)}
                 className={cn(
-                  "flex items-center gap-2 rounded-xl px-3 py-2 text-sm whitespace-nowrap transition",
+                  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
                   active
-                    ? "bg-white/12 text-white"
+                    ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
                     : "text-teal-50/70 hover:bg-white/8 hover:text-white",
+                  collapsed && "justify-center px-2",
                 )}
               >
-                <Icon size={16} />
-                {item.label}
+                <Icon size={17} className={cn(active ? "text-[var(--hero-mist)]" : "")} />
+                {!collapsed && <span>{item.label}</span>}
               </Link>
             );
           })}
+
           {isSuperAdmin && (
             <>
-              <p className="mt-4 px-3 text-[10px] uppercase tracking-[0.18em] text-teal-200/50">
-                Super Admin
-              </p>
+              {!collapsed && (
+                <p className="mt-5 px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/40">
+                  Super Admin
+                </p>
+              )}
+              {collapsed && <div className="my-3 border-t border-white/10" />}
               {ADMIN_NAV.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = isNavActive(pathname, item);
                 const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    title={collapsed ? item.label : undefined}
+                    onClick={() => setMobileOpen(false)}
                     className={cn(
-                      "flex items-center gap-2 rounded-xl px-3 py-2 text-sm whitespace-nowrap transition",
+                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
                       active
-                        ? "bg-white/12 text-white"
+                        ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
                         : "text-teal-50/70 hover:bg-white/8 hover:text-white",
+                      collapsed && "justify-center px-2",
                     )}
                   >
-                    <Icon size={16} />
-                    {item.label}
+                    <Icon size={17} />
+                    {!collapsed && <span>{item.label}</span>}
                   </Link>
                 );
               })}
             </>
           )}
         </nav>
-        <div className="hidden border-t border-white/10 px-5 py-4 text-sm text-teal-100/70 lg:block">
-          Signed in as {userName || session?.user?.name || "User"}
+
+        <div className="border-t border-white/10 px-3 py-4">
+          {!collapsed ? (
+            <div className="rounded-xl bg-white/6 px-3 py-3">
+              <p className="truncate text-sm font-medium text-white">
+                {userName || session?.user?.name || "User"}
+              </p>
+              <p className="truncate text-xs text-teal-100/55">{session?.user?.email}</p>
+              <button
+                type="button"
+                className="mt-3 inline-flex items-center gap-2 text-xs text-teal-100/70 hover:text-white"
+                onClick={() => signOut({ callbackUrl: "/login" })}
+              >
+                <LogOut size={14} /> Sign out
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="mx-auto flex rounded-lg p-2 text-teal-100/70 hover:bg-white/10 hover:text-white"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              aria-label="Sign out"
+            >
+              <LogOut size={16} />
+            </button>
+          )}
         </div>
       </aside>
-      <main className="animate-rise min-w-0 p-4 md:p-6 lg:p-8">{children}</main>
+
+      {mobileOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-10 bg-black/40 lg:hidden"
+          aria-label="Close menu"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      <div className="relative z-0 flex min-w-0 flex-col">
+        <header className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-secondary px-2.5 py-2 lg:hidden"
+              onClick={() => setMobileOpen(true)}
+            >
+              Menu
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                {activeName}
+              </p>
+              <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
+                {title}
+              </h1>
+            </div>
+            <div className="hidden items-center gap-2 md:flex">
+              <div className="relative">
+                <Search
+                  size={15}
+                  className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[var(--muted)]"
+                />
+                <input
+                  className="input w-56 py-2 pl-9 text-sm"
+                  placeholder="Search… ⌘K"
+                  aria-label="Search"
+                  onFocus={() => toast.message("Global search opens with Ctrl/Cmd+K")}
+                  readOnly
+                />
+              </div>
+              <button type="button" className="btn btn-secondary px-2.5 py-2" aria-label="Notifications">
+                <Bell size={16} />
+              </button>
+            </div>
+          </div>
+        </header>
+        <main className="animate-rise min-w-0 flex-1 p-4 md:p-6 lg:p-8">{children}</main>
+      </div>
     </div>
   );
 }

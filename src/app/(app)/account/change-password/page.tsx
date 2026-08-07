@@ -1,12 +1,10 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 
 export default function ChangePasswordPage() {
-  const router = useRouter();
   const { update } = useSession();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -35,10 +33,13 @@ export default function ChangePasswordPage() {
         toast.error(json.error || "Could not update password");
         return;
       }
+
+      // Refresh JWT so middleware no longer forces this page.
       await update({ mustChangePassword: false });
-      toast.success("Password updated");
-      router.push("/dashboard");
-      router.refresh();
+      toast.success("Password updated — opening dashboard");
+      // Hard navigation ensures middleware reads the refreshed session cookie.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- must force full reload for JWT/middleware
+      window.location.assign("/dashboard");
     } catch {
       toast.error("Could not update password");
     } finally {
@@ -47,11 +48,11 @@ export default function ChangePasswordPage() {
   }
 
   return (
-    <div className="mx-auto max-w-md space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Change password</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Set a new password to continue using your account.
+    <div className="space-y-6">
+      <div className="text-center lg:text-left">
+        <h1 className="h-display text-3xl md:text-4xl">Change password</h1>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Set a new password to continue. Navigation unlocks after this step.
         </p>
       </div>
       <form onSubmit={onSubmit} className="surface space-y-4 p-6">

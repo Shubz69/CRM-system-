@@ -195,6 +195,18 @@ export const authOptions: NextAuthOptions = {
             }));
           }
         }
+
+        // Always re-read security flags from DB on session update to avoid stale JWT locks.
+        if (token.id) {
+          const fresh = await prisma.user.findUnique({
+            where: { id: token.id },
+            select: { mustChangePassword: true, isPlatformAdmin: true, isActive: true, isSuspended: true },
+          });
+          if (fresh) {
+            token.mustChangePassword = fresh.mustChangePassword;
+            token.isPlatformAdmin = fresh.isPlatformAdmin;
+          }
+        }
       }
 
       return token;

@@ -63,6 +63,7 @@ export const config = {
     "/contacts/:path*",
     "/knowledge/:path*",
     "/agent/:path*",
+    "/ai-agent/:path*",
     "/insights/:path*",
     "/automations/:path*",
     "/qualification/:path*",

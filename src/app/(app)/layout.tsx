@@ -13,8 +13,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const headerList = await headers();
   const pathname = headerList.get("x-pathname") || "";
   const onChangePassword = pathname.startsWith("/account/change-password");
+  const mustChange = Boolean(session.user.mustChangePassword);
 
-  if (session.user.mustChangePassword && !onChangePassword) {
+  if (mustChange && !onChangePassword) {
     redirect("/account/change-password");
   }
 
@@ -23,6 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       orgName={session.user.organisationName}
       userName={session.user.name}
       isPlatformAdmin={Boolean(session.user.isPlatformAdmin)}
+      navigationLocked={mustChange}
     >
       {children}
     </AppShell>
