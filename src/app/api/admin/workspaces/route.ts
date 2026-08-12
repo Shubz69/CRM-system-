@@ -4,6 +4,7 @@ import { MemberRole, OrganisationStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
+import { assertOrganisationMutable } from "@/lib/platform-org";
 
 const createSchema = z.object({
   action: z.literal("create"),
@@ -66,6 +67,7 @@ export async function GET() {
           slug: org.slug,
           plan: org.plan,
           status: org.status,
+          isPlatform: org.isPlatform,
           autopilotMode: org.autopilotMode,
           demoData: org.demoData,
           timezone: org.timezone,
@@ -165,6 +167,14 @@ export async function POST(req: NextRequest) {
     if (!org) return jsonError("Workspace not found", 404);
 
     if (body.action === "suspend") {
+      try {
+        await assertOrganisationMutable(org.id);
+      } catch (error) {
+        return jsonError(
+          error instanceof Error ? error.message : "Organisation is protected",
+          403,
+        );
+      }
       const updated = await prisma.organisation.update({
         where: { id: org.id },
         data: { status: OrganisationStatus.SUSPENDED, autopilotMode: "PAUSED" },

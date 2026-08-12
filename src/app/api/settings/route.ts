@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { jsonError, requireSession } from "@/lib/session";
+import { tenantAuditLogWhere } from "@/services/audit";
 
 export async function GET() {
   try {
@@ -12,7 +13,7 @@ export async function GET() {
       }),
       prisma.integration.findMany({ where: { organisationId: session.organisationId } }),
       prisma.auditLog.findMany({
-        where: { organisationId: session.organisationId },
+        where: tenantAuditLogWhere(session.organisationId),
         orderBy: { createdAt: "desc" },
         take: 20,
       }),

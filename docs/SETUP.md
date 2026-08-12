@@ -19,13 +19,20 @@ cp .env.example .env
 
 npm install
 npx prisma generate
-npx prisma db push
-npm run db:seed          # demo data (requires DEMO_MODE=true)
+# Empty local DB only — refuses production / databases with data:
+npm run db:setup
+# Existing / hosted DBs:
+# npx prisma migrate deploy && npm run db:seed
 npm run seed:admin       # optional — requires ADMIN_INITIAL_PASSWORD
 npm run dev
 ```
 
 Open `http://localhost:3000`. Demo login (when seeded): `demo@dminelligence.local` / `demo1234`.
+
+### Schema changes on real data
+
+Use **`npx prisma migrate deploy`** (requires `DIRECT_URL` on Supabase).  
+Do **not** use `prisma db push` or `npm run db:setup` against a populated database.
 
 ## Environment highlights
 

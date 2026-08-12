@@ -35,10 +35,20 @@ copy .env.example .env
 # Terminal 1 — embedded Postgres
 npm run db:dev
 
-# Terminal 2 — schema + seed + app
+# Terminal 2 — empty local DB only
 npm run db:setup
 npm run dev
 ```
+
+### Database commands — read this
+
+| Command | Safe for | What it does |
+|---------|----------|--------------|
+| `npm run db:setup` | **Empty local/dev DBs only** | Guarded `prisma db push` + seed. Refuses `NODE_ENV=production` and refuses if the DB already has organisations (unless `ALLOW_DB_PUSH=true`). |
+| `npx prisma migrate deploy` | **Production / Preview / any populated DB** | Applies versioned SQL migrations. This is the only supported way to change schema on real data. |
+| `npm run db:migrate:deploy` | Same as above | Alias for `prisma migrate deploy`. |
+
+Never run `prisma db push` (or `db:setup`) against Supabase Production/Preview with live tenants.
 
 Open [http://localhost:3000](http://localhost:3000)
 
@@ -64,10 +74,13 @@ Then open **Simulator**, send a DM, and confirm the conversation appears in **In
 ```bash
 docker compose up -d
 copy .env.example .env
-# Set DATABASE_URL to:
+# Set DATABASE_URL and DIRECT_URL to:
 # postgresql://dmintel:dmintel@localhost:5432/dm_intelligence_crm?schema=public
 npm install
-npm run db:setup
+# Prefer migrate deploy once migrations exist; db:setup is for empty local DBs only:
+npx prisma migrate deploy
+npm run db:seed
+# or, on a brand-new empty local DB only: npm run db:setup
 npm run dev
 npm run worker
 ```

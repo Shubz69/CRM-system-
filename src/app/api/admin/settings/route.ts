@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       update: { value: body.value as object },
     });
     await writeAuditLog({
-      organisationId: session.organisationId,
+      scope: "PLATFORM",
       userId: session.userId,
       action: "system.setting_updated",
       entityType: "SystemSetting",

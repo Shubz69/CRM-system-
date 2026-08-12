@@ -60,6 +60,7 @@ export async function POST(req: NextRequest) {
       ]);
 
       await writeAuditLog({
+        scope: "PLATFORM",
         userId: user.id,
         action: "auth.password_reset_completed",
         entityType: "User",
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
         },
       });
       await writeAuditLog({
+        scope: "PLATFORM",
         userId: user.id,
         action: "auth.password_reset_requested",
         entityType: "User",

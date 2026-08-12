@@ -60,6 +60,7 @@ export async function seedSuperAdmin(input?: {
   });
 
   await writeAuditLog({
+    scope: "PLATFORM",
     userId: user.id,
     action: existing ? "admin.seed.updated" : "admin.seed.created",
     entityType: "User",
@@ -76,12 +77,13 @@ export async function seedSuperAdmin(input?: {
     demoAgency ??
     (await prisma.organisation.upsert({
       where: { slug: "dm-intelligence-platform" },
-      update: {},
+      update: { isPlatform: true },
       create: {
         name: "DM Intelligence Platform",
         slug: "dm-intelligence-platform",
         timezone: "UTC",
         demoData: false,
+        isPlatform: true,
       },
     }));
 

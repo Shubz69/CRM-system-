@@ -97,6 +97,13 @@ export default async function AdminOverviewPage() {
       where: { action: { contains: "ai." } },
       orderBy: { createdAt: "desc" },
       take: 5,
+      select: {
+        id: true,
+        action: true,
+        scope: true,
+        createdAt: true,
+        organisationId: true,
+      },
     }),
   ]);
 
@@ -230,7 +237,9 @@ export default async function AdminOverviewPage() {
             recentAiErrors.map((a) => (
               <li key={a.id} className="border-b border-[var(--border)]/50 py-2 text-sm">
                 <div className="font-medium">{a.action}</div>
-                <div className="text-xs text-[var(--muted)]">{a.createdAt.toLocaleString()}</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {a.scope} · {a.createdAt.toLocaleString()}
+                </div>
               </li>
             ))
           )}

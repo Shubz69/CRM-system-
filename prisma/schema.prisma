@@ -111,6 +111,11 @@ enum AutopilotMode {
   ATTENTION_REQUIRED
 }
 
+enum AuditLogScope {
+  ORG
+  PLATFORM
+}
+
 model Organisation {
   id             String   @id @default(cuid())
   name           String
@@ -118,6 +123,8 @@ model Organisation {
   timezone       String   @default("UTC")
   dataRetentionDays Int   @default(365)
   demoData       Boolean  @default(false)
+  /// True for the sentinel platform org — never delete; holds non-tenant ledger rows.
+  isPlatform     Boolean  @default(false)
   status         OrganisationStatus @default(ACTIVE)
   plan           String   @default("standard")
   autopilotMode  AutopilotMode @default(LIVE)
@@ -936,19 +943,22 @@ model WebhookEvent {
 }
 
 model AuditLog {
-  id             String   @id @default(cuid())
-  organisationId String
+  id             String        @id @default(cuid())
+  /// ORG = tenant event (organisationId required). PLATFORM = platform event (organisationId null).
+  scope          AuditLogScope @default(ORG)
+  organisationId String?
   userId         String?
   action         String
   entityType     String?
   entityId       String?
-  metadata       Json     @default("{}")
-  createdAt      DateTime @default(now())
+  metadata       Json          @default("{}")
+  createdAt      DateTime      @default(now())
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   user         User?         @relation(fields: [userId], references: [id])
 
   @@index([organisationId, createdAt])
+  @@index([scope, createdAt])
   @@index([entityType, entityId])
 }
 

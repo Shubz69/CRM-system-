@@ -163,6 +163,7 @@ export async function getAutopilotTodayStats(organisationId: string) {
     }),
     prisma.auditLog.findMany({
       where: {
+        scope: "ORG",
         organisationId,
         action: {
           in: [

@@ -84,7 +84,7 @@ export async function PATCH(req: NextRequest) {
       highValueScoreThreshold: body.highValueScoreThreshold,
     });
     await writeAuditLog({
-      organisationId: session.organisationId,
+      scope: "PLATFORM",
       userId: session.userId,
       action: "ai.router_config_change",
       entityType: "SystemSetting",
