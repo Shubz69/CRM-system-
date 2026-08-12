@@ -163,13 +163,21 @@ export default async function AdminHealthPage() {
     },
     {
       name: "Background Jobs",
-      status: redis.ok ? (failedJobs > 0 ? "Degraded" : "Operational") : "Degraded",
+      status: redis.ok
+        ? failedJobs > 0
+          ? "Degraded"
+          : "Operational"
+        : runtime === "production"
+          ? "Disconnected"
+          : "Degraded",
       latency: redis.ok ? `${redis.ms}ms` : undefined,
       lastFailure: lastFailure?.error,
       lastSuccess: lastWebhookOk?.processedAt?.toISOString(),
       summary: redis.ok
-        ? `Redis reachable · ${failedJobs} open failures`
-        : `Redis unavailable — Vercel cron path used · ${failedJobs} open failures`,
+        ? `Redis reachable · queues: follow-ups, agent-runs · ${failedJobs} open failures`
+        : runtime === "production"
+          ? `Redis REQUIRED and unavailable — worker/long jobs will fail · ${failedJobs} open failures`
+          : `Redis unavailable — in-process follow-up fallback only (agent-runs inactive) · ${failedJobs} open failures`,
     },
     {
       name: "Email Provider",

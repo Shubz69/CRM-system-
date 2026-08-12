@@ -3,6 +3,13 @@
  * Change models via env — do not hard-code model IDs in feature code.
  */
 
+/** Formal tiers used by the multi-agent / structured-completion layer. */
+export type FormalAiTier = "cheap" | "balanced" | "heavy";
+
+/**
+ * Legacy internal tier names (kept for router config + existing sales path).
+ * Mapped 1:1 from FormalAiTier.
+ */
 export type AiModelTier = "default" | "economy" | "advanced";
 
 export type AiTaskType =
@@ -26,6 +33,19 @@ const DEFAULT_MODELS: Record<AiModelTier, string> = {
   default: "claude-sonnet-4-20250514",
   economy: "claude-3-5-haiku-latest",
   advanced: "claude-opus-4-20250514",
+};
+
+/** Formal → legacy mapping. Every provider must implement all three formal tiers. */
+export const FORMAL_TO_LEGACY_TIER: Record<FormalAiTier, AiModelTier> = {
+  cheap: "economy",
+  balanced: "default",
+  heavy: "advanced",
+};
+
+export const LEGACY_TO_FORMAL_TIER: Record<AiModelTier, FormalAiTier> = {
+  economy: "cheap",
+  default: "balanced",
+  advanced: "heavy",
 };
 
 /** Default task → tier mapping (overridable via SystemSetting ai.router) */
@@ -52,6 +72,10 @@ export function getAiModels() {
     default: process.env.ANTHROPIC_DEFAULT_MODEL || DEFAULT_MODELS.default,
     economy: process.env.ANTHROPIC_ECONOMY_MODEL || DEFAULT_MODELS.economy,
     advanced: process.env.ANTHROPIC_ADVANCED_MODEL || DEFAULT_MODELS.advanced,
+    // Formal aliases
+    cheap: process.env.ANTHROPIC_ECONOMY_MODEL || DEFAULT_MODELS.economy,
+    balanced: process.env.ANTHROPIC_DEFAULT_MODEL || DEFAULT_MODELS.default,
+    heavy: process.env.ANTHROPIC_ADVANCED_MODEL || DEFAULT_MODELS.advanced,
   } as const;
 }
 
@@ -69,9 +93,24 @@ export function getAiProviderDefaults() {
   };
 }
 
-export function resolveModelForTier(tier: AiModelTier): string {
+export function resolveModelForTier(tier: AiModelTier | FormalAiTier): string {
   const models = getAiModels();
+  if (tier === "cheap" || tier === "balanced" || tier === "heavy") {
+    return models[tier] || models.balanced;
+  }
   return models[tier] || models.default;
+}
+
+export function toLegacyTier(tier: FormalAiTier | AiModelTier): AiModelTier {
+  if (tier === "cheap" || tier === "balanced" || tier === "heavy") {
+    return FORMAL_TO_LEGACY_TIER[tier];
+  }
+  return tier;
+}
+
+export function toFormalTier(tier: AiModelTier | FormalAiTier): FormalAiTier {
+  if (tier === "cheap" || tier === "balanced" || tier === "heavy") return tier;
+  return LEGACY_TO_FORMAL_TIER[tier];
 }
 
 /** Indicative USD per 1M tokens for cost estimates (configurable later). */
@@ -94,4 +133,9 @@ export function estimateAnthropicCost(
     outPerM = 15;
   }
   return Math.round(((inputTokens * inPerM + outputTokens * outPerM) / 1_000_000) * 10_000) / 10_000;
+}
+
+/** Convert USD estimate to integer cents. */
+export function usdToCents(usd: number): number {
+  return Math.max(0, Math.round(usd * 100));
 }

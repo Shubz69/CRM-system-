@@ -1,0 +1,69 @@
+import IORedis from "ioredis";
+import { logger } from "@/lib/logger";
+import { getRuntimeMode, isProductionRuntime } from "@/lib/runtime";
+
+let shared: IORedis | null = null;
+
+export function getRedisUrl(): string {
+  return process.env.REDIS_URL || "redis://localhost:6379";
+}
+
+/**
+ * Shared BullMQ-compatible Redis connection.
+ * maxRetriesPerRequest must be null for BullMQ workers.
+ */
+export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
+  if (!shared) {
+    shared = new IORedis(getRedisUrl(), {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: true,
+      lazyConnect: opts?.lazyConnect ?? false,
+    });
+    shared.on("error", (err) => {
+      logger.error("Redis connection error", { message: err.message });
+    });
+  }
+  return shared;
+}
+
+export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
+  const client = new IORedis(getRedisUrl(), {
+    maxRetriesPerRequest: 1,
+    connectTimeout: timeoutMs,
+    lazyConnect: true,
+  });
+  try {
+    await client.connect();
+    const pong = await client.ping();
+    return pong === "PONG";
+  } catch {
+    return false;
+  } finally {
+    await client.quit().catch(() => undefined);
+  }
+}
+
+/** Production requires Redis. Dev/test may fall back to in-process loops. */
+export function redisRequired(): boolean {
+  return isProductionRuntime();
+}
+
+export function assertRedisAllowedFallback(): void {
+  if (redisRequired()) {
+    throw new Error(
+      "Redis is required in production. Set REDIS_URL and run the worker process. In-process fallback is disabled.",
+    );
+  }
+  logger.error(
+    "⚠️  IN-PROCESS JOB FALLBACK ACTIVE — Redis unavailable. " +
+      `Runtime=${getRuntimeMode()}. Long jobs (agent-runs) will NOT run. ` +
+      "This path is for local development only.",
+  );
+}
+
+export async function closeRedisConnection(): Promise<void> {
+  if (shared) {
+    await shared.quit().catch(() => undefined);
+    shared = null;
+  }
+}

@@ -23,6 +23,7 @@
     "db:setup:dev": "tsx scripts/db-setup-dev.ts",
     "db:migrate:deploy": "prisma migrate deploy",
     "worker": "tsx src/workers/index.ts",
+    "worker:prod": "NODE_ENV=production tsx src/workers/index.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

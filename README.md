@@ -21,7 +21,7 @@ Temporary product name: **DM Intelligence CRM** (easy to rename later).
 2. Deploy on Vercel — [docs/VERCEL.md](docs/VERCEL.md)
 3. Set `DATABASE_URL` to the Supabase pooled URI, seed the super admin, then sign in
 
-Docs: [SETUP](docs/SETUP.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md)
+Docs: [SETUP](docs/SETUP.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
 
 ## Quick start (Windows / local without Docker)
 

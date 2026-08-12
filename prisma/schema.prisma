@@ -165,6 +165,7 @@ model Organisation {
   failedJobs           FailedJob[]
   usageRecords         UsageRecord[]
   aiExecutions         AiExecution[]
+  aiBudget             OrganisationAiBudget?
 }
 
 model User {
@@ -1073,4 +1074,19 @@ model AiExecution {
   @@index([provider, model, createdAt])
   @@index([taskType, createdAt])
   @@index([success, createdAt])
+}
+
+/// Per-organisation AI spend cap (cents). Null monthlyCapCents = unlimited.
+/// Period spend is computed from AiExecution — this table is the gate config only.
+model OrganisationAiBudget {
+  id              String   @id @default(cuid())
+  organisationId  String   @unique
+  /// Monthly cap in USD cents. null = no cap (existing behaviour).
+  monthlyCapCents Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId])
 }

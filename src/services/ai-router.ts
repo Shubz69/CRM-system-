@@ -10,6 +10,7 @@ import { getAiProvider } from "@/adapters/ai";
 import { recordAiExecution } from "@/services/ai-execution";
 import { logger } from "@/lib/logger";
 import type { AiProvider } from "@/adapters/ai/types";
+import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 
 export type RouterConfig = {
   taskTiers: Partial<Record<AiTaskType, AiModelTier>>;
@@ -155,6 +156,34 @@ export async function routeAndAnalyse(input: {
 
   try {
     const { analyseWithValidation, AnthropicProvider } = await import("@/adapters/ai");
+
+    try {
+      await assertWithinSpendCap(input.organisationId);
+    } catch (error) {
+      if (error instanceof SpendCapExceededError) {
+        await recordAiExecution({
+          organisationId: input.organisationId,
+          provider: provider.name,
+          model: selection.model,
+          taskType,
+          feature: "inbound_conversation",
+          latencyMs: Date.now() - started,
+          success: false,
+          error: error.message,
+          metadata: { blockedBy: "spend_cap" },
+        });
+        return {
+          result: { ok: false as const, reason: error.message },
+          provider: provider.name,
+          model: selection.model,
+          tier: selection.tier,
+          taskType,
+          latencyMs: Date.now() - started,
+        };
+      }
+      throw error;
+    }
+
     const result = await analyseWithValidation(provider, {
       model: selection.model,
       systemPrompt: input.systemPrompt,

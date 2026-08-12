@@ -1,5 +1,4 @@
-import { Queue, Worker, type JobsOptions } from "bullmq";
-import IORedis from "ioredis";
+import { Worker } from "bullmq";
 import { FollowUpStatus, MessageDirection, MessageSenderType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -7,44 +6,12 @@ import { evaluateMessagingWindow } from "@/lib/messaging-window";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { writeAuditLog } from "@/services/audit";
 import { recordFailedJob } from "@/services/failed-jobs";
+import { getRedisConnection } from "@/jobs/redis";
+import { QUEUE_FOLLOW_UPS } from "@/jobs/queues";
 
-const connectionUrl = process.env.REDIS_URL || "redis://localhost:6379";
-
-let connection: IORedis | null = null;
-let followUpQueue: Queue | null = null;
-
-function getConnection() {
-  if (!connection) {
-    connection = new IORedis(connectionUrl, { maxRetriesPerRequest: null });
-  }
-  return connection;
-}
-
-export function getFollowUpQueue() {
-  if (!followUpQueue) {
-    followUpQueue = new Queue("follow-ups", { connection: getConnection() });
-  }
-  return followUpQueue;
-}
-
-export async function enqueueFollowUpCheck(opts?: JobsOptions) {
-  try {
-    await getFollowUpQueue().add(
-      "process-due-followups",
-      {},
-      {
-        repeat: { every: 60_000 },
-        removeOnComplete: 100,
-        removeOnFail: 100,
-        ...opts,
-      },
-    );
-  } catch (error) {
-    logger.warn("Could not enqueue follow-up job (Redis unavailable?)", {
-      message: error instanceof Error ? error.message : "unknown",
-    });
-  }
-}
+// Re-export enqueue from jobs layer (Next.js enqueues only).
+export { enqueueFollowUpCheck } from "@/jobs/follow-ups";
+export { getFollowUpQueue } from "@/jobs/queues";
 
 export async function processDueFollowUps(): Promise<number> {
   const due = await prisma.followUp.findMany({
@@ -167,8 +134,12 @@ export async function processDueFollowUps(): Promise<number> {
   return sent;
 }
 
-/** In-process fallback when Redis is unavailable (local/dev). */
+/** In-process fallback when Redis is unavailable (local/dev ONLY). */
 export function startInProcessFollowUpLoop(intervalMs = 60_000) {
+  logger.error(
+    "⚠️  IN-PROCESS FOLLOW-UP LOOP STARTED — Redis unavailable. " +
+      "Local development only. agent-runs will not execute.",
+  );
   const timer = setInterval(() => {
     processDueFollowUps()
       .then((sent) => {
@@ -183,14 +154,15 @@ export function startInProcessFollowUpLoop(intervalMs = 60_000) {
   return timer;
 }
 
+/** @deprecated Prefer the unified worker entry (src/workers/index.ts). */
 export function startBullWorker() {
   const worker = new Worker(
-    "follow-ups",
+    QUEUE_FOLLOW_UPS,
     async () => {
       const sent = await processDueFollowUps();
       return { sent };
     },
-    { connection: getConnection() },
+    { connection: getRedisConnection() },
   );
 
   worker.on("failed", (job, err) => {
