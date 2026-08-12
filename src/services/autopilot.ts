@@ -7,7 +7,7 @@ import {
   type AutopilotCapabilityMode,
   type AutopilotConfig,
 } from "@/lib/autopilot-config";
-import { writeAuditLog } from "@/services/audit";
+import { writeAuditLog, tenantAuditLogWhere } from "@/services/audit";
 
 export type { AutopilotCapability, AutopilotCapabilityMode, AutopilotConfig };
 export { DEFAULT_AUTOPILOT_CONFIG, parseAutopilotConfig };
@@ -163,8 +163,7 @@ export async function getAutopilotTodayStats(organisationId: string) {
     }),
     prisma.auditLog.findMany({
       where: {
-        scope: "ORG",
-        organisationId,
+        ...tenantAuditLogWhere(organisationId),
         action: {
           in: [
             "autopilot.mode_change",
