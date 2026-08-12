@@ -56,8 +56,8 @@ export async function PATCH(req: NextRequest) {
     });
     if (!stage) return jsonError("Stage not found", 404);
 
-    await prisma.lead.update({
-      where: { id: lead.id },
+    await prisma.lead.updateMany({
+      where: { id: lead.id, organisationId: session.organisationId },
       data: { stageId: stage.id },
     });
 

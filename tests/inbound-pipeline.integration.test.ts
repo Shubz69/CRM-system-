@@ -1,6 +1,7 @@
 /**
  * Integration checks against the local database.
- * Requires: npm run db:dev && npm run db:setup
+ * Requires: DATABASE_URL + npm run db:setup
+ * Explicitly skipped (not silently green) when DATABASE_URL is unset.
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
@@ -8,7 +9,9 @@ import { processInboundMessage } from "@/services/inbound-pipeline";
 import { clearMockOutboundLog, mockOutboundLog } from "@/adapters/messaging";
 import { cancelPendingFollowUps } from "@/services/followups";
 
-describe("Inbound pipeline integration", () => {
+const hasDatabase = Boolean(process.env.DATABASE_URL);
+
+describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
   let organisationId = "";
 
   afterAll(async () => {
@@ -83,6 +86,7 @@ describe("Inbound pipeline integration", () => {
     });
     expect(conversation).toBeTruthy();
     const cancelled = await cancelPendingFollowUps({
+      organisationId,
       conversationId: conversation!.id,
       reason: "test cancel",
     });

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { Prisma } from "@prisma/client";
+import { getPlatformOrganisationId } from "@/lib/platform-org";
 
 export async function recordUsage(input: {
   organisationId?: string | null;
@@ -10,9 +11,10 @@ export async function recordUsage(input: {
   metadata?: Record<string, unknown>;
 }) {
   try {
+    const organisationId = input.organisationId || (await getPlatformOrganisationId());
     await prisma.usageRecord.create({
       data: {
-        organisationId: input.organisationId ?? null,
+        organisationId,
         feature: input.feature,
         provider: input.provider ?? null,
         quantity: input.quantity ?? 1,

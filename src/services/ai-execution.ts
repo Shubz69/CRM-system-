@@ -3,6 +3,7 @@ import { estimateAnthropicCost } from "@/lib/ai-models";
 import { recordUsage } from "@/services/usage";
 import { logger } from "@/lib/logger";
 import type { Prisma } from "@prisma/client";
+import { getPlatformOrganisationId } from "@/lib/platform-org";
 
 export async function recordAiExecution(input: {
   organisationId?: string | null;
@@ -26,10 +27,12 @@ export async function recordAiExecution(input: {
       ? estimateAnthropicCost(input.model, inputTokens, outputTokens)
       : null;
 
+  const organisationId = input.organisationId || (await getPlatformOrganisationId());
+
   try {
     await prisma.aiExecution.create({
       data: {
-        organisationId: input.organisationId ?? null,
+        organisationId,
         provider: input.provider,
         model: input.model,
         taskType: input.taskType,
@@ -51,7 +54,7 @@ export async function recordAiExecution(input: {
   }
 
   await recordUsage({
-    organisationId: input.organisationId,
+    organisationId,
     feature: input.feature || `ai:${input.taskType}`,
     provider: input.provider,
     quantity: totalTokens || 1,

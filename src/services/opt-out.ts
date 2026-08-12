@@ -26,8 +26,8 @@ export async function applyOptOut(input: {
   userId?: string;
   reason?: string;
 }): Promise<void> {
-  await prisma.contact.update({
-    where: { id: input.contactId },
+  await prisma.contact.updateMany({
+    where: { id: input.contactId, organisationId: input.organisationId },
     data: {
       optedOut: true,
       optedOutAt: new Date(),
@@ -39,7 +39,10 @@ export async function applyOptOut(input: {
     },
   });
 
-  const cancelled = await cancelFollowUpsOnOptOut(input.contactId);
+  const cancelled = await cancelFollowUpsOnOptOut({
+    organisationId: input.organisationId,
+    contactId: input.contactId,
+  });
 
   await writeAuditLog({
     organisationId: input.organisationId,
@@ -62,8 +65,8 @@ export async function clearOptOut(input: {
   contactId: string;
   userId: string;
 }): Promise<void> {
-  await prisma.contact.update({
-    where: { id: input.contactId },
+  await prisma.contact.updateMany({
+    where: { id: input.contactId, organisationId: input.organisationId },
     data: {
       optedOut: false,
       optedOutAt: null,

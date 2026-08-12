@@ -53,8 +53,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
-    await prisma.conversation.update({
-      where: { id },
+    await prisma.conversation.updateMany({
+      where: { id, organisationId: session.organisationId },
       data: { unreadCount: 0 },
     });
 
@@ -92,8 +92,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     if (!conversation) return jsonError("Conversation not found", 404);
 
     if (body.aiPaused !== undefined || body.handlingMode) {
-      await prisma.conversation.update({
-        where: { id },
+      await prisma.conversation.updateMany({
+        where: { id, organisationId: session.organisationId },
         data: {
           aiPaused: body.aiPaused,
           handlingMode:
@@ -116,6 +116,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
 
     if (body.assignUserId !== undefined) {
+      if (body.assignUserId) {
+        const member = await prisma.organisationMember.findFirst({
+          where: {
+            organisationId: session.organisationId,
+            userId: body.assignUserId,
+            user: { deletedAt: null, isActive: true, isSuspended: false },
+          },
+          select: { id: true },
+        });
+        if (!member) {
+          return jsonError("Assignee is not a member of this organisation", 400);
+        }
+      }
+
       await prisma.conversationAssignment.updateMany({
         where: { conversationId: id, active: true },
         data: { active: false },
@@ -145,11 +159,24 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
     const lead = conversation.leads[0];
     if (lead && (body.qualificationStatus || body.stageId)) {
-      await prisma.lead.update({
-        where: { id: lead.id },
+      let stageId = body.stageId;
+      if (stageId) {
+        const stage = await prisma.pipelineStage.findFirst({
+          where: {
+            id: stageId,
+            pipeline: { organisationId: session.organisationId },
+          },
+          select: { id: true },
+        });
+        if (!stage) return jsonError("Stage not found", 404);
+        stageId = stage.id;
+      }
+
+      await prisma.lead.updateMany({
+        where: { id: lead.id, organisationId: session.organisationId },
         data: {
           qualificationStatus: body.qualificationStatus,
-          stageId: body.stageId,
+          stageId,
         },
       });
     }
@@ -190,8 +217,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         },
       });
 
-      await prisma.conversation.update({
-        where: { id },
+      await prisma.conversation.updateMany({
+        where: { id, organisationId: session.organisationId },
         data: {
           lastMessageAt: outboundAt,
           lastMessagePreview: body.reply.slice(0, 140),
@@ -202,6 +229,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       });
 
       await cancelPendingFollowUps({
+        organisationId: session.organisationId,
         conversationId: id,
         reason: "Human replied",
       });

@@ -378,7 +378,10 @@ export async function processInboundMessage(
           reason: input.message.text.slice(0, 200),
         });
       } else {
-        await cancelFollowUpsOnOptOut(result.contact.id);
+        await cancelFollowUpsOnOptOut({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+        });
       }
 
       await prisma.webhookEvent.update({
@@ -407,6 +410,7 @@ export async function processInboundMessage(
     }
 
     await cancelPendingFollowUps({
+      organisationId: input.organisationId,
       conversationId: result.conversation.id,
       reason: "Lead replied",
     });

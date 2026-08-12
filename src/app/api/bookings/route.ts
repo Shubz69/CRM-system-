@@ -28,6 +28,36 @@ export async function POST(req: NextRequest) {
     });
     if (!contact) return jsonError("Contact not found", 404);
 
+    let conversationId: string | undefined;
+    if (body.conversationId) {
+      const conversation = await prisma.conversation.findFirst({
+        where: {
+          id: body.conversationId,
+          organisationId: session.organisationId,
+          contactId: body.contactId,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!conversation) return jsonError("Conversation not found", 404);
+      conversationId = conversation.id;
+    }
+
+    let leadId: string | undefined;
+    if (body.leadId) {
+      const lead = await prisma.lead.findFirst({
+        where: {
+          id: body.leadId,
+          organisationId: session.organisationId,
+          contactId: body.contactId,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!lead) return jsonError("Lead not found", 404);
+      leadId = lead.id;
+    }
+
     const bookedStage = await prisma.pipelineStage.findFirst({
       where: {
         slug: "booked",
@@ -38,8 +68,8 @@ export async function POST(req: NextRequest) {
     const link = await getBookingProvider().createBookingLink({
       organisationId: session.organisationId,
       contactId: body.contactId,
-      conversationId: body.conversationId,
-      leadId: body.leadId,
+      conversationId,
+      leadId,
       bookingUrl: body.bookingUrl ?? process.env.DEFAULT_BOOKING_URL,
     });
 
@@ -48,8 +78,8 @@ export async function POST(req: NextRequest) {
         data: {
           organisationId: session.organisationId,
           contactId: body.contactId,
-          conversationId: body.conversationId,
-          leadId: body.leadId,
+          conversationId,
+          leadId,
           status: body.status ?? BookingStatus.CREATED,
           scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
           bookingUrl: link.url,
@@ -58,9 +88,9 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (body.leadId && bookedStage) {
-        await tx.lead.update({
-          where: { id: body.leadId },
+      if (leadId && bookedStage) {
+        await tx.lead.updateMany({
+          where: { id: leadId, organisationId: session.organisationId },
           data: { stageId: bookedStage.id },
         });
       }
@@ -68,9 +98,10 @@ export async function POST(req: NextRequest) {
       return created;
     });
 
-    if (body.conversationId) {
+    if (conversationId) {
       await cancelPendingFollowUps({
-        conversationId: body.conversationId,
+        organisationId: session.organisationId,
+        conversationId,
         reason: "Booking confirmed",
       });
     }

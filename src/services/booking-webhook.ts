@@ -203,21 +203,22 @@ export async function handleBookingWebhook(
     // Promote any OFFERED booking for this lead to CREATED when confirmed.
     if (lead && parsed.status === "CREATED") {
       await prisma.booking.updateMany({
-        where: { leadId: lead.id, status: BookingStatus.OFFERED },
+        where: { leadId: lead.id, organisationId: org.id, status: BookingStatus.OFFERED },
         data: { status: BookingStatus.CREATED, externalId: parsed.externalId },
       });
     }
 
     if (lead?.conversationId && ["CREATED", "RESCHEDULED"].includes(parsed.status)) {
       await cancelPendingFollowUps({
+        organisationId: org.id,
         conversationId: lead.conversationId,
         reason: "Booking webhook update",
       });
     }
 
     if (lead && targetStage) {
-      await prisma.lead.update({
-        where: { id: lead.id },
+      await prisma.lead.updateMany({
+        where: { id: lead.id, organisationId: org.id },
         data: { stageId: targetStage.id },
       });
     }

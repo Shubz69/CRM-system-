@@ -155,6 +155,9 @@ model Organisation {
   notes                Note[]
   attributions         Attribution[]
   knowledgeRecommendations KnowledgeRecommendation[]
+  failedJobs           FailedJob[]
+  usageRecords         UsageRecord[]
+  aiExecutions         AiExecution[]
 }
 
 model User {
@@ -915,7 +918,7 @@ model Report {
 
 model WebhookEvent {
   id             String                  @id @default(cuid())
-  organisationId String?
+  organisationId String
   provider       String
   eventType      String
   idempotencyKey String
@@ -925,7 +928,7 @@ model WebhookEvent {
   processedAt    DateTime?
   createdAt      DateTime                @default(now())
 
-  organisation Organisation? @relation(fields: [organisationId], references: [id])
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@unique([provider, idempotencyKey])
   @@index([organisationId, createdAt])
@@ -934,7 +937,7 @@ model WebhookEvent {
 
 model AuditLog {
   id             String   @id @default(cuid())
-  organisationId String?
+  organisationId String
   userId         String?
   action         String
   entityType     String?
@@ -942,7 +945,7 @@ model AuditLog {
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
-  organisation Organisation? @relation(fields: [organisationId], references: [id])
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   user         User?         @relation(fields: [userId], references: [id])
 
   @@index([organisationId, createdAt])
@@ -1007,7 +1010,7 @@ model SystemSetting {
 
 model FailedJob {
   id             String    @id @default(cuid())
-  organisationId String?
+  organisationId String
   queue          String
   jobName        String
   payload        Json      @default("{}")
@@ -1016,17 +1019,22 @@ model FailedJob {
   createdAt      DateTime  @default(now())
   resolvedAt     DateTime?
 
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
   @@index([queue, createdAt])
+  @@index([organisationId, createdAt])
 }
 
 model UsageRecord {
   id             String   @id @default(cuid())
-  organisationId String?
+  organisationId String
   feature        String
   provider       String?
   quantity       Int      @default(1)
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, feature, createdAt])
 }
@@ -1034,7 +1042,7 @@ model UsageRecord {
 /// Detailed AI call ledger — Anthropic-first; OpenAI optional if ever enabled.
 model AiExecution {
   id             String   @id @default(cuid())
-  organisationId String?
+  organisationId String
   provider       String
   model          String
   taskType       String
@@ -1048,6 +1056,8 @@ model AiExecution {
   estimatedCost  Float?
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, createdAt])
   @@index([provider, model, createdAt])

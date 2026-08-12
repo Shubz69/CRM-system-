@@ -1,20 +1,13 @@
-import { createHash, timingSafeEqual } from "crypto";
+import { createHash } from "crypto";
 import { NextRequest } from "next/server";
-import { getEnv, isDemoModeEnabled, assertWebhookSecretsConfigured } from "@/lib/env";
+import { assertWebhookSecretsConfigured, isDemoModeEnabled } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { manychatWebhookSchema } from "@/schemas/webhook";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { prisma } from "@/lib/db";
-import { validateManyChatSecret } from "@/services/manychat-secrets";
+import { resolveManyChatWebhookOrganisation } from "@/services/manychat-secrets";
 import { recordUsage } from "@/services/usage";
-
-function safeEqual(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  if (aBuf.length !== bBuf.length) return false;
-  return timingSafeEqual(aBuf, bBuf);
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,7 +17,6 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
     }
 
-    const env = getEnv();
     const secretHeader =
       req.headers.get("x-manychat-secret") ||
       req.headers.get("x-webhook-secret") ||
@@ -37,54 +29,19 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parsed.data;
-    let organisationId = data.organisationId;
-    let channelExternalId: string | undefined = data.channel_id;
+    const resolved = await resolveManyChatWebhookOrganisation({
+      secretHeader,
+      payloadOrganisationId: data.organisationId,
+      channelExternalId: data.channel_id,
+      allowDemoFallback: isDemoModeEnabled(),
+    });
 
-    // Fast-path: env secret always accepted; otherwise require org id then org secret.
-    const envOk = safeEqual(secretHeader, env.MANYCHAT_WEBHOOK_SECRET);
-    if (!envOk) {
-      if (!organisationId) {
-        return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
-      }
-      const orgOk = await validateManyChatSecret(secretHeader, organisationId);
-      if (!orgOk) {
-        return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
-      }
+    if (!resolved.ok) {
+      return Response.json({ error: resolved.error }, { status: resolved.status });
     }
 
-    if (!organisationId && channelExternalId) {
-      const matches = await prisma.messagingChannel.findMany({
-        where: { provider: "manychat", externalId: channelExternalId, isActive: true },
-        take: 5,
-      });
-      if (matches.length === 1) {
-        organisationId = matches[0]?.organisationId;
-      } else if (matches.length > 1) {
-        return Response.json(
-          {
-            error:
-              "channel_id maps to multiple organisations; include organisationId in the payload",
-          },
-          { status: 400 },
-        );
-      }
-    }
-
-    if (!organisationId && isDemoModeEnabled()) {
-      const org = await prisma.organisation.findFirst({
-        where: { deletedAt: null, demoData: true },
-        orderBy: { createdAt: "asc" },
-      });
-      organisationId = org?.id;
-      channelExternalId = channelExternalId ?? "default";
-    }
-
-    if (!organisationId) {
-      return Response.json(
-        { error: "organisationId required (or map channel_id to an organisation)" },
-        { status: 400 },
-      );
-    }
+    let organisationId = resolved.organisationId;
+    let channelExternalId = resolved.channelExternalId;
 
     if (!channelExternalId) {
       const channel = await prisma.messagingChannel.findFirst({
@@ -136,7 +93,7 @@ export async function POST(req: NextRequest) {
       organisationId,
       feature: "webhook_inbound",
       provider: "manychat",
-      metadata: { duplicate: result.duplicate },
+      metadata: { duplicate: result.duplicate, authMethod: resolved.authMethod },
     });
 
     return Response.json({ ok: true, result });

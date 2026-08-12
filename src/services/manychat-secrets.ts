@@ -97,14 +97,125 @@ export async function regenerateOrganisationManyChatSecret(organisationId: strin
   return secret;
 }
 
-/** Validate header against env default and optional org override. */
+/** Org-scoped secret only — never accepts the global env secret. */
+export async function validateOrgScopedManyChatSecret(
+  headerSecret: string,
+  organisationId: string,
+): Promise<boolean> {
+  if (!headerSecret || !organisationId) return false;
+  const orgSecret = await getOrganisationManyChatSecret(organisationId);
+  return Boolean(orgSecret && secretsEqual(headerSecret, orgSecret));
+}
+
+export type ManyChatOrgResolution =
+  | {
+      ok: true;
+      organisationId: string;
+      channelExternalId?: string;
+      authMethod: "channel_mapping" | "org_scoped_secret" | "demo";
+    }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Resolve which organisation a ManyChat webhook may write into.
+ *
+ * Rules:
+ * - Never trust payload organisationId as authoritative on its own.
+ * - Global env secret may only authorize writes when org is proven via a
+ *   unique MessagingChannel mapping (channel_id).
+ * - Without a unique channel mapping, only an org-scoped secret is accepted
+ *   (payload organisationId is merely the lookup key for that secret).
+ */
+export async function resolveManyChatWebhookOrganisation(input: {
+  secretHeader: string;
+  payloadOrganisationId?: string | null;
+  channelExternalId?: string | null;
+  allowDemoFallback?: boolean;
+}): Promise<ManyChatOrgResolution> {
+  const envSecret = getEnv().MANYCHAT_WEBHOOK_SECRET;
+  const secretHeader = input.secretHeader || "";
+  const channelExternalId = input.channelExternalId || undefined;
+  const payloadOrganisationId = input.payloadOrganisationId || undefined;
+
+  if (channelExternalId) {
+    const matches = await prisma.messagingChannel.findMany({
+      where: { provider: "manychat", externalId: channelExternalId, isActive: true },
+      take: 5,
+    });
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        status: 400,
+        error: "channel_id maps to multiple organisations; cannot resolve tenant safely",
+      };
+    }
+    if (matches.length === 1) {
+      const organisationId = matches[0]!.organisationId;
+      const orgSecret = await getOrganisationManyChatSecret(organisationId);
+      const orgOk = Boolean(orgSecret && secretsEqual(secretHeader, orgSecret));
+      const envOk = secretsEqual(secretHeader, envSecret);
+      if (!orgOk && !envOk) {
+        return { ok: false, status: 401, error: "Invalid webhook secret" };
+      }
+      return {
+        ok: true,
+        organisationId,
+        channelExternalId,
+        authMethod: "channel_mapping",
+      };
+    }
+  }
+
+  // No unique channel mapping — global secret must NOT authorize arbitrary org claims.
+  if (!payloadOrganisationId) {
+    if (input.allowDemoFallback) {
+      const org = await prisma.organisation.findFirst({
+        where: { deletedAt: null, demoData: true },
+        orderBy: { createdAt: "asc" },
+      });
+      if (org && secretsEqual(secretHeader, envSecret)) {
+        return {
+          ok: true,
+          organisationId: org.id,
+          channelExternalId: channelExternalId ?? "default",
+          authMethod: "demo",
+        };
+      }
+    }
+    return {
+      ok: false,
+      status: 401,
+      error: "Org-scoped secret or verified channel_id required",
+    };
+  }
+
+  const orgOk = await validateOrgScopedManyChatSecret(secretHeader, payloadOrganisationId);
+  if (!orgOk) {
+    // Explicitly reject global-secret + payload orgId (cross-tenant write vector).
+    return {
+      ok: false,
+      status: 401,
+      error:
+        "Invalid webhook secret — global secret cannot authorize a payload organisationId; use an org-scoped secret or channel_id mapping",
+    };
+  }
+
+  return {
+    ok: true,
+    organisationId: payloadOrganisationId,
+    channelExternalId,
+    authMethod: "org_scoped_secret",
+  };
+}
+
+/**
+ * @deprecated Prefer resolveManyChatWebhookOrganisation — env secret alone must not
+ * authorize arbitrary organisationId claims.
+ */
 export async function validateManyChatSecret(
   headerSecret: string,
   organisationId?: string | null,
 ): Promise<boolean> {
-  const envSecret = getEnv().MANYCHAT_WEBHOOK_SECRET;
-  if (secretsEqual(headerSecret, envSecret)) return true;
   if (!organisationId) return false;
-  const orgSecret = await getOrganisationManyChatSecret(organisationId);
-  return Boolean(orgSecret && secretsEqual(headerSecret, orgSecret));
+  return validateOrgScopedManyChatSecret(headerSecret, organisationId);
 }

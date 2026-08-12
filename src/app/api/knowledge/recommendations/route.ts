@@ -36,12 +36,16 @@ export async function PATCH(req: NextRequest) {
     });
     if (!existing) return jsonError("Not found", 404);
 
-    const updated = await prisma.knowledgeRecommendation.update({
-      where: { id: body.id },
+    await prisma.knowledgeRecommendation.updateMany({
+      where: { id: body.id, organisationId: session.organisationId },
       data: {
         status: body.status,
         draftAnswer: body.draftAnswer ?? existing.draftAnswer,
       },
+    });
+
+    const recommendation = await prisma.knowledgeRecommendation.findFirst({
+      where: { id: body.id, organisationId: session.organisationId },
     });
 
     await writeAuditLog({
@@ -49,11 +53,11 @@ export async function PATCH(req: NextRequest) {
       userId: session.userId,
       action: "knowledge.recommendation_updated",
       entityType: "KnowledgeRecommendation",
-      entityId: updated.id,
+      entityId: body.id,
       metadata: { status: body.status },
     });
 
-    return Response.json({ recommendation: updated });
+    return Response.json({ recommendation });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

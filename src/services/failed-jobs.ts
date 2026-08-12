@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { getPlatformOrganisationId } from "@/lib/platform-org";
 
 export async function recordFailedJob(input: {
   organisationId?: string | null;
@@ -10,9 +11,10 @@ export async function recordFailedJob(input: {
   attempts?: number;
 }) {
   try {
+    const organisationId = input.organisationId || (await getPlatformOrganisationId());
     return await prisma.failedJob.create({
       data: {
-        organisationId: input.organisationId ?? null,
+        organisationId,
         queue: input.queue,
         jobName: input.jobName,
         payload: (input.payload as object) ?? {},

@@ -46,7 +46,13 @@ export async function PATCH(req: Request) {
     const existing = await prisma.qualificationField.findFirst({ where: { id: body.id, organisationId: session.organisationId } });
     if (!existing) return jsonError("Qualification field not found", 404);
     const { id, ...data } = body;
-    const field = await prisma.qualificationField.update({ where: { id }, data });
+    await prisma.qualificationField.updateMany({
+      where: { id, organisationId: session.organisationId },
+      data,
+    });
+    const field = await prisma.qualificationField.findFirst({
+      where: { id, organisationId: session.organisationId },
+    });
     return Response.json({ field });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";

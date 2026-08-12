@@ -139,6 +139,7 @@ async function executeAction(action: AutomationAction, context: AutomationContex
     case "cancel_follow_ups":
       if (context.conversationId) {
         await cancelPendingFollowUps({
+          organisationId: context.organisationId,
           conversationId: context.conversationId,
           reason: `Automation: ${context.triggerType}`,
         });

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { getPlatformOrganisationId } from "@/lib/platform-org";
 
 export async function writeAuditLog(input: {
   organisationId?: string | null;
@@ -9,9 +10,10 @@ export async function writeAuditLog(input: {
   entityId?: string;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
+  const organisationId = input.organisationId || (await getPlatformOrganisationId());
   await prisma.auditLog.create({
     data: {
-      organisationId: input.organisationId ?? undefined,
+      organisationId,
       userId: input.userId ?? undefined,
       action: input.action,
       entityType: input.entityType,

@@ -12,6 +12,7 @@ export async function scheduleFollowUps(input: {
   maxFollowUps: number;
 }): Promise<number> {
   await cancelPendingFollowUps({
+    organisationId: input.organisationId,
     conversationId: input.conversationId,
     reason: "Rescheduled after new activity",
   });
@@ -54,11 +55,13 @@ export async function scheduleFollowUps(input: {
 }
 
 export async function cancelPendingFollowUps(input: {
+  organisationId: string;
   conversationId: string;
   reason: string;
 }): Promise<number> {
   const result = await prisma.followUp.updateMany({
     where: {
+      organisationId: input.organisationId,
       conversationId: input.conversationId,
       status: FollowUpStatus.SCHEDULED,
     },
@@ -70,10 +73,14 @@ export async function cancelPendingFollowUps(input: {
   return result.count;
 }
 
-export async function cancelFollowUpsOnOptOut(contactId: string): Promise<number> {
+export async function cancelFollowUpsOnOptOut(input: {
+  organisationId: string;
+  contactId: string;
+}): Promise<number> {
   const result = await prisma.followUp.updateMany({
     where: {
-      contactId,
+      organisationId: input.organisationId,
+      contactId: input.contactId,
       status: FollowUpStatus.SCHEDULED,
     },
     data: {
