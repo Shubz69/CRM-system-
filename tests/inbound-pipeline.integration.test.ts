@@ -3,7 +3,7 @@
  * Requires: DATABASE_URL + npm run db:setup
  * Explicitly skipped (not silently green) when DATABASE_URL is unset.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { clearMockOutboundLog, mockOutboundLog } from "@/adapters/messaging";
