@@ -14,6 +14,17 @@ const hasDatabase = Boolean(process.env.DATABASE_URL);
 describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
   let organisationId = "";
 
+  beforeAll(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `DATABASE_URL is set but Postgres is unreachable — refusing to skip. ${message}`,
+      );
+    }
+  });
+
   afterAll(async () => {
     await prisma.$disconnect();
   });
