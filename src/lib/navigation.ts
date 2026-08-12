@@ -18,6 +18,7 @@ import {
   ScrollText,
   Building2,
   Cpu,
+  MessageCircleQuestion,
 } from "lucide-react";
 
 export type NavItem = {
@@ -34,6 +35,7 @@ export const WORKSPACE_NAV: NavItem[] = [
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/ask", label: "Ask", icon: MessageCircleQuestion },
   { href: "/agent", label: "AI Agent", icon: Bot },
   { href: "/setup", label: "Setup Assistant", icon: ListChecks },
   { href: "/autopilot", label: "Autopilot", icon: Sparkles },

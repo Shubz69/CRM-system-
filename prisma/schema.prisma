@@ -166,6 +166,10 @@ model Organisation {
   usageRecords         UsageRecord[]
   aiExecutions         AiExecution[]
   aiBudget             OrganisationAiBudget?
+  agentRuns            AgentRun[]
+  agentSteps           AgentStep[]
+  toolCalls            ToolCall[]
+  agentLimits          OrganisationAgentLimits?
 }
 
 model User {
@@ -193,6 +197,7 @@ model User {
   notes                 Note[]
   auditLogs             AuditLog[]
   notifications         Notification[]
+  agentRuns             AgentRun[]
 }
 
 model Account {
@@ -1089,4 +1094,120 @@ model OrganisationAiBudget {
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId])
+}
+
+enum AgentRunStatus {
+  PENDING
+  PLANNING
+  AWAITING_CLARIFICATION
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum AgentStepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+/// Per-org hard limits for multi-agent runs.
+model OrganisationAgentLimits {
+  id                   String   @id @default(cuid())
+  organisationId       String   @unique
+  maxSteps             Int      @default(8)
+  maxWallClockSeconds  Int      @default(600)
+  /// Cap for a single run in cents. null = use monthly spend gate only.
+  maxSpendCentsPerRun  Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+}
+
+model AgentRun {
+  id                   String         @id @default(cuid())
+  organisationId       String
+  /// Null when triggered by system/schedule (recurring runs later).
+  userId               String?
+  /// user | system | schedule
+  triggeredBy          String         @default("user")
+  request              String         @db.Text
+  plan                 Json?
+  plainEnglishPlan     String?        @db.Text
+  clarificationQuestion String?       @db.Text
+  clarificationOptions Json?
+  status               AgentRunStatus @default(PENDING)
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  totalCostCents       Int            @default(0)
+  error                String?        @db.Text
+  userFacingError      String?        @db.Text
+  partialResults       Json?
+  /// First-class output artifact for later save/share/export.
+  finalOutput          Json?
+  maxSteps             Int            @default(8)
+  maxWallClockSeconds  Int            @default(600)
+  maxSpendCents        Int?
+  bullJobId            String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  steps        AgentStep[]
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, status])
+  @@index([bullJobId])
+}
+
+model AgentStep {
+  id               String          @id @default(cuid())
+  organisationId   String
+  agentRunId       String
+  position         Int
+  agentName        String
+  /// Plain-English label shown to users. Never empty.
+  userFacingLabel  String
+  input            Json
+  output           Json?
+  model            String?
+  tokensIn         Int?
+  tokensOut        Int?
+  costCents        Int             @default(0)
+  durationMs       Int?
+  status           AgentStepStatus @default(PENDING)
+  userFacingStatus String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  agentRun     AgentRun     @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  toolCalls    ToolCall[]
+
+  @@index([organisationId, agentRunId])
+  @@index([agentRunId, position])
+}
+
+model ToolCall {
+  id             String   @id @default(cuid())
+  organisationId String
+  agentStepId    String
+  toolName       String
+  args           Json     @default("{}")
+  result         Json?
+  durationMs     Int?
+  error          String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  agentStep    AgentStep    @relation(fields: [agentStepId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, agentStepId])
+  @@index([agentStepId, createdAt])
 }

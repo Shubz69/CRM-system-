@@ -3,7 +3,7 @@ import { logger } from "@/lib/logger";
 import { getAgentRunsQueue, type JobsOptions } from "@/jobs/queues";
 import { pingRedis, redisRequired } from "@/jobs/redis";
 
-export const agentRunJobNameSchema = z.enum(["sleep-test", "noop"]);
+export const agentRunJobNameSchema = z.enum(["sleep-test", "noop", "agent-framework-run"]);
 export type AgentRunJobName = z.infer<typeof agentRunJobNameSchema>;
 
 export const sleepTestPayloadSchema = z.object({
@@ -19,7 +19,17 @@ export const noopPayloadSchema = z.object({
   message: z.string().max(200).optional(),
 });
 
-export type AgentRunJobPayload = SleepTestPayload | z.infer<typeof noopPayloadSchema>;
+export const agentFrameworkRunPayloadSchema = z.object({
+  organisationId: z.string().min(1),
+  agentRunId: z.string().min(1),
+});
+
+export type AgentFrameworkRunPayload = z.infer<typeof agentFrameworkRunPayloadSchema>;
+
+export type AgentRunJobPayload =
+  | SleepTestPayload
+  | z.infer<typeof noopPayloadSchema>
+  | AgentFrameworkRunPayload;
 
 /**
  * Enqueue a long-running agent-runs job. HTTP handlers must only call this —

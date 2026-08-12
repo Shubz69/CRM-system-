@@ -18,7 +18,9 @@ client and services. Do not fork the codebase.
 - **`agent-runs`** — long jobs. Lock duration 15 minutes, concurrency from
   `AGENT_RUNS_CONCURRENCY` (default 2), exponential backoff.
 
-Prompt 2A job names on `agent-runs`: `sleep-test`, `noop`. No agent logic yet.
+Prompt 2A job names on `agent-runs`: `sleep-test`, `noop`.
+Prompt 2B adds `agent-framework-run` (loads `AgentRun` by id + org, plans and
+executes registered agents; writes `AgentStep` rows as work progresses).
 
 ## Local
 

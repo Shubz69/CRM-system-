@@ -2,10 +2,12 @@ import type { Job } from "bullmq";
 import { logger } from "@/lib/logger";
 import { recordFailedJob } from "@/services/failed-jobs";
 import {
+  agentFrameworkRunPayloadSchema,
   noopPayloadSchema,
   sleepTestPayloadSchema,
   type AgentRunJobName,
 } from "@/jobs/agent-runs";
+import { executeAgentRun } from "@/agents/supervisor/execute";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -13,7 +15,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Processes agent-runs queue jobs.
- * Prompt 2A: only infrastructure jobs (sleep-test, noop). No agent logic.
+ * Prompt 2A: sleep-test / noop. Prompt 2B: agent-framework-run.
  */
 export async function processAgentRunJob(job: Job): Promise<Record<string, unknown>> {
   const name = job.name as AgentRunJobName;
@@ -64,6 +66,25 @@ export async function processAgentRunJob(job: Job): Promise<Record<string, unkno
         ok: true,
         organisationId: payload.organisationId,
         message: payload.message ?? "noop",
+      };
+    }
+
+    if (name === "agent-framework-run") {
+      const payload = agentFrameworkRunPayloadSchema.parse(job.data);
+      const result = await executeAgentRun({
+        organisationId: payload.organisationId,
+        runId: payload.agentRunId,
+      });
+      await job.updateProgress({
+        organisationId: payload.organisationId,
+        agentRunId: payload.agentRunId,
+        status: result.status,
+      });
+      return {
+        ok: true,
+        organisationId: payload.organisationId,
+        agentRunId: result.runId,
+        status: result.status,
       };
     }
 
