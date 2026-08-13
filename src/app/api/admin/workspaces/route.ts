@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import { assertOrganisationMutable } from "@/lib/platform-org";
+import { softDeleteOrganisation } from "@/services/organisation-lifecycle";
 
 const createSchema = z.object({
   action: z.literal("create"),
@@ -19,11 +20,12 @@ const createSchema = z.object({
 });
 
 const mutateSchema = z.object({
-  action: z.enum(["suspend", "reactivate", "update"]),
+  action: z.enum(["suspend", "reactivate", "update", "archive"]),
   organisationId: z.string().min(1),
   name: z.string().min(2).max(120).optional(),
   timezone: z.string().optional(),
   plan: z.string().optional(),
+  reason: z.string().max(500).optional(),
 });
 
 export async function GET() {
@@ -202,6 +204,20 @@ export async function POST(req: NextRequest) {
         entityId: org.id,
       });
       return Response.json({ ok: true, status: updated.status });
+    }
+
+    if (body.action === "archive") {
+      // Soft-delete only. Hard purge is a separate deliberate export-then-wipe path.
+      const result = await softDeleteOrganisation({
+        organisationId: org.id,
+        actorUserId: session.userId,
+        reason: body.reason,
+      });
+      return Response.json({
+        ok: true,
+        archived: true,
+        deletedAt: result.deletedAt.toISOString(),
+      });
     }
 
     const updated = await prisma.organisation.update({

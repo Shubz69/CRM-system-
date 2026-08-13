@@ -940,6 +940,7 @@ model WebhookEvent {
   processedAt    DateTime?
   createdAt      DateTime                @default(now())
 
+  /// Restrict: hard-deleting an org must not silently wipe webhook forensics.
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@unique([provider, idempotencyKey])
@@ -959,6 +960,7 @@ model AuditLog {
   metadata       Json          @default("{}")
   createdAt      DateTime      @default(now())
 
+  /// Restrict: compliance trail outlives accidental org hard-delete.
   organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Restrict)
   user         User?         @relation(fields: [userId], references: [id])
 
@@ -1034,6 +1036,7 @@ model FailedJob {
   createdAt      DateTime  @default(now())
   resolvedAt     DateTime?
 
+  /// Restrict: ops failure history must not vanish with the tenant row.
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([queue, createdAt])
@@ -1049,6 +1052,7 @@ model UsageRecord {
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
+  /// Restrict: billing/usage ledger survives org hard-delete attempts.
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([organisationId, feature, createdAt])
@@ -1072,6 +1076,7 @@ model AiExecution {
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
+  /// Restrict: AI spend history must be exported before an org can be purged.
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([organisationId, createdAt])
