@@ -1,8 +1,9 @@
-import { Prisma, type AgentRun, type AgentStep } from "@prisma/client";
+import { AgentDetailRetention, Prisma, type AgentRun, type AgentStep } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { ensureAgentsRegistered } from "@/agents";
 import { logger } from "@/lib/logger";
+import { STEPS_CLEARED_MESSAGE } from "@/services/agent-retention";
 
 export type AgentRunProgress = {
   runId: string;
@@ -26,6 +27,12 @@ export type AgentRunProgress = {
   outputSoFar: unknown;
   finalOutput: unknown;
   userFacingError: string | null;
+  /**
+   * True when step detail was pruned by retention.
+   * UI should keep showing the brief and explain that detail was cleared.
+   */
+  stepsDetailCleared: boolean;
+  stepsDetailClearedMessage: string | null;
   steps: Array<{
     position: number;
     userFacingLabel: string;
@@ -33,6 +40,7 @@ export type AgentRunProgress = {
     status: AgentStep["status"];
     output: unknown;
     costCents: number;
+    detailRetention: AgentStep["detailRetention"];
   }>;
   nextActions: string[];
 };
@@ -222,9 +230,16 @@ export async function getAgentRunProgress(input: {
   const started = run.startedAt?.getTime() ?? run.createdAt.getTime();
   const ended = run.finishedAt?.getTime() ?? Date.now();
 
-  const lastCompletedOutput =
-    [...run.steps].reverse().find((s) => s.status === "COMPLETED" && s.output != null)?.output ??
-    null;
+  const stepsDetailCleared = run.steps.some(
+    (s) =>
+      s.detailRetention === AgentDetailRetention.COMPACT ||
+      s.detailRetention === AgentDetailRetention.SKELETON,
+  );
+
+  const lastCompletedOutput = stepsDetailCleared
+    ? null
+    : [...run.steps].reverse().find((s) => s.status === "COMPLETED" && s.output != null)?.output ??
+      null;
 
   return {
     runId: run.id,
@@ -249,13 +264,16 @@ export async function getAgentRunProgress(input: {
     outputSoFar: lastCompletedOutput,
     finalOutput: run.finalOutput,
     userFacingError: run.userFacingError,
+    stepsDetailCleared,
+    stepsDetailClearedMessage: stepsDetailCleared ? STEPS_CLEARED_MESSAGE : null,
     steps: run.steps.map((s) => ({
       position: s.position,
       userFacingLabel: s.userFacingLabel,
       userFacingStatus: s.userFacingStatus,
       status: s.status,
-      output: s.output,
+      output: stepsDetailCleared ? null : s.output,
       costCents: s.costCents,
+      detailRetention: s.detailRetention,
     })),
     nextActions: nextActionsFor(run.status),
   };

@@ -38,7 +38,8 @@ export async function GET() {
       demoMode: Boolean(env.DEMO_MODE),
       aiProvider: env.AI_PROVIDER,
       nodeEnv: env.NODE_ENV,
-      queues: ["follow-ups", "agent-runs"],
+      queues: ["follow-ups", "agent-runs", "maintenance"],
+      embeddingProvider: env.EMBEDDING_PROVIDER,
     },
     { status: ok ? 200 : 503 },
   );

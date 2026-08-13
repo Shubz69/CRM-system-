@@ -174,10 +174,10 @@ export default async function AdminHealthPage() {
       lastFailure: lastFailure?.error,
       lastSuccess: lastWebhookOk?.processedAt?.toISOString(),
       summary: redis.ok
-        ? `Redis reachable · queues: follow-ups, agent-runs · ${failedJobs} open failures`
+        ? `Redis reachable · queues: follow-ups, agent-runs, maintenance · ${failedJobs} open failures`
         : runtime === "production"
           ? `Redis REQUIRED and unavailable — worker/long jobs will fail · ${failedJobs} open failures`
-          : `Redis unavailable — in-process follow-up fallback only (agent-runs inactive) · ${failedJobs} open failures`,
+          : `Redis unavailable — in-process follow-up fallback only (agent-runs + maintenance inactive) · ${failedJobs} open failures`,
     },
     {
       name: "Email Provider",

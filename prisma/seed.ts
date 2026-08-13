@@ -341,6 +341,7 @@ async function main() {
       });
       await prisma.knowledgeChunk.createMany({
         data: chunkText(doc.content).map((content) => ({
+          organisationId: org.id,
           documentId: existing.id,
           content,
         })),
@@ -354,7 +355,10 @@ async function main() {
           content: doc.content,
           status: KnowledgeDocStatus.ACTIVE,
           chunks: {
-            create: chunkText(doc.content).map((content) => ({ content })),
+            create: chunkText(doc.content).map((content) => ({
+              organisationId: org.id,
+              content,
+            })),
           },
         },
       });

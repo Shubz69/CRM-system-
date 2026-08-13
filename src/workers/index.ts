@@ -9,6 +9,7 @@
  * Queues:
  *   - follow-ups   (short sweeps)
  *   - agent-runs   (long jobs; concurrency limited; long lock duration)
+ *   - maintenance  (retention + embedding backfill)
  *
  * Production: REDIS_URL required. In-process fallback is local/dev only.
  */
@@ -18,6 +19,7 @@ import {
   AGENT_RUN_LOCK_DURATION_MS,
   QUEUE_AGENT_RUNS,
   QUEUE_FOLLOW_UPS,
+  QUEUE_MAINTENANCE,
   closeQueues,
 } from "@/jobs/queues";
 import {
@@ -27,9 +29,12 @@ import {
   pingRedis,
   redisRequired,
 } from "@/jobs/redis";
+import { enqueueAgentRetentionSweep } from "@/jobs/maintenance";
 import { processDueFollowUps, startInProcessFollowUpLoop } from "@/workers/followups";
 import { processAgentRunJob } from "@/workers/agent-runs-processor";
+import { processMaintenanceJob } from "@/workers/maintenance-processor";
 import { aggregateDailyInsights } from "@/services/insights-aggregation";
+import { pruneAgentArtifactsAllOrganisations } from "@/services/agent-retention";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { recordFailedJob } from "@/services/failed-jobs";
@@ -67,12 +72,16 @@ async function startRedisWorkers() {
     connection,
     concurrency: AGENT_RUN_CONCURRENCY,
     lockDuration: AGENT_RUN_LOCK_DURATION_MS,
-    // Stalled jobs are requeued rather than dropped on crash/restart.
     stalledInterval: 60_000,
     maxStalledCount: 2,
   });
 
-  workers.push(followUpWorker, agentRunsWorker);
+  const maintenanceWorker = new Worker(QUEUE_MAINTENANCE, processMaintenanceJob, {
+    connection,
+    concurrency: 1,
+  });
+
+  workers.push(followUpWorker, agentRunsWorker, maintenanceWorker);
 
   followUpWorker.on("ready", () => logger.info("BullMQ follow-ups worker ready"));
   agentRunsWorker.on("ready", () =>
@@ -80,6 +89,9 @@ async function startRedisWorkers() {
       concurrency: AGENT_RUN_CONCURRENCY,
       lockDurationMs: AGENT_RUN_LOCK_DURATION_MS,
     }),
+  );
+  maintenanceWorker.on("ready", () =>
+    logger.info("BullMQ maintenance worker ready (retention + embedding backfill)"),
   );
 
   for (const worker of workers) {
@@ -109,7 +121,6 @@ async function startRedisWorkers() {
     });
   }
 
-  // Keep a local interval as a safety net if the repeatable job was never seeded.
   intervals.push(
     setInterval(() => {
       processDueFollowUps().catch((error) =>
@@ -130,8 +141,20 @@ async function startRedisWorkers() {
     }, 60 * 60_000),
   );
 
+  intervals.push(
+    setInterval(() => {
+      pruneAgentArtifactsAllOrganisations().catch((error) =>
+        logger.error("Agent retention sweep failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        }),
+      );
+    }, 60 * 60_000),
+  );
+
+  await enqueueAgentRetentionSweep({ schedule: true });
   runDailyAggregationSweep().catch(() => undefined);
-  logger.info("Worker started with Redis (follow-ups + agent-runs)");
+  pruneAgentArtifactsAllOrganisations().catch(() => undefined);
+  logger.info("Worker started with Redis (follow-ups + agent-runs + maintenance)");
 }
 
 async function gracefulShutdown(signal: string) {
@@ -141,7 +164,6 @@ async function gracefulShutdown(signal: string) {
 
   for (const timer of intervals) clearInterval(timer);
 
-  // close() waits for active jobs to finish (up to lock duration) then stops.
   await Promise.all(
     workers.map(async (worker) => {
       try {
@@ -185,9 +207,14 @@ async function main() {
       runDailyAggregationSweep().catch(() => undefined);
     }, 60 * 60_000),
   );
+  intervals.push(
+    setInterval(() => {
+      pruneAgentArtifactsAllOrganisations().catch(() => undefined);
+    }, 60 * 60_000),
+  );
   logger.error(
-    "⚠️  Worker running WITHOUT Redis — agent-runs queue is inactive. " +
-      "Start Redis and restart this process before testing long jobs.",
+    "⚠️  Worker running WITHOUT Redis — agent-runs and maintenance queues are inactive. " +
+      "Start Redis and restart this process before testing long jobs or retention.",
   );
 }
 

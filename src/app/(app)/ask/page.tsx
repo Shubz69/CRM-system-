@@ -24,6 +24,8 @@ type Progress = {
   outputSoFar: unknown;
   finalOutput: unknown;
   userFacingError: string | null;
+  stepsDetailCleared?: boolean;
+  stepsDetailClearedMessage?: string | null;
   steps: Array<{
     position: number;
     userFacingLabel: string;
@@ -31,6 +33,7 @@ type Progress = {
     status: string;
     output: unknown;
     costCents: number;
+    detailRetention?: string;
   }>;
   nextActions: string[];
 };
@@ -235,8 +238,15 @@ export default function AskPage() {
         </p>
       )}
 
-      {/* Details collapse underneath */}
-      {progress && progress.steps.length > 0 && (
+      {/* Details collapse underneath — brief stays above when detail was pruned */}
+      {progress && progress.stepsDetailCleared && (
+        <p className="text-sm text-[var(--muted)]">
+          {progress.stepsDetailClearedMessage ||
+            "Detailed steps were cleared after 30 days — the brief is saved."}
+        </p>
+      )}
+
+      {progress && progress.steps.length > 0 && !progress.stepsDetailCleared && (
         <details className="rounded-lg border border-[var(--border)] px-4 py-3">
           <summary className="cursor-pointer text-sm font-medium">
             Steps ({progress.stepsCompleted}/{progress.stepsTotal || progress.steps.length}) ·{" "}
@@ -255,6 +265,17 @@ export default function AskPage() {
             ))}
           </ol>
         </details>
+      )}
+
+      {progress && progress.steps.length > 0 && progress.stepsDetailCleared && (
+        <div className="text-sm text-[var(--muted)]">
+          <p>
+            {progress.stepsCompleted} step
+            {progress.stepsCompleted === 1 ? "" : "s"} completed ·{" "}
+            {formatElapsed(progress.elapsedMs)}
+            {progress.costNote ? ` · ${progress.costNote}` : ""}
+          </p>
+        </div>
       )}
 
       {progress &&

@@ -1,12 +1,14 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
   // Direct (non-pooled) URL for migrate deploy. Fall back to DATABASE_URL locally.
-  directUrl = env("DIRECT_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
 }
 
 enum MemberRole {
@@ -170,6 +172,8 @@ model Organisation {
   agentSteps           AgentStep[]
   toolCalls            ToolCall[]
   agentLimits          OrganisationAgentLimits?
+  agentRetention       OrganisationAgentRetention?
+  knowledgeChunks      KnowledgeChunk[]
 }
 
 model User {
@@ -742,16 +746,25 @@ model KnowledgeVersion {
 }
 
 model KnowledgeChunk {
-  id         String   @id @default(cuid())
-  documentId String
-  content    String   @db.Text
-  tokens     Int?
-  metadata   Json     @default("{}")
-  createdAt  DateTime @default(now())
+  id             String                       @id @default(cuid())
+  /// Denormalised for org-scoped SQL retrieval (never join-only).
+  organisationId String
+  documentId     String
+  content        String                       @db.Text
+  tokens         Int?
+  metadata       Json                         @default("{}")
+  /// pgvector cosine embedding; null until embedded or when provider unset.
+  embedding      Unsupported("vector(1536)")?
+  embeddingModel String?
+  embeddedAt     DateTime?
+  createdAt      DateTime                     @default(now())
 
-  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  organisation Organisation     @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  document     KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@index([documentId])
+  @@index([organisationId])
+  @@index([organisationId, embeddedAt])
 }
 
 model AgentConfiguration {
@@ -1117,6 +1130,19 @@ enum AgentStepStatus {
   SKIPPED
 }
 
+/// How much AgentStep.input/output is retained after age thresholds.
+enum AgentDetailRetention {
+  FULL
+  COMPACT
+  SKELETON
+}
+
+/// AgentRun.partialResults retention (finalOutput is never pruned).
+enum PartialResultsRetention {
+  FULL
+  SUMMARY
+}
+
 /// Per-org hard limits for multi-agent runs.
 model OrganisationAgentLimits {
   id                   String   @id @default(cuid())
@@ -1131,33 +1157,52 @@ model OrganisationAgentLimits {
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 }
 
+/// Per-org agent artifact retention windows (days). Sensible defaults match product policy.
+model OrganisationAgentRetention {
+  id                     String   @id @default(cuid())
+  organisationId         String   @unique
+  /// ToolCall.args / result cleared after this many days (debug-only blobs).
+  toolCallPayloadDays    Int      @default(14)
+  /// AgentStep input/output kept full, then compact preview.
+  stepFullDetailDays     Int      @default(30)
+  /// After this age, steps are label/status/cost skeleton only.
+  stepSkeletonAfterDays  Int      @default(180)
+  /// AgentRun.partialResults full, then collapsed to a short summary.
+  partialResultsFullDays Int      @default(30)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+}
+
 model AgentRun {
-  id                   String         @id @default(cuid())
-  organisationId       String
+  id                      String                  @id @default(cuid())
+  organisationId          String
   /// Null when triggered by system/schedule (recurring runs later).
-  userId               String?
+  userId                  String?
   /// user | system | schedule
-  triggeredBy          String         @default("user")
-  request              String         @db.Text
-  plan                 Json?
-  plainEnglishPlan     String?        @db.Text
-  clarificationQuestion String?       @db.Text
-  clarificationOptions Json?
-  status               AgentRunStatus @default(PENDING)
-  startedAt            DateTime?
-  finishedAt           DateTime?
-  totalCostCents       Int            @default(0)
-  error                String?        @db.Text
-  userFacingError      String?        @db.Text
-  partialResults       Json?
-  /// First-class output artifact for later save/share/export.
-  finalOutput          Json?
-  maxSteps             Int            @default(8)
-  maxWallClockSeconds  Int            @default(600)
-  maxSpendCents        Int?
-  bullJobId            String?
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  triggeredBy             String                  @default("user")
+  request                 String                  @db.Text
+  plan                    Json?
+  plainEnglishPlan        String?                 @db.Text
+  clarificationQuestion   String?                 @db.Text
+  clarificationOptions    Json?
+  status                  AgentRunStatus          @default(PENDING)
+  startedAt               DateTime?
+  finishedAt              DateTime?
+  totalCostCents          Int                     @default(0)
+  error                   String?                 @db.Text
+  userFacingError         String?                 @db.Text
+  partialResults          Json?
+  partialResultsRetention PartialResultsRetention @default(FULL)
+  /// First-class output artifact for later save/share/export. Kept indefinitely.
+  finalOutput             Json?
+  maxSteps                Int                     @default(8)
+  maxWallClockSeconds     Int                     @default(600)
+  maxSpendCents           Int?
+  bullJobId               String?
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1165,11 +1210,12 @@ model AgentRun {
 
   @@index([organisationId, createdAt])
   @@index([organisationId, status])
+  @@index([organisationId, partialResultsRetention, createdAt])
   @@index([bullJobId])
 }
 
 model AgentStep {
-  id               String          @id @default(cuid())
+  id               String               @id @default(cuid())
   organisationId   String
   agentRunId       String
   position         Int
@@ -1181,12 +1227,13 @@ model AgentStep {
   model            String?
   tokensIn         Int?
   tokensOut        Int?
-  costCents        Int             @default(0)
+  costCents        Int                  @default(0)
   durationMs       Int?
-  status           AgentStepStatus @default(PENDING)
+  status           AgentStepStatus      @default(PENDING)
   userFacingStatus String?
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  detailRetention  AgentDetailRetention @default(FULL)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   agentRun     AgentRun     @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
@@ -1194,23 +1241,28 @@ model AgentStep {
 
   @@index([organisationId, agentRunId])
   @@index([organisationId, createdAt])
+  @@index([organisationId, detailRetention, createdAt])
   @@index([agentRunId, position])
 }
 
 model ToolCall {
-  id             String   @id @default(cuid())
-  organisationId String
-  agentStepId    String
-  toolName       String
-  args           Json     @default("{}")
-  result         Json?
-  durationMs     Int?
-  error          String?  @db.Text
-  createdAt      DateTime @default(now())
+  id               String    @id @default(cuid())
+  organisationId   String
+  agentStepId      String
+  toolName         String
+  args             Json      @default("{}")
+  result           Json?
+  durationMs       Int?
+  error            String?   @db.Text
+  /// Set when args/result payloads were cleared by retention.
+  payloadClearedAt DateTime?
+  createdAt        DateTime  @default(now())
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   agentStep    AgentStep    @relation(fields: [agentStepId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, agentStepId])
+  @@index([organisationId, payloadClearedAt, createdAt])
   @@index([agentStepId, createdAt])
 }
+

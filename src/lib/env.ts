@@ -30,6 +30,15 @@ const envSchema = z.object({
   ANTHROPIC_TEMPERATURE: z.string().optional(),
   /** OPTIONAL — not required for production. Kept only for the optional OpenAI adapter. */
   OPENAI_API_KEY: z.string().optional(),
+  /**
+   * Embedding provider for hybrid knowledge retrieval.
+   * none (default) → lexical-only with an explicit log (never silent).
+   * openai → OpenAI embeddings API (uses EMBEDDING_API_KEY or OPENAI_API_KEY).
+   * mock → deterministic vectors for local/demo only.
+   */
+  EMBEDDING_PROVIDER: z.enum(["none", "openai", "mock"]).default("none"),
+  EMBEDDING_API_KEY: z.string().optional(),
+  EMBEDDING_MODEL: z.string().optional(),
   MANYCHAT_API_BASE_URL: z.string().default("https://api.manychat.com"),
   MANYCHAT_API_TOKEN: z.string().optional(),
   MANYCHAT_WEBHOOK_SECRET: z.string().default("dev-manychat-webhook-secret"),

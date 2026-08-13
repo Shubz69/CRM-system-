@@ -12,6 +12,8 @@ No production database existed, so migration history was deleted and rebuilt:
 |-----------|---------|
 | `20260812170000_init` | Full schema from `schema.prisma` (`prisma migrate diff --from-empty`) |
 | `20260812170001_audit_scope_check_and_platform_org_triggers` | SQL-only: `AuditLog_scope_organisation_check` + platform-org delete triggers |
+| `20260813180000_agent_retention` | Per-org retention windows + AgentRun/Step/ToolCall retention markers |
+| `20260813180001_knowledge_pgvector` | `vector` extension, `KnowledgeChunk.embedding` + HNSW, denormalised `organisationId` |
 
 Intent preserved from prior branches: AuditLog `ORG`/`PLATFORM` scope, ledger `organisationId` NOT NULL (except AuditLog), `ON DELETE RESTRICT` on AuditLog / UsageRecord / AiExecution / WebhookEvent / FailedJob, `Organisation.isPlatform`, OrganisationAiBudget, AgentRun / AgentStep / ToolCall, Lead `(organisationId, stageId, updatedAt)` and AgentStep `(organisationId, createdAt)` indexes. Redundant `ContactIdentifier(organisationId)` and `OrganisationAiBudget(organisationId)` indexes dropped (covered by unique constraints).
 
@@ -42,4 +44,6 @@ npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamode
 
 SQL-only objects (CHECK constraint, triggers) are intentional and outside `schema.prisma`; they will not appear in that Prisma-level diff.
 
-Redis is required for production workers (follow-ups and agent runs).
+`20260813180001_knowledge_pgvector` requires the Postgres `vector` extension (`CREATE EXTENSION vector`). Managed Postgres often needs the extension enabled in the provider UI first.
+
+Redis is required for production workers (follow-ups, agent runs, and maintenance retention/backfill).
