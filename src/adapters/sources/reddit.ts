@@ -27,7 +27,7 @@ function requireCreds(): { clientId: string; clientSecret: string; userAgent: st
   return {
     clientId: env.REDDIT_CLIENT_ID,
     clientSecret: env.REDDIT_CLIENT_SECRET,
-    userAgent: env.REDDIT_USER_AGENT || "dm-intelligence-crm/0.1 (research agent)",
+    userAgent: env.REDDIT_USER_AGENT || "agent-desk/0.1 (research agent)",
   };
 }
 

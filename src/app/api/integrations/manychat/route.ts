@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
     const send = await adapter.sendMessage({
       organisationId: session.organisationId,
       contactExternalId: body.contactExternalId || "test_contact",
-      text: body.text || "Test outbound message from DM Intelligence",
+      text: body.text || "Test outbound message from Agent Desk",
     });
     await writeAuditLog({
       organisationId: session.organisationId,

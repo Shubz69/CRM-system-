@@ -1,6 +1,6 @@
 # ManyChat integration
 
-DM Intelligence uses ManyChat as the Instagram DM transport.
+Agent Desk uses ManyChat as the Instagram DM transport.
 
 ## Endpoints
 

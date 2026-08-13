@@ -1,6 +1,6 @@
 # Claude (Anthropic) — primary AI
 
-DM Intelligence uses **Anthropic Claude** as the primary and default AI provider.
+Agent Desk uses **Anthropic Claude** as the primary and default AI provider.
 
 OpenAI is **optional** and **not required**. The product builds and runs with `OPENAI_API_KEY` absent.
 

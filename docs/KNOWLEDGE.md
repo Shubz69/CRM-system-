@@ -1,6 +1,6 @@
 # Knowledge retrieval
 
-DM Intelligence retrieves approved business knowledge with **lexical token ranking** over `KnowledgeDocument` / `KnowledgeChunk` rows in Postgres (`src/services/knowledge.ts`).
+Agent Desk retrieves approved business knowledge with **lexical token ranking** over `KnowledgeDocument` / `KnowledgeChunk` rows in Postgres (`src/services/knowledge.ts`).
 
 ## Embeddings
 

@@ -1,4 +1,4 @@
-# Phase audit — DM Intelligence CRM
+# Phase audit — Agent Desk
 
 Evidence-based status after the remaining-gaps completion pass.
 

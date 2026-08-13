@@ -1,8 +1,8 @@
-# DM Intelligence CRM
+# Agent Desk
 
-Production-oriented CRM that connects Instagram conversations (via ManyChat), uses an AI agent to qualify leads, books calls, follows up automatically, and turns conversation data into sales and content insights.
+AI agent workspace for research, social listening, sales qualification, booking, imaging, and Instagram DM operations (via ManyChat).
 
-Temporary product name: **DM Intelligence CRM** (easy to rename later).
+Product name: **Agent Desk**.
 
 ## Stack
 

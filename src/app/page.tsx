@@ -34,7 +34,7 @@ export default async function HomePage() {
       <div className="relative mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 md:px-10">
         <header className="animate-rise flex items-center justify-between gap-4">
           <p className="font-[family-name:var(--font-fraunces)] text-2xl text-white md:text-3xl">
-            DM Intelligence
+            Agent Desk
           </p>
           <Link href="/login" className="btn btn-secondary bg-white/95 text-[var(--foreground)]">
             Sign in
@@ -54,11 +54,11 @@ export default async function HomePage() {
         <section className="grid flex-1 items-center gap-10 py-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-14">
           <div>
             <h1 className="animate-rise-delay font-[family-name:var(--font-fraunces)] text-5xl leading-[1.05] text-white md:text-6xl lg:text-7xl">
-              DM Intelligence
+              Agent Desk
             </h1>
             <p className="animate-rise-delay-2 mt-5 max-w-xl text-lg text-teal-50/85 md:text-xl">
-              Qualify Instagram conversations, book calls, and turn every DM into pipeline
-              intelligence.
+              Ask agents to research markets, listen for trends, qualify conversations, and book
+              calls — one desk for the work.
             </p>
             <div className="animate-rise-delay-2 mt-8 flex flex-wrap gap-3">
               <Link href="/login" className="btn btn-primary px-6 py-3 text-base">

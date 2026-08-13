@@ -137,7 +137,7 @@ export function AppShell({
         <div className="relative mx-auto flex min-h-screen max-w-lg flex-col justify-center px-4 py-10">
           <div className="mb-6 text-center">
             <p className="font-[family-name:var(--font-fraunces)] text-3xl text-[var(--sidebar)]">
-              DM Intelligence
+              Agent Desk
             </p>
             <p className="mt-2 text-sm text-[var(--muted)]">
               Security checkpoint — update your password to unlock the workspace.
@@ -164,7 +164,7 @@ export function AppShell({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <p className="font-[family-name:var(--font-fraunces)] text-xl text-white">
-                {collapsed ? "DM" : "DM Intelligence"}
+                {collapsed ? "AD" : "Agent Desk"}
               </p>
               {!collapsed && (
                 <p className="mt-1 truncate text-xs text-teal-100/60">{activeName}</p>

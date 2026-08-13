@@ -297,7 +297,7 @@ async function main() {
       title: "Business overview",
       category: "business",
       content:
-        "DM Intelligence CRM helps service businesses convert Instagram DMs into booked sales calls using AI-assisted qualification, follow-ups, and pipeline tracking.",
+        "Agent Desk helps service businesses research markets, listen for trends, convert Instagram DMs into booked sales calls, and run AI-assisted qualification, follow-ups, and pipeline tracking.",
     },
     {
       title: "Pricing guidance",

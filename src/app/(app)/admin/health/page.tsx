@@ -136,7 +136,7 @@ export default async function AdminHealthPage() {
     {
       name: "OpenAI (optional)",
       status: env.OPENAI_API_KEY ? "Operational" : "Not Configured",
-      summary: "Optional adapter only — not required for DM Intelligence",
+      summary: "Optional adapter only — not required for Agent Desk",
     },
     {
       name: "ManyChat",

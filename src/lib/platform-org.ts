@@ -17,7 +17,7 @@ export async function getPlatformOrganisationId(): Promise<string> {
     if (!existing.isPlatform) {
       await prisma.organisation.update({
         where: { id: existing.id },
-        data: { isPlatform: true },
+        data: { isPlatform: true, name: "Agent Desk Platform" },
       });
     }
     return existing.id;
@@ -25,9 +25,9 @@ export async function getPlatformOrganisationId(): Promise<string> {
 
   const created = await prisma.organisation.upsert({
     where: { slug: PLATFORM_ORG_SLUG },
-    update: { isPlatform: true },
+    update: { isPlatform: true, name: "Agent Desk Platform" },
     create: {
-      name: "DM Intelligence Platform",
+      name: "Agent Desk Platform",
       slug: PLATFORM_ORG_SLUG,
       timezone: "UTC",
       demoData: false,

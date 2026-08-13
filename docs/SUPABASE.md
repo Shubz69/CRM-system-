@@ -1,6 +1,6 @@
 # Supabase (recommended Postgres host)
 
-DM Intelligence uses **Prisma + PostgreSQL**. For Vercel and long-term production, use **[Supabase](https://supabase.com)** as the database.
+Agent Desk uses **Prisma + PostgreSQL**. For Vercel and long-term production, use **[Supabase](https://supabase.com)** as the database.
 
 Auth, AI, and ManyChat stay in this Next.js app. Supabase is the managed Postgres (and later you can add Storage / Realtime if needed).
 

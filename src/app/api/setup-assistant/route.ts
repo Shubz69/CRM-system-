@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       const provider = getAiProvider("anthropic");
       const model = resolveModelForTier("default");
       const started = Date.now();
-      const systemPrompt = `You are Claude, the DM Intelligence Setup Assistant.
+      const systemPrompt = `You are Claude, the Agent Desk Setup Assistant.
 Given a business description, propose CRM configuration as JSON with keys:
 knowledgeStructure (array of {title,category,content}),
 qualificationFields (array of {key,label,description}),

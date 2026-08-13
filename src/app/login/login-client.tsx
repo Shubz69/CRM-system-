@@ -41,14 +41,15 @@ export default function LoginClient() {
       <div className="relative grid w-full max-w-5xl gap-8 lg:grid-cols-2">
         <div className="animate-rise hidden text-white lg:flex lg:flex-col lg:justify-center">
           <p className="font-[family-name:var(--font-fraunces)] text-4xl leading-tight">
-            DM Intelligence
+            Agent Desk
           </p>
           <p className="mt-4 max-w-md text-lg text-teal-50/80">
-            Sign in to qualify Instagram DMs, book calls, and run your pipeline from one workspace.
+            Sign in to research markets, listen for trends, qualify conversations, and run your
+            pipeline from one desk.
           </p>
         </div>
         <form onSubmit={onSubmit} className="animate-rise-delay surface p-8 shadow-xl shadow-black/10">
-          <p className="text-sm font-medium text-[var(--accent)] lg:hidden">DM Intelligence</p>
+          <p className="text-sm font-medium text-[var(--accent)] lg:hidden">Agent Desk</p>
           <h1 className="h-display mt-1 text-3xl">Sign in</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
             Demo (local/DEMO_MODE): demo@dminelligence.local / demo1234

@@ -15,8 +15,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "DM Intelligence CRM",
-  description: "Instagram DM CRM with AI qualification, booking, and insights",
+  title: "Agent Desk",
+  description:
+    "AI agent workspace for research, social listening, sales qualification, booking, and imaging",
 };
 
 export default function RootLayout({

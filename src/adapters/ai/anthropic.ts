@@ -11,7 +11,7 @@ export type AnthropicUsage = {
 
 /**
  * Anthropic Claude provider via Messages API (no SDK required).
- * Primary AI provider for DM Intelligence.
+ * Primary AI provider for Agent Desk.
  */
 export class AnthropicProvider implements AiProvider {
   readonly name = "anthropic";

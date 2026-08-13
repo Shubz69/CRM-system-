@@ -79,7 +79,7 @@ export async function seedSuperAdmin(input?: {
       where: { slug: "dm-intelligence-platform" },
       update: { isPlatform: true },
       create: {
-        name: "DM Intelligence Platform",
+        name: "Agent Desk Platform",
         slug: "dm-intelligence-platform",
         timezone: "UTC",
         demoData: false,
@@ -127,7 +127,7 @@ export async function seedSuperAdmin(input?: {
       where: { slug: "dm-intelligence-platform" },
       update: {},
       create: {
-        name: "DM Intelligence Platform",
+        name: "Agent Desk Platform",
         slug: "dm-intelligence-platform",
         timezone: "UTC",
         demoData: false,

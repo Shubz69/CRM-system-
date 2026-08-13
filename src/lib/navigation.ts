@@ -136,5 +136,5 @@ export function pageTitleFromPath(pathname: string): string {
     .sort((a, b) => b.href.length - a.href.length)[0];
   if (nested) return nested.label;
   if (pathname.startsWith("/account/change-password")) return "Change password";
-  return "DM Intelligence";
+  return "Agent Desk";
 }
