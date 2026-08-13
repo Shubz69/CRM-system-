@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
   dedupeSourceResults,
+  formatUnavailableSourceNotes,
   listConfiguredSourcePlatforms,
   rankSourceResults,
   searchConfiguredSources,
@@ -138,7 +139,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     for (const query of queries) {
       const started = Date.now();
       try {
-        const { results, errors } = await searchConfiguredSources({
+        const { results, errors, billableCents } = await searchConfiguredSources({
           query,
           platforms,
           concurrency,
@@ -150,6 +151,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           },
         });
         collected.push(...results);
+        costCents += billableCents;
         for (const err of errors) {
           adapterErrors.push({ platform: err.platform, message: err.message });
         }
@@ -240,12 +242,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       });
     }
 
-    const summary =
+    const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
+    const baseSummary =
       findings.length > 0
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources.`
         : ranked.length > 0
           ? `Gathered ${ranked.length} sources but could not extract grounded findings yet.`
           : "No sources were returned from the configured adapters.";
+    const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
 
     const output: ResearchOutput = {
       researchJobId: job.id,

@@ -54,6 +54,23 @@ const envSchema = z.object({
   RESEARCH_CACHE_TTL_SECONDS: z.string().optional(),
   RESEARCH_ADAPTER_CONCURRENCY: z.string().optional(),
   /**
+   * Apify API token for Instagram / LinkedIn / TikTok licensed data.
+   * Unset → those adapters throw SourceNotConfiguredError (never fake/empty).
+   */
+  APIFY_TOKEN: z.string().optional(),
+  /** Global per-actor timeout ms (default 75s). Cap enforced in adapter (max 180s). */
+  APIFY_TIMEOUT_MS: z.string().optional(),
+  APIFY_INSTAGRAM_TIMEOUT_MS: z.string().optional(),
+  APIFY_LINKEDIN_TIMEOUT_MS: z.string().optional(),
+  APIFY_TIKTOK_TIMEOUT_MS: z.string().optional(),
+  /** Optional actor id overrides (owner/name). Defaults are documented in apify-platforms.ts. */
+  APIFY_INSTAGRAM_ACTOR_ID: z.string().optional(),
+  APIFY_LINKEDIN_ACTOR_ID: z.string().optional(),
+  APIFY_TIKTOK_ACTOR_ID: z.string().optional(),
+  /** Fallback USD / 1k results when Apify omits usageTotalUsd. */
+  APIFY_USD_PER_1K_RESULTS: z.string().optional(),
+  APIFY_RATE_LIMIT_PER_MIN: z.string().optional(),
+  /**
    * Image generation provider. none → explicit error (never a placeholder image).
    * Claude/Anthropic is never a valid generator (rejected at getImageProvider).
    */

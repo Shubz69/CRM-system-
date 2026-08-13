@@ -35,6 +35,11 @@ export type SourceSearchOptions = {
   recent?: boolean;
   /** Optional subreddit / channel / site hint — never required. */
   nicheHint?: string;
+  /**
+   * Internal sink for billable adapter costs (cents). Used by Apify adapters so
+   * searchConfiguredSources can return spend without changing SourceAdapter.
+   */
+  _billableCents?: { value: number };
 };
 
 export type SourceAdapter = {
@@ -69,5 +74,20 @@ export class SourceRateLimitError extends Error {
   ) {
     super(message || `${platform} rate limit exceeded`);
     this.name = "SourceRateLimitError";
+  }
+}
+
+/**
+ * Platform temporarily unreachable (provider timeout / actor failure).
+ * User-facing message must be plain English — never actor IDs or stack traces.
+ */
+export class SourceUnavailableError extends Error {
+  readonly code = "SOURCE_UNAVAILABLE";
+  constructor(
+    readonly platform: SourcePlatform,
+    message?: string,
+  ) {
+    super(message || `${platform} results were unavailable for this search.`);
+    this.name = "SourceUnavailableError";
   }
 }

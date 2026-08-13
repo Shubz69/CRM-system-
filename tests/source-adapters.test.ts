@@ -25,13 +25,17 @@ describe("source adapters — stubs and config", () => {
   });
 
   it("Instagram / LinkedIn / TikTok throw explicit not-configured errors (no fake data)", async () => {
+    delete process.env.APIFY_TOKEN;
+    vi.stubEnv("APIFY_TOKEN", "");
+    resetEnvCache();
+
     for (const platform of ["instagram", "linkedin", "tiktok"] as const) {
       const adapter = getSourceAdapter(platform);
       await expect(
         adapter.search("anything", { organisationId: "org_1" }),
       ).rejects.toBeInstanceOf(SourceNotConfiguredError);
       await expect(adapter.search("anything", { organisationId: "org_1" })).rejects.toThrow(
-        /not configured|licensed provider/i,
+        /not configured|APIFY_TOKEN/i,
       );
     }
   });
@@ -42,11 +46,13 @@ describe("source adapters — stubs and config", () => {
     vi.stubEnv("REDDIT_CLIENT_SECRET", "");
     vi.stubEnv("TAVILY_API_KEY", "");
     vi.stubEnv("EXA_API_KEY", "");
+    vi.stubEnv("APIFY_TOKEN", "");
     delete process.env.YOUTUBE_API_KEY;
     delete process.env.REDDIT_CLIENT_ID;
     delete process.env.REDDIT_CLIENT_SECRET;
     delete process.env.TAVILY_API_KEY;
     delete process.env.EXA_API_KEY;
+    delete process.env.APIFY_TOKEN;
     resetEnvCache();
     vi.resetModules();
 

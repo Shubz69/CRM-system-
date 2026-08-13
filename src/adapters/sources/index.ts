@@ -8,6 +8,7 @@ import {
 } from "@/adapters/sources/stubs";
 import {
   SourceNotConfiguredError,
+  SourceUnavailableError,
   type SourceAdapter,
   type SourcePlatform,
   type SourceResult,
@@ -26,7 +27,49 @@ export type {
 export {
   SourceNotConfiguredError,
   SourceRateLimitError,
+  SourceUnavailableError,
 } from "@/adapters/sources/types";
+
+const PLATFORM_DISPLAY: Record<SourcePlatform, string> = {
+  youtube: "YouTube",
+  reddit: "Reddit",
+  web: "Web search",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+};
+
+function userFacingSourceError(platform: SourcePlatform, error: unknown): {
+  message: string;
+  code: string;
+} {
+  if (error instanceof SourceNotConfiguredError) {
+    return {
+      code: error.code,
+      message: `${PLATFORM_DISPLAY[platform]} is not configured for this workspace.`,
+    };
+  }
+  if (error instanceof SourceUnavailableError) {
+    return {
+      code: error.code,
+      message: error.message || `${PLATFORM_DISPLAY[platform]} results were unavailable for this search.`,
+    };
+  }
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String((error as { code: unknown }).code);
+    if (code === "SOURCE_RATE_LIMITED") {
+      return {
+        code,
+        message: `${PLATFORM_DISPLAY[platform]} is temporarily rate limited. Try again shortly.`,
+      };
+    }
+  }
+  // Never leak actor IDs / provider internals to the brief.
+  return {
+    code: "SOURCE_UNAVAILABLE",
+    message: `${PLATFORM_DISPLAY[platform]} results were unavailable for this search.`,
+  };
+}
 
 const ALL_ADAPTERS: SourceAdapter[] = [
   youtubeSourceAdapter,
@@ -49,7 +92,7 @@ export function listSourceAdapters(): SourceAdapter[] {
   return [...ALL_ADAPTERS];
 }
 
-/** Platforms that have credentials present (stubs never qualify). */
+/** Platforms that have credentials present. Apify-backed sources need APIFY_TOKEN. */
 export function listConfiguredSourcePlatforms(): SourcePlatform[] {
   const env = getEnv();
   const configured: SourcePlatform[] = [];
@@ -58,6 +101,9 @@ export function listConfiguredSourcePlatforms(): SourcePlatform[] {
   const webProvider = (env.WEB_SEARCH_PROVIDER || "tavily").toLowerCase();
   if (webProvider === "tavily" && env.TAVILY_API_KEY) configured.push("web");
   if (webProvider === "exa" && env.EXA_API_KEY) configured.push("web");
+  if (env.APIFY_TOKEN) {
+    configured.push("instagram", "linkedin", "tiktok");
+  }
   return configured;
 }
 
@@ -94,6 +140,8 @@ export async function searchConfiguredSources(input: {
 }): Promise<{
   results: SourceResult[];
   errors: Array<{ platform: SourcePlatform; message: string; code: string }>;
+  /** Sum of billable adapter costs for this fan-out (Apify, etc.). */
+  billableCents: number;
 }> {
   const platforms = input.platforms?.length
     ? input.platforms
@@ -103,25 +151,27 @@ export async function searchConfiguredSources(input: {
   if (!platforms.length) {
     throw new SourceNotConfiguredError(
       "web",
-      "No research source adapters are configured. Set YOUTUBE_API_KEY, REDDIT_CLIENT_ID/SECRET, and/or TAVILY_API_KEY (or EXA_API_KEY).",
+      "No research source adapters are configured. Set YOUTUBE_API_KEY, REDDIT_CLIENT_ID/SECRET, TAVILY_API_KEY (or EXA_API_KEY), and/or APIFY_TOKEN.",
     );
   }
+
+  const billable = input.options._billableCents ?? { value: 0 };
+  const options: SourceSearchOptions = { ...input.options, _billableCents: billable };
 
   const settled = await mapPool(platforms, concurrency, async (platform) => {
     const adapter = getSourceAdapter(platform);
     try {
-      const results = await adapter.search(input.query, input.options);
+      const results = await adapter.search(input.query, options);
       return { platform, results, error: null as null | { message: string; code: string } };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
-      const code =
-        error instanceof SourceNotConfiguredError
-          ? error.code
-          : error && typeof error === "object" && "code" in error
-            ? String((error as { code: unknown }).code)
-            : "SOURCE_ERROR";
-      logger.warn("Source adapter search failed", { platform, message, code });
-      return { platform, results: [] as SourceResult[], error: { message, code } };
+      const facing = userFacingSourceError(platform, error);
+      const rawMessage = error instanceof Error ? error.message : "unknown";
+      logger.warn("Source adapter search failed", {
+        platform,
+        message: rawMessage,
+        code: facing.code,
+      });
+      return { platform, results: [] as SourceResult[], error: facing };
     }
   });
 
@@ -130,7 +180,29 @@ export async function searchConfiguredSources(input: {
     errors: settled
       .filter((s) => s.error)
       .map((s) => ({ platform: s.platform, message: s.error!.message, code: s.error!.code })),
+    billableCents: billable.value,
   };
+}
+
+/** Deduped plain-English notes for briefs when a platform was skipped. */
+export function formatUnavailableSourceNotes(
+  errors: Array<{ platform: string; message: string; code?: string }>,
+): string[] {
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  for (const err of errors) {
+    if (err.code === "SOURCE_NOT_CONFIGURED") continue;
+    const platform = err.platform as SourcePlatform;
+    const label = PLATFORM_DISPLAY[platform] || err.platform;
+    const note =
+      err.message && !/apify|actor|stack|token/i.test(err.message)
+        ? err.message
+        : `${label} results were unavailable for this search.`;
+    if (seen.has(note)) continue;
+    seen.add(note);
+    notes.push(note);
+  }
+  return notes;
 }
 
 export function dedupeSourceResults(results: SourceResult[]): SourceResult[] {

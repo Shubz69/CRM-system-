@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
   dedupeSourceResults,
+  formatUnavailableSourceNotes,
   listConfiguredSourcePlatforms,
   mapPool,
   rankSourceResults,
@@ -115,7 +116,7 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
 
     const platforms = listConfiguredSourcePlatforms();
     const started = Date.now();
-    const { results, errors } = await searchConfiguredSources({
+    const { results, errors, billableCents } = await searchConfiguredSources({
       query: parsed.topic,
       platforms,
       concurrency: Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3),
@@ -126,6 +127,7 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
         nicheHint: parsed.nicheHint,
       },
     });
+    costCents += billableCents;
 
     await recordResearchToolCall({
       organisationId: ctx.organisationId,
@@ -136,6 +138,7 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
         count: results.length,
         urls: results.map((r) => r.url).slice(0, 40),
         errors: errors.map((e) => ({ platform: e.platform, code: e.code })),
+        billableCents,
       },
       durationMs: Date.now() - started,
     });
@@ -237,13 +240,15 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
     await persistSignals("question", questionList);
     await persistSignals("complaint", complaintList);
 
-    const summary =
+    const unavailableNotes = formatUnavailableSourceNotes(errors);
+    const baseSummary =
       ranked.length === 0
         ? "No recent high-engagement posts were returned from configured sources."
         : `Reviewed ${ranked.length} posts. Top themes: ${themeList
             .slice(0, 3)
             .map((t) => t.label)
             .join(", ") || "none yet"}.`;
+    const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
 
     const output: SocialListeningOutput = {
       researchJobId: job.id,
