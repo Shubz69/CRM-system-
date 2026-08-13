@@ -12,6 +12,12 @@ export type AgentRunProgress = {
   plainEnglishPlan: string | null;
   clarificationQuestion: string | null;
   clarificationOptions: string[] | null;
+  /** Imaging: derived prompt awaiting edit/confirm. */
+  pendingPrompt: string | null;
+  pendingCostEstimateCents: number | null;
+  referenceAssetId: string | null;
+  /** Plain cost estimate before generation confirm. */
+  pendingCostNote: string | null;
   currentStep: {
     position: number;
     userFacingLabel: string;
@@ -60,6 +66,8 @@ function nextActionsFor(status: AgentRun["status"]): string[] {
       return ["Try again", "Rephrase your request"];
     case "AWAITING_CLARIFICATION":
       return ["Pick one of the options above"];
+    case "AWAITING_PROMPT_CONFIRM":
+      return ["Edit the prompt if needed, then confirm to generate"];
     case "RUNNING":
     case "PLANNING":
     case "PENDING":
@@ -78,6 +86,13 @@ function costNote(totalCostCents: number): string | null {
   return `About $${dollars} used for this run.`;
 }
 
+function pendingCostNote(cents: number | null | undefined): string | null {
+  if (cents == null) return null;
+  if (cents <= 0) return "No generation charge estimated.";
+  if (cents < 100) return `Estimated generation cost: about ${cents}¢.`;
+  return `Estimated generation cost: about $${(cents / 100).toFixed(2)}.`;
+}
+
 /**
  * Create an AgentRun and enqueue execution on agent-runs. Returns immediately.
  */
@@ -86,11 +101,25 @@ export async function createAndEnqueueAgentRun(input: {
   userId?: string | null;
   request: string;
   triggeredBy?: "user" | "system" | "schedule";
+  referenceAssetId?: string | null;
 }): Promise<{ runId: string; jobId: string }> {
   ensureAgentsRegistered();
   const request = input.request.trim();
   if (!request) {
     throw new Error("Request cannot be empty");
+  }
+
+  if (input.referenceAssetId) {
+    const asset = await prisma.asset.findFirst({
+      where: {
+        id: input.referenceAssetId,
+        organisationId: input.organisationId,
+      },
+      select: { id: true },
+    });
+    if (!asset) {
+      throw new Error("Reference image not found for this organisation");
+    }
   }
 
   const limits = await prisma.organisationAgentLimits.findUnique({
@@ -107,6 +136,7 @@ export async function createAndEnqueueAgentRun(input: {
       maxSteps: limits?.maxSteps ?? 8,
       maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
       maxSpendCents: limits?.maxSpendCentsPerRun ?? null,
+      referenceAssetId: input.referenceAssetId ?? null,
     },
   });
 
@@ -199,6 +229,89 @@ export async function clarifyAndEnqueueAgentRun(input: {
 }
 
 /**
+ * Confirm (or edit) the derived imaging prompt, then enqueue generation only.
+ */
+export async function confirmImagingPromptAndEnqueue(input: {
+  organisationId: string;
+  runId: string;
+  confirmedPrompt: string;
+}): Promise<{ runId: string; jobId: string }> {
+  ensureAgentsRegistered();
+  const prompt = input.confirmedPrompt.trim().slice(0, 4000);
+  if (prompt.length < 8) {
+    throw new Error("Prompt is too short — add a bit more detail before generating.");
+  }
+
+  const run = await prisma.agentRun.findFirst({
+    where: {
+      id: input.runId,
+      organisationId: input.organisationId,
+      status: "AWAITING_PROMPT_CONFIRM",
+    },
+  });
+  if (!run) {
+    throw new Error("Run not awaiting prompt confirmation");
+  }
+
+  const referenceAssetId = run.referenceAssetId;
+  if (!referenceAssetId) {
+    throw new Error("This run is missing a reference image");
+  }
+
+  const estimate = run.pendingCostEstimateCents ?? 0;
+  const plan = {
+    steps: [
+      {
+        agentName: "imaging_generate",
+        input: {
+          prompt,
+          referenceAssetId,
+          request: run.request,
+        },
+      },
+    ],
+    plainEnglishPlan: `I'll generate the image from your confirmed prompt${
+      estimate > 0
+        ? ` (about ${estimate < 100 ? `${estimate}¢` : `$${(estimate / 100).toFixed(2)}`} estimated)`
+        : ""
+    }.`,
+  };
+
+  await prisma.agentRun.updateMany({
+    where: { id: run.id, organisationId: input.organisationId },
+    data: {
+      pendingPrompt: prompt,
+      plan: plan as unknown as Prisma.InputJsonValue,
+      plainEnglishPlan: plan.plainEnglishPlan,
+      status: "PENDING",
+      error: null,
+      userFacingError: null,
+      finishedAt: null,
+      finalOutput: Prisma.DbNull,
+    },
+  });
+
+  const { jobId } = await enqueueAgentRunJob({
+    name: "agent-framework-run",
+    organisationId: input.organisationId,
+    payload: { agentRunId: run.id },
+  });
+
+  await prisma.agentRun.updateMany({
+    where: { id: run.id, organisationId: input.organisationId },
+    data: { bullJobId: jobId },
+  });
+
+  logger.info("Imaging prompt confirmed and generation enqueued", {
+    runId: run.id,
+    organisationId: input.organisationId,
+    jobId,
+  });
+
+  return { runId: run.id, jobId };
+}
+
+/**
  * Progress snapshot for UI polling. Always org-scoped.
  */
 export async function getAgentRunProgress(input: {
@@ -248,6 +361,10 @@ export async function getAgentRunProgress(input: {
     plainEnglishPlan: run.plainEnglishPlan,
     clarificationQuestion: run.clarificationQuestion,
     clarificationOptions: parseOptions(run.clarificationOptions),
+    pendingPrompt: run.pendingPrompt,
+    pendingCostEstimateCents: run.pendingCostEstimateCents,
+    referenceAssetId: run.referenceAssetId,
+    pendingCostNote: pendingCostNote(run.pendingCostEstimateCents),
     currentStep: current
       ? {
           position: current.position,

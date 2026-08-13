@@ -2,14 +2,14 @@ import type { Agent, AnyAgent } from "@/agents/types";
 
 const agents = new Map<string, AnyAgent>();
 
-export function registerAgent<TIn, TOut>(agent: Agent<TIn, TOut>): void {
+export function registerAgent(agent: AnyAgent): void {
   if (agents.has(agent.name)) {
     throw new Error(`Agent already registered: ${agent.name}`);
   }
   if (typeof agent.userFacingLabel !== "function") {
     throw new Error(`Agent ${agent.name} missing userFacingLabel`);
   }
-  agents.set(agent.name, agent as AnyAgent);
+  agents.set(agent.name, agent);
 }
 
 export function getAgent(name: string): AnyAgent {

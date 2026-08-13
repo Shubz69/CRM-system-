@@ -26,13 +26,15 @@ describe("agent registry", () => {
       "analyst",
       "critic",
       "echo",
+      "imaging_analyze",
+      "imaging_generate",
       "research",
       "social_listening",
       "summarise",
     ]);
     expect(getAgent("research").name).toBe("research");
     ensureAgentsRegistered();
-    expect(listAgents()).toHaveLength(6);
+    expect(listAgents()).toHaveLength(8);
   });
 
   it("rejects duplicate registration", () => {
@@ -53,6 +55,14 @@ describe("agent registry", () => {
       social_listening: { topic: "dental practice software reviews" },
       analyst: { researchJobId: "job_1", topic: "product model X200" },
       critic: { researchJobId: "job_1" },
+      imaging_analyze: {
+        request: "Make something warmer like this",
+        referenceAssetId: "asset_1",
+      },
+      imaging_generate: {
+        prompt: "A calm workspace with soft morning light",
+        referenceAssetId: "asset_1",
+      },
     };
 
     for (const agent of listAgents()) {

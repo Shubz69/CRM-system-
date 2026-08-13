@@ -30,4 +30,6 @@ export type OrgAgentContext = {
   organisationName?: string;
   /** Remaining monthly allowance in cents, when known — for plain cost copy later. */
   remainingAllowanceCents?: number | null;
+  /** Uploaded reference Asset id for imaging runs. */
+  referenceAssetId?: string | null;
 };

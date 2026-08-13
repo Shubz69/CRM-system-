@@ -179,6 +179,7 @@ model Organisation {
   researchFindings     ResearchFinding[]
   socialPosts          SocialPost[]
   trendSignals         TrendSignal[]
+  assets               Asset[]
 }
 
 model User {
@@ -207,6 +208,7 @@ model User {
   auditLogs             AuditLog[]
   notifications         Notification[]
   agentRuns             AgentRun[]
+  assetsCreated         Asset[]
 }
 
 model Account {
@@ -1120,6 +1122,8 @@ enum AgentRunStatus {
   PENDING
   PLANNING
   AWAITING_CLARIFICATION
+  /// Imaging: derived prompt shown for edit/confirm before generation spend.
+  AWAITING_PROMPT_CONFIRM
   RUNNING
   COMPLETED
   PARTIAL
@@ -1202,6 +1206,11 @@ model AgentRun {
   partialResultsRetention PartialResultsRetention @default(FULL)
   /// First-class output artifact for later save/share/export. Kept indefinitely.
   finalOutput             Json?
+  /// Imaging: proposed generation prompt awaiting user edit/confirm.
+  pendingPrompt           String?                 @db.Text
+  pendingBrief            Json?
+  pendingCostEstimateCents Int?
+  referenceAssetId        String?
   maxSteps                Int                     @default(8)
   maxWallClockSeconds     Int                     @default(600)
   maxSpendCents           Int?
@@ -1209,14 +1218,16 @@ model AgentRun {
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
-  steps        AgentStep[]
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  referenceAsset Asset?       @relation("AgentRunReferenceAsset", fields: [referenceAssetId], references: [id], onDelete: SetNull)
+  steps          AgentStep[]
 
   @@index([organisationId, createdAt])
   @@index([organisationId, status])
   @@index([organisationId, partialResultsRetention, createdAt])
   @@index([bullJobId])
+  @@index([referenceAssetId])
 }
 
 model AgentStep {
@@ -1412,5 +1423,39 @@ model TrendSignal {
 
   @@index([organisationId, researchJobId])
   @@index([organisationId, signalType, frequency])
+}
+
+
+/// Org-scoped media asset (reference uploads + generated images). Bytes live in object storage.
+model Asset {
+  id                 String   @id @default(cuid())
+  organisationId     String
+  /// Public or signed-access URL (never store file bytes in Postgres).
+  url                String
+  storageKey         String
+  prompt             String?  @db.Text
+  derivedFromAssetId String?
+  provider           String?
+  model              String?
+  costCents          Int      @default(0)
+  createdByUserId    String?
+  width              Int?
+  height             Int?
+  mimeType           String
+  /// reference | generated
+  kind               String   @default("reference")
+  createdAt          DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  derivedFrom  Asset?       @relation("AssetDerivations", fields: [derivedFromAssetId], references: [id], onDelete: SetNull)
+  derivatives  Asset[]      @relation("AssetDerivations")
+  agentRunsAsReference AgentRun[] @relation("AgentRunReferenceAsset")
+
+  @@unique([organisationId, storageKey])
+  @@index([organisationId, createdAt])
+  @@index([organisationId, kind, createdAt])
+  @@index([derivedFromAssetId])
+  @@index([createdByUserId])
 }
 

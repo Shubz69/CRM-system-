@@ -41,12 +41,14 @@ async function finishRun(input: {
   partialResults?: unknown;
   error?: string | null;
   userFacingError?: string | null;
+  /** When true, leave finishedAt null (user still needs to act). */
+  keepOpen?: boolean;
 }): Promise<ExecuteAgentRunResult> {
   const updated = await prisma.agentRun.updateMany({
     where: { id: input.runId, organisationId: input.organisationId },
     data: {
       status: input.status,
-      finishedAt: new Date(),
+      finishedAt: input.keepOpen ? null : new Date(),
       totalCostCents: input.totalCostCents,
       finalOutput: (input.finalOutput ?? undefined) as Prisma.InputJsonValue | undefined,
       partialResults: (input.partialResults ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -83,7 +85,7 @@ export async function executeAgentRun(input: {
     throw new Error("Agent run not found for organisation");
   }
 
-  if (run.status === "AWAITING_CLARIFICATION") {
+  if (run.status === "AWAITING_CLARIFICATION" || run.status === "AWAITING_PROMPT_CONFIRM") {
     return {
       runId: run.id,
       status: run.status,
@@ -131,6 +133,7 @@ export async function executeAgentRun(input: {
     const planned = await planAgentRun(run.request, {
       organisationId: input.organisationId,
       organisationName: org?.name,
+      referenceAssetId: run.referenceAssetId,
     });
 
     if (planned.kind === "clarification") {
@@ -177,7 +180,7 @@ export async function executeAgentRun(input: {
   const stepsToRun = plan.steps.slice(0, maxSteps);
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
-  let totalCostCents = 0;
+  let totalCostCents = run.totalCostCents || 0;
   let previousOutput: unknown = null;
 
   for (let i = 0; i < stepsToRun.length; i++) {
@@ -252,6 +255,12 @@ export async function executeAgentRun(input: {
       }
       if (typeof rawInput.topic !== "string" && typeof prev.topic === "string") {
         rawInput.topic = prev.topic;
+      }
+      if (typeof rawInput.referenceAssetId !== "string" && typeof prev.referenceAssetId === "string") {
+        rawInput.referenceAssetId = prev.referenceAssetId;
+      }
+      if (typeof rawInput.prompt !== "string" && typeof prev.proposedPrompt === "string") {
+        rawInput.prompt = prev.proposedPrompt;
       }
     }
 
@@ -375,9 +384,57 @@ export async function executeAgentRun(input: {
         userFacingLabel: label.trim(),
         output: result.output,
       });
+
+      if (
+        result.output &&
+        typeof result.output === "object" &&
+        (result.output as { awaitPromptConfirm?: unknown }).awaitPromptConfirm === true
+      ) {
+        const out = result.output as {
+          proposedPrompt?: string;
+          estimatedCostCents?: number;
+          summary?: string;
+        };
+        if (!out.proposedPrompt?.trim()) {
+          return finishRun({
+            organisationId: input.organisationId,
+            runId: run.id,
+            status: "FAILED",
+            totalCostCents,
+            partialResults: { steps: stepOutputs },
+            finalOutput: result.output,
+            error: "IMAGE_SAFETY_OR_EMPTY_PROMPT",
+            userFacingError:
+              out.summary ||
+              "I couldn't safely turn that reference into a generation prompt. Try a different image or description.",
+          });
+        }
+        return finishRun({
+          organisationId: input.organisationId,
+          runId: run.id,
+          status: "AWAITING_PROMPT_CONFIRM",
+          totalCostCents,
+          partialResults: { steps: stepOutputs },
+          finalOutput: result.output,
+          keepOpen: true,
+        });
+      }
     } catch (error) {
       const durationMs = Date.now() - stepStarted;
       const message = error instanceof Error ? error.message : "Step failed";
+      const userFacing =
+        error &&
+        typeof error === "object" &&
+        "userFacingMessage" in error &&
+        typeof (error as { userFacingMessage: unknown }).userFacingMessage === "string"
+          ? `${(error as { userFacingMessage: string }).userFacingMessage}${
+              "alternativeSuggestion" in error &&
+              typeof (error as { alternativeSuggestion: unknown }).alternativeSuggestion ===
+                "string"
+                ? ` ${(error as { alternativeSuggestion: string }).alternativeSuggestion}`
+                : ""
+            }`
+          : null;
       logger.warn("Agent step failed", {
         runId: run.id,
         organisationId: input.organisationId,
@@ -430,9 +487,11 @@ export async function executeAgentRun(input: {
         partialResults: stepOutputs.length ? { steps: stepOutputs } : null,
         finalOutput: previousOutput,
         error: message,
-        userFacingError: stepOutputs.length
-          ? `I completed ${stepOutputs.length} of ${stepsToRun.length} steps, then ran into a problem and stopped. Here's what I finished before that.`
-          : "I couldn't finish that request. Nothing useful was produced — try again in a moment, or rephrase what you need.",
+        userFacingError:
+          userFacing ||
+          (stepOutputs.length
+            ? `I completed ${stepOutputs.length} of ${stepsToRun.length} steps, then ran into a problem and stopped. Here's what I finished before that.`
+            : "I couldn't finish that request. Nothing useful was produced — try again in a moment, or rephrase what you need."),
       });
     }
   }

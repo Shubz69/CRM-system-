@@ -5,17 +5,22 @@ import { researchAgent } from "@/agents/research";
 import { socialListeningAgent } from "@/agents/social-listening";
 import { analystAgent } from "@/agents/analyst";
 import { criticAgent } from "@/agents/critic";
+import { imagingAnalyzeAgent } from "@/agents/imaging-analyze";
+import { imagingGenerateAgent } from "@/agents/imaging-generate";
+import type { AnyAgent } from "@/agents/types";
 
 let bootstrapped = false;
 
-const BUILTIN = [
+const BUILTIN: AnyAgent[] = [
   echoAgent,
   summariseAgent,
   researchAgent,
   socialListeningAgent,
   analystAgent,
   criticAgent,
-] as const;
+  imagingAnalyzeAgent,
+  imagingGenerateAgent,
+];
 
 /** Register built-in agents once. */
 export function ensureAgentsRegistered(): void {
@@ -40,6 +45,8 @@ export {
   socialListeningAgent,
   analystAgent,
   criticAgent,
+  imagingAnalyzeAgent,
+  imagingGenerateAgent,
 };
 export {
   getAgent,

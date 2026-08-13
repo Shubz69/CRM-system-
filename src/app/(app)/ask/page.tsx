@@ -10,6 +10,10 @@ type Progress = {
   plainEnglishPlan: string | null;
   clarificationQuestion: string | null;
   clarificationOptions: string[] | null;
+  pendingPrompt: string | null;
+  pendingCostEstimateCents: number | null;
+  pendingCostNote: string | null;
+  referenceAssetId: string | null;
   currentStep: {
     position: number;
     userFacingLabel: string;
@@ -44,11 +48,21 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+function imageUrlFromOutput(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.url === "string" && obj.url.startsWith("http")) return obj.url;
+  return null;
+}
+
 function renderAnswer(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
+    if (typeof obj.summary === "string" && typeof obj.url === "string") {
+      return obj.summary;
+    }
     if (typeof obj.summary === "string") {
       const claims = Array.isArray(obj.claims)
         ? obj.claims
@@ -95,7 +109,12 @@ export default function AskPage() {
   const [runId, setRunId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [referenceAssetId, setReferenceAssetId] = useState<string | null>(null);
+  const [referenceName, setReferenceName] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [editablePrompt, setEditablePrompt] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -111,12 +130,16 @@ export default function AskPage() {
         const json = (await res.json()) as Progress & { error?: string };
         if (!res.ok) throw new Error(json.error || "Could not load progress");
         setProgress(json);
+        if (json.status === "AWAITING_PROMPT_CONFIRM" && json.pendingPrompt) {
+          setEditablePrompt(json.pendingPrompt);
+        }
         if (
           json.status === "COMPLETED" ||
           json.status === "PARTIAL" ||
           json.status === "FAILED" ||
           json.status === "CANCELLED" ||
-          json.status === "AWAITING_CLARIFICATION"
+          json.status === "AWAITING_CLARIFICATION" ||
+          json.status === "AWAITING_PROMPT_CONFIRM"
         ) {
           stopPolling();
         }
@@ -129,6 +152,24 @@ export default function AskPage() {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
+  async function onUpload(file: File) {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/assets", { method: "POST", body: form });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Upload failed");
+      setReferenceAssetId(json.assetId);
+      setReferenceName(file.name);
+      toast.success("Reference image ready — describe what you want.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const text = request.trim();
@@ -140,7 +181,10 @@ export default function AskPage() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request: text }),
+        body: JSON.stringify({
+          request: text,
+          ...(referenceAssetId ? { referenceAssetId } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not start");
@@ -175,16 +219,34 @@ export default function AskPage() {
     }
   }
 
-  const answer =
-    progress?.finalOutput != null
-      ? renderAnswer(progress.finalOutput)
-      : progress?.outputSoFar != null
-        ? renderAnswer(progress.outputSoFar)
-        : "";
+  async function onConfirmPrompt() {
+    if (!runId || !editablePrompt.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/ask", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId, confirmedPrompt: editablePrompt.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not start generation");
+      stopPolling();
+      await poll(json.runId);
+      pollRef.current = setInterval(() => void poll(json.runId), 1200);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const answerSource =
+    progress?.finalOutput != null ? progress.finalOutput : progress?.outputSoFar;
+  const answer = answerSource != null ? renderAnswer(answerSource) : "";
+  const imageUrl = imageUrlFromOutput(answerSource);
 
   const isLive =
-    progress &&
-    ["PENDING", "PLANNING", "RUNNING"].includes(progress.status);
+    progress && ["PENDING", "PLANNING", "RUNNING"].includes(progress.status);
 
   return (
     <div className="mx-auto max-w-2xl space-y-8">
@@ -197,6 +259,42 @@ export default function AskPage() {
       </div>
 
       <form onSubmit={onSubmit} className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="sr-only"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void onUpload(file);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            disabled={uploading || submitting}
+            onClick={() => fileRef.current?.click()}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-50"
+          >
+            {uploading ? "Uploading…" : "Upload reference image"}
+          </button>
+          {referenceName && (
+            <span className="text-sm text-[var(--muted)]">
+              Using {referenceName}
+              <button
+                type="button"
+                className="ml-2 underline"
+                onClick={() => {
+                  setReferenceAssetId(null);
+                  setReferenceName(null);
+                }}
+              >
+                Clear
+              </button>
+            </span>
+          )}
+        </div>
         <label htmlFor="ask-request" className="sr-only">
           Your request
         </label>
@@ -205,7 +303,7 @@ export default function AskPage() {
           value={request}
           onChange={(e) => setRequest(e.target.value)}
           rows={5}
-          placeholder='Try: “Summarise this: We offer dental implants…” or “Echo: hello from the clinic”'
+          placeholder='Try: “Make something like this reference, warmer tones” or “Summarise this: We offer dental implants…”'
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-base outline-none focus:border-[var(--accent)]"
           disabled={submitting}
         />
@@ -243,24 +341,63 @@ export default function AskPage() {
         </div>
       )}
 
+      {progress?.status === "AWAITING_PROMPT_CONFIRM" && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+            Review prompt before generating
+          </h2>
+          <p className="text-sm text-[var(--muted)]">
+            Edit anything that looks off. Generation starts only after you confirm.
+          </p>
+          <textarea
+            value={editablePrompt}
+            onChange={(e) => setEditablePrompt(e.target.value)}
+            rows={6}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
+            disabled={submitting}
+          />
+          {progress.pendingCostNote && (
+            <p className="text-sm font-medium">{progress.pendingCostNote}</p>
+          )}
+          <button
+            type="button"
+            disabled={submitting || editablePrompt.trim().length < 8}
+            onClick={() => void onConfirmPrompt()}
+            className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {submitting ? "Starting generation…" : "Confirm & generate"}
+          </button>
+        </div>
+      )}
+
       {/* Answer first */}
-      {answer && (
+      {(answer || imageUrl) && (
         <section className="space-y-2">
           <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
             Answer
           </h2>
-          <div className="whitespace-pre-wrap text-lg leading-relaxed">{answer}</div>
+          {imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl}
+              alt="Generated image"
+              className="max-h-[28rem] w-full rounded-lg object-contain"
+            />
+          )}
+          {answer && (
+            <div className="whitespace-pre-wrap text-lg leading-relaxed">{answer}</div>
+          )}
           {progress?.userFacingError && (
             <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
           )}
         </section>
       )}
 
-      {!answer && progress?.userFacingError && (
+      {!answer && !imageUrl && progress?.userFacingError && (
         <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
       )}
 
-      {isLive && !answer && (
+      {isLive && !answer && !imageUrl && (
         <p className="text-sm text-[var(--muted)]">
           Working
           {progress.currentStep
@@ -272,7 +409,6 @@ export default function AskPage() {
         </p>
       )}
 
-      {/* Details collapse underneath — brief stays above when detail was pruned */}
       {progress && progress.stepsDetailCleared && (
         <p className="text-sm text-[var(--muted)]">
           {progress.stepsDetailClearedMessage ||
@@ -324,6 +460,7 @@ export default function AskPage() {
                 setRequest(cleaned);
                 setProgress(null);
                 setRunId(null);
+                setEditablePrompt("");
               }}
             >
               Ask something else
@@ -336,7 +473,7 @@ export default function AskPage() {
                 setRequest(cleaned);
                 setProgress(null);
                 setRunId(null);
-                // User taps Go again — keeps the one-input flow obvious.
+                setEditablePrompt("");
               }}
             >
               Edit &amp; run again

@@ -53,6 +53,26 @@ const envSchema = z.object({
   WEB_SEARCH_RATE_LIMIT_PER_MIN: z.string().optional(),
   RESEARCH_CACHE_TTL_SECONDS: z.string().optional(),
   RESEARCH_ADAPTER_CONCURRENCY: z.string().optional(),
+  /**
+   * Image generation provider. none → explicit error (never a placeholder image).
+   * Claude/Anthropic is never a valid generator (rejected at getImageProvider).
+   */
+  IMAGE_PROVIDER: z.string().default("none"),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_IMAGE_MODEL: z.string().optional(),
+  GEMINI_IMAGE_MODEL_FALLBACK: z.string().optional(),
+  GEMINI_IMAGE_COST_CENTS: z.string().optional(),
+  OPENAI_IMAGE_MODEL: z.string().optional(),
+  OPENAI_IMAGE_COST_CENTS: z.string().optional(),
+  OPENAI_VISION_MODEL: z.string().optional(),
+  /** vercel_blob | s3 | none — unconfigured means explicit error, never DB blobs. */
+  ASSET_STORAGE: z.string().default("none"),
+  BLOB_READ_WRITE_TOKEN: z.string().optional(),
+  S3_BUCKET: z.string().optional(),
+  S3_REGION: z.string().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
+  S3_ENDPOINT: z.string().optional(),
   MANYCHAT_API_BASE_URL: z.string().default("https://api.manychat.com"),
   MANYCHAT_API_TOKEN: z.string().optional(),
   MANYCHAT_WEBHOOK_SECRET: z.string().default("dev-manychat-webhook-secret"),

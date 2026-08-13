@@ -36,7 +36,14 @@ function looksLikeSocialListening(request: string): boolean {
 
 function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
+  if (looksLikeImaging(request)) return false;
   return /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
+    request,
+  );
+}
+
+function looksLikeImaging(request: string): boolean {
+  return /\b(image|picture|photo|illustration|artwork|graphic|visual|make me something like|generate (an? )?(image|picture)|create (an? )?(image|picture|graphic)|reference image|based on (this|the) (image|picture|photo))\b/i.test(
     request,
   );
 }
@@ -49,7 +56,8 @@ function isTooVague(request: string): boolean {
     !looksLikeEcho(trimmed) &&
     !looksLikeSummarise(trimmed) &&
     !looksLikeResearch(trimmed) &&
-    !looksLikeSocialListening(trimmed)
+    !looksLikeSocialListening(trimmed) &&
+    !looksLikeImaging(trimmed)
   ) {
     return true;
   }
@@ -57,7 +65,8 @@ function isTooVague(request: string): boolean {
     !looksLikeEcho(trimmed) &&
     !looksLikeSummarise(trimmed) &&
     !looksLikeResearch(trimmed) &&
-    !looksLikeSocialListening(trimmed)
+    !looksLikeSocialListening(trimmed) &&
+    !looksLikeImaging(trimmed)
   ) {
     if (trimmed.split(/\s+/).length >= 40) return false;
     return true;
@@ -75,12 +84,12 @@ function clarificationFor(request: string): Clarification {
           "Summarise it into a short brief",
           "Repeat it back to me",
           "Research this topic with sources",
-          "Social listening on this topic",
+          "Create an image from a reference",
         ]
       : [
           "Summarise some text I'll paste next",
           "Research a topic for me",
-          "Social listening on a niche",
+          "Create an image from a reference",
           "I'm not sure — show me an example",
         ],
   };
@@ -154,17 +163,58 @@ function planSocialListeningPipeline(topic: string): PlanResult {
   };
 }
 
+function planImagingAnalyze(request: string, referenceAssetId: string): PlanResult {
+  const clean = request.trim().slice(0, 4000);
+  return {
+    kind: "plan",
+    plan: {
+      steps: [
+        {
+          agentName: "imaging_analyze",
+          input: { request: clean, referenceAssetId },
+        },
+      ],
+      plainEnglishPlan:
+        "I'll study your reference image and draft a generation prompt you can edit before anything is created — so you can correct what I understood first.",
+    },
+  };
+}
+
+function clarificationForImagingUpload(): Clarification {
+  return {
+    kind: "clarification",
+    question:
+      "To make something like a reference, upload an image first, then describe what you want.",
+    options: [
+      "I'll upload a reference image",
+      "Summarise some text instead",
+      "Research a topic instead",
+      "I'm not sure — show me an example",
+    ],
+  };
+}
+
 /**
  * Deterministic planner. Prefer clarity over guessing — one clarifying question when unclear.
  */
 export function planAgentRunDeterministic(
   request: string,
-  _org?: OrgAgentContext,
+  org?: OrgAgentContext,
 ): PlanResult {
   ensureAgentsRegistered();
   const trimmed = request.trim();
   if (!trimmed) {
     return clarificationFor(trimmed);
+  }
+
+  if (/^create an image from a reference$/i.test(trimmed)) {
+    if (org?.referenceAssetId) {
+      return planImagingAnalyze(
+        "Create something inspired by this reference image",
+        org.referenceAssetId,
+      );
+    }
+    return clarificationForImagingUpload();
   }
 
   if (/^research this topic with sources$/i.test(trimmed)) {
@@ -183,6 +233,14 @@ export function planAgentRunDeterministic(
   }
   if (/^repeat it back to me$/i.test(trimmed)) {
     return clarificationFor("please paste the text");
+  }
+
+  if (org?.referenceAssetId && (looksLikeImaging(trimmed) || trimmed.length >= 8)) {
+    return planImagingAnalyze(trimmed, org.referenceAssetId);
+  }
+
+  if (looksLikeImaging(trimmed)) {
+    return clarificationForImagingUpload();
   }
 
   if (looksLikeSocialListening(trimmed)) {
@@ -252,9 +310,13 @@ const llmPlanSchema = z.object({
           "social_listening",
           "analyst",
           "critic",
+          "imaging_analyze",
+          "imaging_generate",
         ]),
         text: z.string().optional(),
         topic: z.string().optional(),
+        referenceAssetId: z.string().optional(),
+        prompt: z.string().optional(),
         maxSentences: z.number().int().min(1).max(8).optional(),
       }),
     )
@@ -283,8 +345,8 @@ export async function planAgentRun(
   const result = await completeStructuredSafe(llmPlanSchema, {
     organisationId: org.organisationId,
     tier: "cheap",
-    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research or social listening, prefer the full pipeline (research|social_listening → analyst → critic). If unclear, ask ONE clarifying question with 2-4 short options.`,
-    prompt: `Request:\n${request}\n\nOrganisation: ${org.organisationName || org.organisationId}`,
+    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research or social listening, prefer the full pipeline (research|social_listening → analyst → critic). For images, use imaging_analyze only when a referenceAssetId is known — never call imaging_generate until the user confirms a prompt. If unclear, ask ONE clarifying question with 2-4 short options.`,
+    prompt: `Request:\n${request}\n\nOrganisation: ${org.organisationName || org.organisationId}\nReference asset id: ${org.referenceAssetId || "(none)"}`,
     skipSpendGate: false,
   });
 
@@ -306,7 +368,7 @@ export async function planAgentRun(
   }
 
   const steps = (data.steps || [])
-    .filter((s) => hasAgent(s.agentName))
+    .filter((s) => hasAgent(s.agentName) && s.agentName !== "imaging_generate")
     .map((s) => {
       if (s.agentName === "summarise") {
         return {
@@ -323,16 +385,32 @@ export async function planAgentRun(
       if (s.agentName === "analyst") {
         return { agentName: s.agentName, input: { topic: s.topic || s.text || request } };
       }
+      if (s.agentName === "imaging_analyze") {
+        return {
+          agentName: s.agentName,
+          input: {
+            request: s.text || s.topic || request,
+            referenceAssetId: s.referenceAssetId || org.referenceAssetId || "",
+          },
+        };
+      }
       return { agentName: s.agentName, input: {} };
     })
     .filter((s) => {
       if (s.agentName === "echo" || s.agentName === "summarise") {
-        return typeof (s.input as { text?: string }).text === "string" &&
-          Boolean((s.input as { text: string }).text.trim());
+        return (
+          typeof (s.input as { text?: string }).text === "string" &&
+          Boolean((s.input as { text: string }).text.trim())
+        );
       }
       if (s.agentName === "research" || s.agentName === "social_listening") {
-        return typeof (s.input as { topic?: string }).topic === "string" &&
-          Boolean((s.input as { topic: string }).topic.trim());
+        return (
+          typeof (s.input as { topic?: string }).topic === "string" &&
+          Boolean((s.input as { topic: string }).topic.trim())
+        );
+      }
+      if (s.agentName === "imaging_analyze") {
+        return Boolean((s.input as { referenceAssetId?: string }).referenceAssetId?.trim());
       }
       return true;
     });
