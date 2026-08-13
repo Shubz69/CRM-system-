@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 import { WORKSPACE_NAV, ADMIN_NAV } from "@/lib/navigation";
 import { useSession } from "next-auth/react";
 
+export const OPEN_COMMAND_PALETTE_EVENT = "dm-open-command-palette";
+
+export function openCommandPalette() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT));
+}
+
 export function CommandPalette() {
   const router = useRouter();
   const { data: session } = useSession();
@@ -41,8 +48,15 @@ export function CommandPalette() {
       }
       if (e.key === "Escape") setOpen(false);
     }
+    function onOpen() {
+      setOpen(true);
+    }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, onOpen);
+    };
   }, []);
 
   if (!open) return null;

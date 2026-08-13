@@ -19,26 +19,22 @@ cp .env.example .env
 
 npm install
 npx prisma generate
-# Empty local DB only — refuses production / databases with data:
-npm run db:setup
-# Existing / hosted DBs:
-# npx prisma migrate deploy && npm run db:seed
+npx prisma migrate deploy
+npm run db:seed          # demo data (requires DEMO_MODE=true)
 npm run seed:admin       # optional — requires ADMIN_INITIAL_PASSWORD
 npm run dev
 ```
 
 Open `http://localhost:3000`. Demo login (when seeded): `demo@dminelligence.local` / `demo1234`.
 
-### Schema changes on real data
-
-Use **`npx prisma migrate deploy`** (requires `DIRECT_URL` on Supabase).  
-Do **not** use `prisma db push` or `npm run db:setup` against a populated database.
+Schema rules: **[MIGRATIONS.md](./MIGRATIONS.md)** — `migrate deploy` only; `db push` is blocked.
 
 ## Environment highlights
 
 | Variable | Notes |
 |----------|--------|
-| `DATABASE_URL` | Postgres connection string (Supabase pooled for Vercel; direct for `prisma db push`) |
+| `DATABASE_URL` | Postgres connection string (Supabase pooled for Vercel; direct for `prisma migrate deploy`) |
+| `DIRECT_URL` | Optional non-pooled URL for migrations |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | Session signing |
 | `DEMO_MODE` | `true` to allow demo seed/login |
 | `ADMIN_EMAIL` | Super admin email (default in example) |
@@ -55,10 +51,11 @@ See `.env.example` for the full list, [SUPABASE.md](./SUPABASE.md) for the datab
 | Script | Purpose |
 |--------|---------|
 | `npm run dev` | Next.js dev server |
-| `npm run db:push` | Apply Prisma schema |
+| `npm run db:migrate:deploy` / `db:setup` | Apply migrations (`migrate deploy`) + seed for setup |
 | `npm run db:seed` | Demo organisation seed |
 | `npm run seed:admin` | Idempotent super admin seed |
 | `npm run worker` | BullMQ worker process |
+| `npm run db:push` | **Blocked** — exits with error |
 
 ## Integrations UI
 

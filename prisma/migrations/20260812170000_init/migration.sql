@@ -2,7 +2,7 @@
 CREATE SCHEMA IF NOT EXISTS "public";
 
 -- CreateEnum
-CREATE TYPE "MemberRole" AS ENUM ('OWNER', 'ADMINISTRATOR', 'MANAGER', 'SALES_AGENT', 'ANALYST', 'READ_ONLY');
+CREATE TYPE "MemberRole" AS ENUM ('SUPER_ADMIN', 'OWNER', 'ADMINISTRATOR', 'MANAGER', 'SALES_AGENT', 'ANALYST', 'READ_ONLY');
 
 -- CreateEnum
 CREATE TYPE "QualificationStatus" AS ENUM ('UNKNOWN', 'QUALIFYING', 'QUALIFIED', 'DISQUALIFIED');
@@ -26,13 +26,28 @@ CREATE TYPE "FollowUpStatus" AS ENUM ('SCHEDULED', 'SENT', 'CANCELLED', 'FAILED'
 CREATE TYPE "KnowledgeDocStatus" AS ENUM ('ACTIVE', 'INACTIVE', 'ARCHIVED');
 
 -- CreateEnum
-CREATE TYPE "WebhookProcessingStatus" AS ENUM ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED', 'DUPLICATE');
+CREATE TYPE "WebhookProcessingStatus" AS ENUM ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED', 'DUPLICATE', 'IGNORED');
 
 -- CreateEnum
 CREATE TYPE "IntegrationType" AS ENUM ('MANYCHAT', 'OPENAI', 'ANTHROPIC', 'BOOKING', 'GOOGLE_SHEETS', 'EMAIL', 'WEBHOOK');
 
 -- CreateEnum
-CREATE TYPE "NotificationType" AS ENUM ('HANDOVER', 'HIGH_SCORE', 'NEGATIVE_SENTIMENT', 'BOOKING', 'SYSTEM', 'TASK');
+CREATE TYPE "NotificationType" AS ENUM ('HANDOVER', 'HIGH_SCORE', 'NEGATIVE_SENTIMENT', 'BOOKING', 'SYSTEM', 'TASK', 'AI_FAILURE', 'FOLLOW_UP_FAILURE', 'AUTOMATION_FAILURE', 'UNASSIGNED_QUALIFIED');
+
+-- CreateEnum
+CREATE TYPE "OrganisationStatus" AS ENUM ('ACTIVE', 'SUSPENDED');
+
+-- CreateEnum
+CREATE TYPE "AutopilotMode" AS ENUM ('OFF', 'TEST', 'LIVE', 'PAUSED', 'ATTENTION_REQUIRED');
+
+-- CreateEnum
+CREATE TYPE "AuditLogScope" AS ENUM ('ORG', 'PLATFORM');
+
+-- CreateEnum
+CREATE TYPE "AgentRunStatus" AS ENUM ('PENDING', 'PLANNING', 'AWAITING_CLARIFICATION', 'RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED');
+
+-- CreateEnum
+CREATE TYPE "AgentStepStatus" AS ENUM ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'SKIPPED');
 
 -- CreateTable
 CREATE TABLE "Organisation" (
@@ -42,6 +57,12 @@ CREATE TABLE "Organisation" (
     "timezone" TEXT NOT NULL DEFAULT 'UTC',
     "dataRetentionDays" INTEGER NOT NULL DEFAULT 365,
     "demoData" BOOLEAN NOT NULL DEFAULT false,
+    "isPlatform" BOOLEAN NOT NULL DEFAULT false,
+    "status" "OrganisationStatus" NOT NULL DEFAULT 'ACTIVE',
+    "plan" TEXT NOT NULL DEFAULT 'standard',
+    "autopilotMode" "AutopilotMode" NOT NULL DEFAULT 'LIVE',
+    "autopilotConfig" JSONB NOT NULL DEFAULT '{}',
+    "lastActivityAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "deletedAt" TIMESTAMP(3),
@@ -57,6 +78,13 @@ CREATE TABLE "User" (
     "passwordHash" TEXT,
     "image" TEXT,
     "emailVerified" TIMESTAMP(3),
+    "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "isSuspended" BOOLEAN NOT NULL DEFAULT false,
+    "isPlatformAdmin" BOOLEAN NOT NULL DEFAULT false,
+    "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0,
+    "lockedUntil" TIMESTAMP(3),
+    "lastLoginAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "deletedAt" TIMESTAMP(3),
@@ -182,6 +210,7 @@ CREATE TABLE "Contact" (
 -- CreateTable
 CREATE TABLE "ContactIdentifier" (
     "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
     "contactId" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
     "identifier" TEXT NOT NULL,
@@ -202,6 +231,11 @@ CREATE TABLE "Conversation" (
     "unreadCount" INTEGER NOT NULL DEFAULT 0,
     "lastMessageAt" TIMESTAMP(3),
     "lastMessagePreview" TEXT,
+    "lastInboundAt" TIMESTAMP(3),
+    "lastOutboundAt" TIMESTAMP(3),
+    "messagingWindowExpiresAt" TIMESTAMP(3),
+    "humanMessagingWindowExpiresAt" TIMESTAMP(3),
+    "handoffReason" TEXT,
     "aiPaused" BOOLEAN NOT NULL DEFAULT false,
     "needsHumanReview" BOOLEAN NOT NULL DEFAULT false,
     "summary" TEXT,
@@ -302,10 +336,13 @@ CREATE TABLE "QualificationField" (
     "key" TEXT NOT NULL,
     "label" TEXT NOT NULL,
     "description" TEXT,
+    "fieldType" TEXT NOT NULL DEFAULT 'short_text',
     "required" BOOLEAN NOT NULL DEFAULT false,
     "weight" INTEGER NOT NULL DEFAULT 10,
     "position" INTEGER NOT NULL DEFAULT 0,
     "active" BOOLEAN NOT NULL DEFAULT true,
+    "options" JSONB NOT NULL DEFAULT '[]',
+    "disqualifyingAnswers" JSONB NOT NULL DEFAULT '[]',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -503,12 +540,16 @@ CREATE TABLE "AgentConfiguration" (
     "organisationId" TEXT NOT NULL,
     "name" TEXT NOT NULL DEFAULT 'Default Agent',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "aiProvider" TEXT NOT NULL DEFAULT 'mock',
-    "model" TEXT NOT NULL DEFAULT 'mock-v1',
+    "isDraft" BOOLEAN NOT NULL DEFAULT false,
+    "version" INTEGER NOT NULL DEFAULT 1,
+    "publishedVersion" INTEGER,
+    "aiProvider" TEXT NOT NULL DEFAULT 'anthropic',
+    "model" TEXT NOT NULL DEFAULT 'claude-sonnet-4-20250514',
     "brandTone" TEXT NOT NULL DEFAULT 'professional, helpful, concise',
     "formality" TEXT NOT NULL DEFAULT 'professional',
     "responseLength" TEXT NOT NULL DEFAULT 'medium',
     "emojiUsage" TEXT NOT NULL DEFAULT 'minimal',
+    "language" TEXT NOT NULL DEFAULT 'en',
     "qualificationQuestions" JSONB NOT NULL DEFAULT '[]',
     "scoringRules" JSONB NOT NULL DEFAULT '{}',
     "bookingConditions" JSONB NOT NULL DEFAULT '{}',
@@ -518,9 +559,14 @@ CREATE TABLE "AgentConfiguration" (
     "maxFollowUps" INTEGER NOT NULL DEFAULT 3,
     "operatingHours" JSONB NOT NULL DEFAULT '{}',
     "restrictedTopics" JSONB NOT NULL DEFAULT '[]',
+    "optOutKeywords" JSONB NOT NULL DEFAULT '["stop","unsubscribe","opt out"]',
     "confidenceThreshold" DOUBLE PRECISION NOT NULL DEFAULT 0.65,
     "bookingUrl" TEXT,
     "systemPromptExtra" TEXT,
+    "escalationInstructions" TEXT,
+    "lastEditedById" TEXT,
+    "lastPublishedById" TEXT,
+    "publishedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -615,6 +661,7 @@ CREATE TABLE "Campaign" (
 -- CreateTable
 CREATE TABLE "Attribution" (
     "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
     "contactId" TEXT NOT NULL,
     "leadId" TEXT,
     "campaignId" TEXT,
@@ -644,7 +691,7 @@ CREATE TABLE "Report" (
 -- CreateTable
 CREATE TABLE "WebhookEvent" (
     "id" TEXT NOT NULL,
-    "organisationId" TEXT,
+    "organisationId" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
     "eventType" TEXT NOT NULL,
     "idempotencyKey" TEXT NOT NULL,
@@ -660,6 +707,7 @@ CREATE TABLE "WebhookEvent" (
 -- CreateTable
 CREATE TABLE "AuditLog" (
     "id" TEXT NOT NULL,
+    "scope" "AuditLogScope" NOT NULL DEFAULT 'ORG',
     "organisationId" TEXT,
     "userId" TEXT,
     "action" TEXT NOT NULL,
@@ -684,6 +732,186 @@ CREATE TABLE "Notification" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Notification_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "KnowledgeRecommendation" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "conversationId" TEXT,
+    "question" TEXT NOT NULL,
+    "draftAnswer" TEXT,
+    "reason" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'NEW',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "KnowledgeRecommendation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "LeadScoreEvent" (
+    "id" TEXT NOT NULL,
+    "leadId" TEXT NOT NULL,
+    "previousScore" INTEGER NOT NULL,
+    "newScore" INTEGER NOT NULL,
+    "delta" INTEGER NOT NULL,
+    "reason" TEXT NOT NULL,
+    "ruleKey" TEXT,
+    "messageId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "LeadScoreEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SystemSetting" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "value" JSONB NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SystemSetting_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "FailedJob" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "queue" TEXT NOT NULL,
+    "jobName" TEXT NOT NULL,
+    "payload" JSONB NOT NULL DEFAULT '{}',
+    "error" TEXT NOT NULL,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolvedAt" TIMESTAMP(3),
+
+    CONSTRAINT "FailedJob_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "UsageRecord" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "feature" TEXT NOT NULL,
+    "provider" TEXT,
+    "quantity" INTEGER NOT NULL DEFAULT 1,
+    "metadata" JSONB NOT NULL DEFAULT '{}',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "UsageRecord_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AiExecution" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "model" TEXT NOT NULL,
+    "taskType" TEXT NOT NULL,
+    "feature" TEXT,
+    "inputTokens" INTEGER,
+    "outputTokens" INTEGER,
+    "totalTokens" INTEGER,
+    "latencyMs" INTEGER,
+    "success" BOOLEAN NOT NULL DEFAULT true,
+    "error" TEXT,
+    "estimatedCost" DOUBLE PRECISION,
+    "metadata" JSONB NOT NULL DEFAULT '{}',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AiExecution_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OrganisationAiBudget" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "monthlyCapCents" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OrganisationAiBudget_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OrganisationAgentLimits" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "maxSteps" INTEGER NOT NULL DEFAULT 8,
+    "maxWallClockSeconds" INTEGER NOT NULL DEFAULT 600,
+    "maxSpendCentsPerRun" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OrganisationAgentLimits_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AgentRun" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "userId" TEXT,
+    "triggeredBy" TEXT NOT NULL DEFAULT 'user',
+    "request" TEXT NOT NULL,
+    "plan" JSONB,
+    "plainEnglishPlan" TEXT,
+    "clarificationQuestion" TEXT,
+    "clarificationOptions" JSONB,
+    "status" "AgentRunStatus" NOT NULL DEFAULT 'PENDING',
+    "startedAt" TIMESTAMP(3),
+    "finishedAt" TIMESTAMP(3),
+    "totalCostCents" INTEGER NOT NULL DEFAULT 0,
+    "error" TEXT,
+    "userFacingError" TEXT,
+    "partialResults" JSONB,
+    "finalOutput" JSONB,
+    "maxSteps" INTEGER NOT NULL DEFAULT 8,
+    "maxWallClockSeconds" INTEGER NOT NULL DEFAULT 600,
+    "maxSpendCents" INTEGER,
+    "bullJobId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AgentRun_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AgentStep" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "agentRunId" TEXT NOT NULL,
+    "position" INTEGER NOT NULL,
+    "agentName" TEXT NOT NULL,
+    "userFacingLabel" TEXT NOT NULL,
+    "input" JSONB NOT NULL,
+    "output" JSONB,
+    "model" TEXT,
+    "tokensIn" INTEGER,
+    "tokensOut" INTEGER,
+    "costCents" INTEGER NOT NULL DEFAULT 0,
+    "durationMs" INTEGER,
+    "status" "AgentStepStatus" NOT NULL DEFAULT 'PENDING',
+    "userFacingStatus" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AgentStep_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ToolCall" (
+    "id" TEXT NOT NULL,
+    "organisationId" TEXT NOT NULL,
+    "agentStepId" TEXT NOT NULL,
+    "toolName" TEXT NOT NULL,
+    "args" JSONB NOT NULL DEFAULT '{}',
+    "result" JSONB,
+    "durationMs" INTEGER,
+    "error" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ToolCall_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -747,7 +975,7 @@ CREATE INDEX "Contact_organisationId_instagramUsername_idx" ON "Contact"("organi
 CREATE INDEX "ContactIdentifier_contactId_idx" ON "ContactIdentifier"("contactId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ContactIdentifier_channel_identifier_key" ON "ContactIdentifier"("channel", "identifier");
+CREATE UNIQUE INDEX "ContactIdentifier_organisationId_channel_identifier_key" ON "ContactIdentifier"("organisationId", "channel", "identifier");
 
 -- CreateIndex
 CREATE INDEX "Conversation_organisationId_lastMessageAt_idx" ON "Conversation"("organisationId", "lastMessageAt");
@@ -792,7 +1020,7 @@ CREATE INDEX "Lead_organisationId_qualificationStatus_idx" ON "Lead"("organisati
 CREATE INDEX "Lead_organisationId_score_idx" ON "Lead"("organisationId", "score");
 
 -- CreateIndex
-CREATE INDEX "Lead_organisationId_stageId_idx" ON "Lead"("organisationId", "stageId");
+CREATE INDEX "Lead_organisationId_stageId_updatedAt_idx" ON "Lead"("organisationId", "stageId", "updatedAt");
 
 -- CreateIndex
 CREATE INDEX "Lead_contactId_idx" ON "Lead"("contactId");
@@ -837,6 +1065,9 @@ CREATE INDEX "AutomationExecution_ruleId_createdAt_idx" ON "AutomationExecution"
 CREATE UNIQUE INDEX "Tag_organisationId_name_key" ON "Tag"("organisationId", "name");
 
 -- CreateIndex
+CREATE INDEX "Note_organisationId_createdAt_idx" ON "Note"("organisationId", "createdAt");
+
+-- CreateIndex
 CREATE INDEX "Note_contactId_createdAt_idx" ON "Note"("contactId", "createdAt");
 
 -- CreateIndex
@@ -873,6 +1104,9 @@ CREATE UNIQUE INDEX "DailyMetric_organisationId_date_key" ON "DailyMetric"("orga
 CREATE UNIQUE INDEX "Campaign_organisationId_name_key" ON "Campaign"("organisationId", "name");
 
 -- CreateIndex
+CREATE INDEX "Attribution_organisationId_createdAt_idx" ON "Attribution"("organisationId", "createdAt");
+
+-- CreateIndex
 CREATE INDEX "Attribution_contactId_idx" ON "Attribution"("contactId");
 
 -- CreateIndex
@@ -894,10 +1128,73 @@ CREATE UNIQUE INDEX "WebhookEvent_provider_idempotencyKey_key" ON "WebhookEvent"
 CREATE INDEX "AuditLog_organisationId_createdAt_idx" ON "AuditLog"("organisationId", "createdAt");
 
 -- CreateIndex
+CREATE INDEX "AuditLog_scope_createdAt_idx" ON "AuditLog"("scope", "createdAt");
+
+-- CreateIndex
 CREATE INDEX "AuditLog_entityType_entityId_idx" ON "AuditLog"("entityType", "entityId");
 
 -- CreateIndex
 CREATE INDEX "Notification_organisationId_userId_readAt_idx" ON "Notification"("organisationId", "userId", "readAt");
+
+-- CreateIndex
+CREATE INDEX "KnowledgeRecommendation_organisationId_status_idx" ON "KnowledgeRecommendation"("organisationId", "status");
+
+-- CreateIndex
+CREATE INDEX "LeadScoreEvent_leadId_createdAt_idx" ON "LeadScoreEvent"("leadId", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "SystemSetting_key_key" ON "SystemSetting"("key");
+
+-- CreateIndex
+CREATE INDEX "FailedJob_queue_createdAt_idx" ON "FailedJob"("queue", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "FailedJob_organisationId_createdAt_idx" ON "FailedJob"("organisationId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "UsageRecord_organisationId_feature_createdAt_idx" ON "UsageRecord"("organisationId", "feature", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AiExecution_organisationId_createdAt_idx" ON "AiExecution"("organisationId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AiExecution_provider_model_createdAt_idx" ON "AiExecution"("provider", "model", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AiExecution_taskType_createdAt_idx" ON "AiExecution"("taskType", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AiExecution_success_createdAt_idx" ON "AiExecution"("success", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OrganisationAiBudget_organisationId_key" ON "OrganisationAiBudget"("organisationId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OrganisationAgentLimits_organisationId_key" ON "OrganisationAgentLimits"("organisationId");
+
+-- CreateIndex
+CREATE INDEX "AgentRun_organisationId_createdAt_idx" ON "AgentRun"("organisationId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AgentRun_organisationId_status_idx" ON "AgentRun"("organisationId", "status");
+
+-- CreateIndex
+CREATE INDEX "AgentRun_bullJobId_idx" ON "AgentRun"("bullJobId");
+
+-- CreateIndex
+CREATE INDEX "AgentStep_organisationId_agentRunId_idx" ON "AgentStep"("organisationId", "agentRunId");
+
+-- CreateIndex
+CREATE INDEX "AgentStep_organisationId_createdAt_idx" ON "AgentStep"("organisationId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AgentStep_agentRunId_position_idx" ON "AgentStep"("agentRunId", "position");
+
+-- CreateIndex
+CREATE INDEX "ToolCall_organisationId_agentStepId_idx" ON "ToolCall"("organisationId", "agentStepId");
+
+-- CreateIndex
+CREATE INDEX "ToolCall_agentStepId_createdAt_idx" ON "ToolCall"("agentStepId", "createdAt");
 
 -- AddForeignKey
 ALTER TABLE "Account" ADD CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -1032,6 +1329,9 @@ ALTER TABLE "ConversationTag" ADD CONSTRAINT "ConversationTag_conversationId_fke
 ALTER TABLE "ConversationTag" ADD CONSTRAINT "ConversationTag_tagId_fkey" FOREIGN KEY ("tagId") REFERENCES "Tag"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Note" ADD CONSTRAINT "Note_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Note" ADD CONSTRAINT "Note_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -1083,6 +1383,9 @@ ALTER TABLE "DailyMetric" ADD CONSTRAINT "DailyMetric_organisationId_fkey" FOREI
 ALTER TABLE "Campaign" ADD CONSTRAINT "Campaign_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Attribution" ADD CONSTRAINT "Attribution_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Attribution" ADD CONSTRAINT "Attribution_contactId_fkey" FOREIGN KEY ("contactId") REFERENCES "Contact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -1095,10 +1398,10 @@ ALTER TABLE "Attribution" ADD CONSTRAINT "Attribution_campaignId_fkey" FOREIGN K
 ALTER TABLE "Report" ADD CONSTRAINT "Report_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "WebhookEvent" ADD CONSTRAINT "WebhookEvent_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "WebhookEvent" ADD CONSTRAINT "WebhookEvent_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -1108,3 +1411,42 @@ ALTER TABLE "Notification" ADD CONSTRAINT "Notification_organisationId_fkey" FOR
 
 -- AddForeignKey
 ALTER TABLE "Notification" ADD CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "KnowledgeRecommendation" ADD CONSTRAINT "KnowledgeRecommendation_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LeadScoreEvent" ADD CONSTRAINT "LeadScoreEvent_leadId_fkey" FOREIGN KEY ("leadId") REFERENCES "Lead"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "FailedJob" ADD CONSTRAINT "FailedJob_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UsageRecord" ADD CONSTRAINT "UsageRecord_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AiExecution" ADD CONSTRAINT "AiExecution_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrganisationAiBudget" ADD CONSTRAINT "OrganisationAiBudget_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrganisationAgentLimits" ADD CONSTRAINT "OrganisationAgentLimits_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AgentRun" ADD CONSTRAINT "AgentRun_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AgentRun" ADD CONSTRAINT "AgentRun_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AgentStep" ADD CONSTRAINT "AgentStep_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AgentStep" ADD CONSTRAINT "AgentStep_agentRunId_fkey" FOREIGN KEY ("agentRunId") REFERENCES "AgentRun"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ToolCall" ADD CONSTRAINT "ToolCall_organisationId_fkey" FOREIGN KEY ("organisationId") REFERENCES "Organisation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ToolCall" ADD CONSTRAINT "ToolCall_agentStepId_fkey" FOREIGN KEY ("agentStepId") REFERENCES "AgentStep"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -80,6 +80,18 @@ export function getEnv(): AppEnv {
     }
   }
 
+  // On Vercel, derive auth/app URLs from the deployment host when unset so
+  // credentials callbacks don't CSRF-fail against localhost defaults.
+  if (!process.env.NEXTAUTH_URL && process.env.VERCEL_URL) {
+    process.env.NEXTAUTH_URL = `https://${process.env.VERCEL_URL}`;
+  }
+  if (!process.env.APP_URL && process.env.NEXTAUTH_URL) {
+    process.env.APP_URL = process.env.NEXTAUTH_URL;
+  }
+  if (!process.env.APP_URL && process.env.VERCEL_URL) {
+    process.env.APP_URL = `https://${process.env.VERCEL_URL}`;
+  }
+
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const details = parsed.error.issues
@@ -103,6 +115,11 @@ export function getEnv(): AppEnv {
     if (!data.DATABASE_URL || data.DATABASE_URL === BUILD_PLACEHOLDER_DATABASE_URL) {
       console.warn(
         "[env] DATABASE_URL is not configured. Landing/login will load; API/DB routes will fail until set.",
+      );
+    }
+    if (data.NEXTAUTH_URL.includes("localhost")) {
+      console.warn(
+        "[env] NEXTAUTH_URL still points at localhost — set it to your Vercel URL to avoid auth callback 401s.",
       );
     }
     if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {

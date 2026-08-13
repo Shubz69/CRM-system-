@@ -13,7 +13,8 @@
     "test:e2e": "playwright test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:push": "node scripts/block-db-push.js",
     "db:seed": "tsx prisma/seed.ts",
     "seed:admin": "tsx prisma/seed-admin.ts",
     "db:studio": "prisma studio",
@@ -21,7 +22,6 @@
     "db:upgrade": "tsx scripts/apply-schema-upgrade.ts",
     "db:setup": "tsx scripts/db-setup-dev.ts",
     "db:setup:dev": "tsx scripts/db-setup-dev.ts",
-    "db:migrate:deploy": "prisma migrate deploy",
     "worker": "tsx src/workers/index.ts",
     "worker:prod": "NODE_ENV=production tsx src/workers/index.ts",
     "postinstall": "prisma generate"

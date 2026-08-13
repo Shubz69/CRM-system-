@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 import { Bell, ChevronsLeft, ChevronsRight, LogOut, Search } from "lucide-react";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
+import { openCommandPalette } from "@/components/command-palette";
 import { ADMIN_NAV, WORKSPACE_NAV, isNavActive, pageTitleFromPath } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -279,19 +280,24 @@ export function AppShell({
               <Link href="/attention" className="badge badge-warn" title="Needs Attention queue">
                 Attention
               </Link>
-              <div className="relative">
+              <button
+                type="button"
+                className="relative w-56 text-left"
+                onClick={() => openCommandPalette()}
+                aria-label="Open search (Ctrl or Cmd+K)"
+              >
                 <Search
                   size={15}
-                  className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[var(--muted)]"
+                  className="pointer-events-none absolute top-1/2 left-3 z-10 -translate-y-1/2 text-[var(--muted)]"
+                  aria-hidden
                 />
-                <input
-                  className="input w-56 py-2 pl-9 text-sm"
-                  placeholder="Search… ⌘K"
-                  aria-label="Search"
-                  onFocus={() => toast.message("Global search opens with Ctrl/Cmd+K")}
-                  readOnly
-                />
-              </div>
+                <span className="input has-leading-icon flex w-full items-center py-2 text-sm text-[var(--muted)]">
+                  Search…
+                  <kbd className="ml-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)]">
+                    ⌘K
+                  </kbd>
+                </span>
+              </button>
               <button type="button" className="btn btn-secondary px-2.5 py-2" aria-label="Notifications">
                 <Bell size={16} />
               </button>

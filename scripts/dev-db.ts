@@ -84,7 +84,7 @@ async function main() {
   console.log("Embedded Postgres is running.");
   console.log(`DATABASE_URL=${url}`);
   console.log("Keep this process running while you develop.");
-  console.log("In another terminal: npm run db:push && npm run db:seed && npm run dev");
+  console.log("In another terminal: npm run db:setup && npm run dev");
 
   const shutdown = async () => {
     console.log("Stopping embedded Postgres...");

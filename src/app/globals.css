@@ -154,8 +154,14 @@ a {
   border: 1px solid var(--border);
   background: white;
   border-radius: 12px;
-  padding: 0.7rem 0.85rem;
+  /* Separate axes so Tailwind pl-* / pr-* can override without fighting shorthand */
+  padding-block: 0.7rem;
+  padding-inline: 0.85rem;
   outline: none;
+}
+
+.input.has-leading-icon {
+  padding-left: 2.5rem;
 }
 
 .input:focus {

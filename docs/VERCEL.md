@@ -17,7 +17,7 @@ This app is a Next.js frontend + API on Vercel. **Postgres is hosted on [Supabas
 | `DATABASE_URL` | **Required.** Supabase **Transaction** pooler URI (port `6543` + `pgbouncer=true&connection_limit=1`). Session pooler (5432) causes `EMAXCONNSESSION` on Vercel. |
 | `DIRECT_URL` | Direct/session URI for `prisma db push` from a laptop (optional on Vercel) |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
-| `NEXTAUTH_URL` | `https://YOUR_PROJECT.vercel.app` |
+| `NEXTAUTH_URL` | `https://YOUR_PROJECT.vercel.app` (must match the live domain; auto-falls back to `VERCEL_URL` if unset) |
 | `APP_URL` | Same as `NEXTAUTH_URL` |
 | `ENCRYPTION_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `MANYCHAT_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
@@ -42,11 +42,11 @@ https://vercel.com/shobhit-singhs-projects-c3f665ca/crm-system/settings/environm
 6. Deploy / **Redeploy** after saving env vars:  
    https://vercel.com/shobhit-singhs-projects-c3f665ca/crm-system/deployments
 
-7. Apply schema + seed admin against Supabase (use **direct** DB URL for `db push`):
+7. Apply schema + seed admin against Supabase (use **direct** DB URL for `migrate deploy`):
 
 ```bash
 DATABASE_URL="postgresql://postgres.[REF]:[PASSWORD]@db.[REF].supabase.co:5432/postgres?sslmode=require" \
-  npx prisma db push
+  npx prisma migrate deploy
 ADMIN_EMAIL=1230shobhit@gmail.com ADMIN_INITIAL_PASSWORD='…' npm run seed:admin
 ```
 

@@ -5,7 +5,7 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  // Direct (non-pooled) URL for migrations / db push. Fall back to DATABASE_URL locally.
+  // Direct (non-pooled) URL for migrate deploy. Fall back to DATABASE_URL locally.
   directUrl = env("DIRECT_URL")
 }
 
@@ -353,7 +353,6 @@ model ContactIdentifier {
 
   @@unique([organisationId, channel, identifier])
   @@index([contactId])
-  @@index([organisationId])
 }
 
 model Conversation {
@@ -506,7 +505,7 @@ model Lead {
 
   @@index([organisationId, qualificationStatus])
   @@index([organisationId, score])
-  @@index([organisationId, stageId])
+  @@index([organisationId, stageId, updatedAt])
   @@index([contactId])
   @@index([conversationId])
 }
@@ -941,7 +940,7 @@ model WebhookEvent {
   processedAt    DateTime?
   createdAt      DateTime                @default(now())
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@unique([provider, idempotencyKey])
   @@index([organisationId, createdAt])
@@ -960,7 +959,7 @@ model AuditLog {
   metadata       Json          @default("{}")
   createdAt      DateTime      @default(now())
 
-  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Restrict)
   user         User?         @relation(fields: [userId], references: [id])
 
   @@index([organisationId, createdAt])
@@ -1035,7 +1034,7 @@ model FailedJob {
   createdAt      DateTime  @default(now())
   resolvedAt     DateTime?
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([queue, createdAt])
   @@index([organisationId, createdAt])
@@ -1050,7 +1049,7 @@ model UsageRecord {
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([organisationId, feature, createdAt])
 }
@@ -1073,7 +1072,7 @@ model AiExecution {
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
-  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
 
   @@index([organisationId, createdAt])
   @@index([provider, model, createdAt])
@@ -1092,8 +1091,6 @@ model OrganisationAiBudget {
   updatedAt       DateTime @updatedAt
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-
-  @@index([organisationId])
 }
 
 enum AgentRunStatus {
@@ -1191,6 +1188,7 @@ model AgentStep {
   toolCalls    ToolCall[]
 
   @@index([organisationId, agentRunId])
+  @@index([organisationId, createdAt])
   @@index([agentRunId, position])
 }
 

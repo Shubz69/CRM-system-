@@ -14,7 +14,7 @@ npm run test:e2e      # requires app + DB running
 ## Local prerequisites
 
 1. `npm run db:dev` (embedded Postgres) or Docker Compose Postgres
-2. `npx tsx scripts/apply-schema-upgrade.ts` after schema changes (or migrate)
+2. `npx prisma migrate deploy` (never `db push` — see [MIGRATIONS.md](./MIGRATIONS.md))
 3. `npm run db:seed`
 4. `npm run dev`
 

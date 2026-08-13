@@ -22,7 +22,7 @@ Auth, AI, and ManyChat stay in this Next.js app. Supabase is the managed Postgre
 postgresql://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres?pgbouncer=true
 ```
 
-5. Also keep a **direct** connection (port **5432**) for migrations/`db push` from your laptop if the pooler rejects migrate commands:
+5. Also keep a **direct** connection (port **5432**) for `prisma migrate deploy` from your laptop if the pooler rejects migrate commands:
 
 ```text
 postgresql://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres
@@ -79,7 +79,7 @@ Use the **direct** (port `5432`) URL for this step:
 ```bash
 cd /path/to/CRM-system-
 export DATABASE_URL="postgresql://postgres.[REF]:[PASSWORD]@db.[REF].supabase.co:5432/postgres?sslmode=require"
-npx prisma db push
+npx prisma migrate deploy
 export ADMIN_EMAIL="1230shobhit@gmail.com"
 export ADMIN_INITIAL_PASSWORD="your-password-matching-vercel"
 export ADMIN_FORCE_PASSWORD_CHANGE=true

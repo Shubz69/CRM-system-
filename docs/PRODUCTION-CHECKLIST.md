@@ -9,7 +9,7 @@
 - [ ] AI provider keys stored only server-side
 - [ ] Demo organisation / demo user disabled (`DEMO_MODE=false`; demo login rejected)
 - [ ] `DEMO_MODE=false`
-- [ ] Migrations applied (`prisma migrate deploy` or approved `db push` process)
+- [ ] Migrations applied (`prisma migrate deploy` only — never `db push`)
 - [ ] HTTPS terminated in front of the app
 - [ ] Rate limiting enabled at edge/proxy as well as app (ManyChat + booking webhooks rate-limited in-app)
 - [ ] Backups enabled for Postgres

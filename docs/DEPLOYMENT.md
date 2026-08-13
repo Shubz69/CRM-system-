@@ -38,21 +38,15 @@ Optional:
 
 ## Database
 
-Against Supabase (prefer **direct** connection for push/migrate):
+Against Supabase (prefer **direct** connection for migrate deploy):
 
 ```bash
 npx prisma migrate deploy
-# or for controlled environments:
-npx prisma db push
 npm run seed:admin
 npm run db:seed   # only for demo/staging
 ```
 
-After additive schema changes without migrate history, local/dev can run:
-
-```bash
-npx tsx scripts/apply-schema-upgrade.ts
-```
+`prisma db push` and `scripts/apply-schema-upgrade.ts` are blocked. See [MIGRATIONS.md](./MIGRATIONS.md).
 
 See [SUPABASE.md](./SUPABASE.md) for dashboard links and connection string formats.
 ## Processes

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 
@@ -38,25 +38,82 @@ type ManyChatStatus = {
   };
 };
 
+type ReadinessStatus = "ready" | "untested" | "failed" | "missing" | "test_mode";
+
+type IntegrationReadiness = {
+  id: string;
+  label: string;
+  description: string;
+  status: ReadinessStatus;
+  statusLabel: string;
+  configured: boolean;
+  usingTestMode: boolean;
+  detail: string;
+  lastTest: { ok: boolean; testedAt: string; message: string } | null;
+};
+
+type ReadinessPayload = {
+  items: IntegrationReadiness[];
+  goLiveReady: boolean;
+  summary: string;
+};
+
+function statusBadgeClass(status: ReadinessStatus): string {
+  switch (status) {
+    case "ready":
+      return "badge badge-success";
+    case "untested":
+      return "badge badge-warn";
+    case "failed":
+      return "badge badge-danger";
+    case "test_mode":
+      return "badge badge-warn";
+    case "missing":
+    default:
+      return "badge";
+  }
+}
+
+function formatTestedAt(iso: string | undefined | null): string {
+  if (!iso) return "Never tested";
+  try {
+    return `Last tested ${new Date(iso).toLocaleString()}`;
+  } catch {
+    return "Last tested â€”";
+  }
+}
+
 export default function IntegrationsPage() {
   const [status, setStatus] = useState<ManyChatStatus | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [loading, setLoading] = useState(true);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
   const [aiReady, setAiReady] = useState(false);
+
+  const loadReadiness = useCallback(async () => {
+    const res = await fetch("/api/integrations/connection-tests");
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Could not load readiness");
+    setReadiness(json);
+  }, []);
+
+  const loadManyChat = useCallback(async () => {
+    const res = await fetch("/api/integrations/manychat");
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Failed to load");
+    setStatus(json);
+  }, []);
 
   async function load() {
     setLoading(true);
     try {
-      const [res, providersRes] = await Promise.all([
-        fetch("/api/integrations/manychat"),
-        fetch("/api/health/providers"),
-      ]);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load");
-      setStatus(json);
+      const providersPromise = fetch("/api/health/providers");
+      await Promise.all([loadManyChat(), loadReadiness()]);
+      const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
         setAiReady(Boolean(p.providers?.ai?.ready || p.providers?.ai?.hasAnthropicKey));
@@ -94,27 +151,71 @@ export default function IntegrationsPage() {
     await load();
   }
 
-  async function runAction(action: "regenerate_secret" | "test_inbound" | "test_outbound") {
+  async function regenerateSecret() {
     setBusy(true);
     try {
       const res = await fetch("/api/integrations/manychat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action: "regenerate_secret" }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Action failed");
-      if (action === "regenerate_secret" && json.secret) {
+      if (!res.ok) throw new Error(json.error || "Could not regenerate secret");
+      if (json.secret) {
         setOneTimeSecret(json.secret);
-        toast.success("Secret regenerated — copy it now");
-      } else {
-        toast.success(action === "test_inbound" ? "Test inbound processed" : "Test outbound sent");
+        toast.success("Secret regenerated â€” copy it now");
       }
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Action failed");
+      toast.error(e instanceof Error ? e.message : "Could not regenerate secret");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function simulateInbound() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/manychat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test_inbound" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Simulation failed");
+      toast.success("Sample inbound message processed inside the CRM (nothing sent to Instagram)");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Simulation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testConnection(id: string) {
+    setTestingId(id);
+    try {
+      const res = await fetch("/api/integrations/connection-tests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ integration: id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Connection test failed");
+      if (json.ok) toast.success(json.message);
+      else toast.error(json.message);
+      await loadReadiness();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Connection test failed");
+    } finally {
+      setTestingId(null);
+    }
+  }
+
+  async function testAll() {
+    if (!readiness) return;
+    for (const item of readiness.items) {
+      await testConnection(item.id);
     }
   }
 
@@ -127,8 +228,8 @@ export default function IntegrationsPage() {
     }
   }
 
-  if (loading && !status) {
-    return <div className="surface p-6 text-[var(--muted)]">Loading integrations…</div>;
+  if (loading && !status && !readiness) {
+    return <div className="surface p-6 text-[var(--muted)]">Loading integrationsâ€¦</div>;
   }
 
   return (
@@ -136,9 +237,10 @@ export default function IntegrationsPage() {
       <div>
         <h1 className="h-display text-4xl">Integrations</h1>
         <p className="mt-1 text-[var(--muted)]">
-          Connect Instagram, Calendar, and your AI Operator (Claude).
+          Paste credentials, test each connection, and see what still needs doing before going live.
         </p>
       </div>
+
 
       <div className="grid gap-3 md:grid-cols-3">
         <div className="surface p-4">
@@ -174,20 +276,86 @@ export default function IntegrationsPage() {
         </div>
       </div>
 
+      {readiness && (
+        <section className="surface space-y-4 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="h-display text-2xl">Go-live readiness</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">{readiness.summary}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={readiness.goLiveReady ? "badge badge-success" : "badge badge-warn"}>
+                {readiness.goLiveReady ? "Ready to go live" : "Not ready yet"}
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={Boolean(testingId)}
+                onClick={() => void testAll()}
+              >
+                Test all
+              </button>
+            </div>
+          </div>
+
+          <ul className="divide-y divide-[var(--border)]/60">
+            {readiness.items.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium">{item.label}</p>
+                    <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-[var(--muted)]">{item.description}</p>
+                  <p className="mt-1 text-sm">{item.detail}</p>
+                  {item.lastTest && (
+                    <p
+                      className={`mt-1 text-xs ${item.lastTest.ok ? "text-[var(--muted)]" : "text-[var(--danger)]"}`}
+                    >
+                      {formatTestedAt(item.lastTest.testedAt)}
+                      {" Â· "}
+                      {item.lastTest.ok ? "Passed" : "Failed"}: {item.lastTest.message}
+                    </p>
+                  )}
+                  {!item.lastTest && (
+                    <p className="mt-1 text-xs text-[var(--muted)]">Never tested</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary shrink-0"
+                  disabled={testingId === item.id}
+                  onClick={() => void testConnection(item.id)}
+                >
+                  {testingId === item.id ? "Testingâ€¦" : "Test connection"}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-[var(--muted)]">
+            Tests make one small check only â€” they never message a real person. Mock adapters stay
+            available for local testing; live mode never switches to mock silently when credentials
+            are present.
+          </p>
+        </section>
+      )}
+
       <section className="surface space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="h-display text-2xl">ManyChat</h2>
-            <p className="text-sm text-[var(--muted)]">Instagram DM ingestion via ManyChat webhooks.</p>
+            <h2 className="h-display text-2xl">ManyChat setup</h2>
+            <p className="text-sm text-[var(--muted)]">
+              Webhook URL, secret, and Instagram channel mapping.
+            </p>
           </div>
           <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
-            {status?.connected ? "Connected" : "Not connected"}
+            {status?.connected ? "Channel mapped" : "Channel not mapped"}
           </span>
         </div>
         <dl className="grid gap-3 text-sm md:grid-cols-2">
           <div>
             <dt className="text-[var(--muted)]">Webhook URL</dt>
-            <dd className="mt-1 break-all font-mono text-xs">{status?.webhookUrl || "—"}</dd>
+            <dd className="mt-1 break-all font-mono text-xs">{status?.webhookUrl || "â€”"}</dd>
             {status?.webhookUrl && (
               <button type="button" className="btn btn-secondary mt-2" onClick={() => copy(status.webhookUrl)}>
                 Copy URL
@@ -196,7 +364,7 @@ export default function IntegrationsPage() {
           </div>
           <div>
             <dt className="text-[var(--muted)]">Inbound alias</dt>
-            <dd className="mt-1 break-all font-mono text-xs">{status?.inboundAliasUrl || "—"}</dd>
+            <dd className="mt-1 break-all font-mono text-xs">{status?.inboundAliasUrl || "â€”"}</dd>
           </div>
           <div>
             <dt className="text-[var(--muted)]">Webhook secret</dt>
@@ -209,9 +377,17 @@ export default function IntegrationsPage() {
                 type="button"
                 className="btn btn-secondary"
                 disabled={busy}
-                onClick={() => runAction("regenerate_secret")}
+                onClick={() => void regenerateSecret()}
               >
                 Regenerate secret
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={Boolean(testingId)}
+                onClick={() => void testConnection("manychat")}
+              >
+                Test connection
               </button>
             </div>
             {oneTimeSecret && (
@@ -225,13 +401,15 @@ export default function IntegrationsPage() {
           </div>
           <div>
             <dt className="text-[var(--muted)]">API token</dt>
-            <dd className="mt-1">{status?.apiTokenMasked || (status?.apiTokenConfigured ? "Configured" : "Not configured")}</dd>
+            <dd className="mt-1">
+              {status?.apiTokenMasked || (status?.apiTokenConfigured ? "Configured" : "Not configured")}
+            </dd>
           </div>
           <div>
             <dt className="text-[var(--muted)]">Last inbound event</dt>
             <dd className="mt-1 text-xs">
               {status?.lastInboundEvent
-                ? `${status.lastInboundEvent.status} · ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
+                ? `${status.lastInboundEvent.status} Â· ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
                 : "None yet"}
             </dd>
           </div>
@@ -241,20 +419,21 @@ export default function IntegrationsPage() {
           </div>
         </dl>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => runAction("test_inbound")}>
-            Test inbound webhook
-          </button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => runAction("test_outbound")}>
-            Test outbound message
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void simulateInbound()}>
+            Simulate inbound DM
           </button>
         </div>
+        <p className="text-xs text-[var(--muted)]">
+          Simulate inbound runs inside the CRM only. Use Test connection above to verify the ManyChat
+          API token without messaging anyone on Instagram.
+        </p>
         {(status?.recentErrors?.length || 0) > 0 && (
           <div>
             <h3 className="font-semibold">Recent errors</h3>
             <ul className="mt-2 space-y-1 text-xs text-[var(--danger)]">
               {status?.recentErrors?.map((e) => (
                 <li key={e.id}>
-                  {e.status}: {e.error || "unknown"} · {new Date(e.receivedAt).toLocaleString()}
+                  {e.status}: {e.error || "unknown"} Â· {new Date(e.receivedAt).toLocaleString()}
                 </li>
               ))}
             </ul>
@@ -270,7 +449,9 @@ export default function IntegrationsPage() {
               <li>Pass <code>organisationId</code> or map <code>channel_id</code> to a messaging channel.</li>
               <li>Use the regenerated org secret or the environment secret.</li>
             </ol>
-            <p className="mt-3 text-xs text-[var(--muted)]">Required fields: {status.setup.requiredFields.join(", ")}</p>
+            <p className="mt-3 text-xs text-[var(--muted)]">
+              Required fields: {status.setup.requiredFields.join(", ")}
+            </p>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-xs">
               {JSON.stringify(status.setup.examplePayload, null, 2)}
             </pre>
@@ -279,12 +460,24 @@ export default function IntegrationsPage() {
       </section>
 
       <section className="surface space-y-4 p-5">
-        <h2 className="h-display text-2xl">Booking webhooks</h2>
-        <p className="text-sm text-[var(--muted)]">
-          Confirmed bookings arrive separately from booking-link offers. Use these endpoints with header{" "}
-          <code>x-booking-secret</code>.
-        </p>
-        <ul className="space-y-2 text-sm font-mono text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="h-display text-2xl">Booking webhooks</h2>
+            <p className="text-sm text-[var(--muted)]">
+              Confirmed bookings arrive separately from booking-link offers. Use these endpoints with
+              header <code>x-booking-secret</code>.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={Boolean(testingId)}
+            onClick={() => void testConnection("booking")}
+          >
+            Test connection
+          </button>
+        </div>
+        <ul className="space-y-2 font-mono text-xs">
           <li>/api/webhooks/booking</li>
           <li>/api/integrations/booking/calendly/webhook</li>
           <li>/api/integrations/booking/calcom/webhook</li>
@@ -298,15 +491,20 @@ export default function IntegrationsPage() {
             <li className="text-[var(--muted)]">No channels configured yet.</li>
           )}
           {(status?.channels || []).map((ch) => (
-            <li key={ch.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)]/50 py-2">
+            <li
+              key={ch.id}
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)]/50 py-2"
+            >
               <div>
                 <p className="font-medium">{ch.displayName}</p>
                 <p className="text-[var(--muted)]">
-                  {ch.provider} · {ch.externalId || "no external id"}
-                  {ch.instagramUsername ? ` · @${ch.instagramUsername}` : ""}
+                  {ch.provider} Â· {ch.externalId || "no external id"}
+                  {ch.instagramUsername ? ` Â· @${ch.instagramUsername}` : ""}
                 </p>
               </div>
-              <span className={ch.isActive ? "badge badge-success" : "badge"}>{ch.isActive ? "Active" : "Inactive"}</span>
+              <span className={ch.isActive ? "badge badge-success" : "badge"}>
+                {ch.isActive ? "Active" : "Inactive"}
+              </span>
             </li>
           ))}
         </ul>
