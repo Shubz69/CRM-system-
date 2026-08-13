@@ -1430,8 +1430,10 @@ model TrendSignal {
 model Asset {
   id                 String   @id @default(cuid())
   organisationId     String
-  /// Public or signed-access URL (never store file bytes in Postgres).
+  /// Opaque object locator from storage (may be a private Blob URL).
+  /// Never serve this to browsers as a public link — mint a signed/read-time URL instead.
   url                String
+  /// Canonical org-scoped object key used for reads and provenance (`org/{organisationId}/…`).
   storageKey         String
   prompt             String?  @db.Text
   derivedFromAssetId String?

@@ -17,7 +17,23 @@ export async function GET(_req: NextRequest, { params }: Params) {
       assetId: id,
     });
     if (!asset) return jsonError("Asset not found", 404);
-    return Response.json({ ok: true, asset });
+    return Response.json({
+      ok: true,
+      asset: {
+        id: asset.id,
+        url: asset.signedUrl,
+        signedUrl: asset.signedUrl,
+        mimeType: asset.mimeType,
+        kind: asset.kind,
+        prompt: asset.prompt,
+        costCents: asset.costCents,
+        provider: asset.provider,
+        model: asset.model,
+        derivedFromAssetId: asset.derivedFromAssetId,
+        storageKey: asset.storageKey,
+        expiresAt: asset.expiresAt,
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

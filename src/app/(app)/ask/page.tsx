@@ -55,7 +55,15 @@ function formatElapsed(ms: number): string {
 function imageUrlFromOutput(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
-  if (typeof obj.url === "string" && obj.url.startsWith("http")) return obj.url;
+  if (typeof obj.url === "string" && obj.url.trim()) {
+    // Absolute https, or org-scoped signed content path (/api/assets/…/content?…)
+    if (obj.url.startsWith("http") || obj.url.startsWith("/api/assets/")) {
+      return obj.url;
+    }
+  }
+  if (typeof obj.assetId === "string" && obj.assetId.trim()) {
+    return `/api/assets/${encodeURIComponent(obj.assetId)}/content`;
+  }
   return null;
 }
 

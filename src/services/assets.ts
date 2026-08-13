@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import {
   AssetStorageNotConfiguredError,
   buildAssetStorageKey,
+  buildOrgScopedAssetContentUrl,
+  fetchAssetObjectBytes,
   getSignedAssetUrl,
   putAssetObject,
 } from "@/services/asset-storage";
@@ -38,6 +40,7 @@ export async function createReferenceAsset(input: {
   const asset = await prisma.asset.create({
     data: {
       organisationId: input.organisationId,
+      // Opaque private locator — clients must use signedUrl / content route.
       url: put.url,
       storageKey: put.storageKey,
       mimeType: input.mimeType,
@@ -47,9 +50,14 @@ export async function createReferenceAsset(input: {
     },
   });
 
+  const signed = buildOrgScopedAssetContentUrl({
+    organisationId: input.organisationId,
+    assetId: asset.id,
+  });
+
   return {
     id: asset.id,
-    url: put.url,
+    url: signed.url,
     storageKey: put.storageKey,
     mimeType: asset.mimeType,
   };
@@ -98,7 +106,12 @@ export async function createGeneratedAsset(input: {
     },
   });
 
-  return { id: asset.id, url: put.url };
+  const signed = buildOrgScopedAssetContentUrl({
+    organisationId: input.organisationId,
+    assetId: asset.id,
+  });
+
+  return { id: asset.id, url: signed.url };
 }
 
 export async function getOrgAsset(input: {
@@ -106,6 +119,7 @@ export async function getOrgAsset(input: {
   assetId: string;
 }): Promise<{
   id: string;
+  /** Always a signed/read-time URL — never the raw private blob locator. */
   url: string;
   signedUrl: string;
   mimeType: string;
@@ -115,6 +129,8 @@ export async function getOrgAsset(input: {
   provider: string | null;
   model: string | null;
   derivedFromAssetId: string | null;
+  storageKey: string;
+  expiresAt: string;
 } | null> {
   const asset = await prisma.asset.findFirst({
     where: { id: input.assetId, organisationId: input.organisationId },
@@ -122,12 +138,13 @@ export async function getOrgAsset(input: {
   if (!asset) return null;
   const signed = await getSignedAssetUrl({
     organisationId: input.organisationId,
+    assetId: asset.id,
     storageKey: asset.storageKey,
     storedUrl: asset.url,
   });
   return {
     id: asset.id,
-    url: asset.url,
+    url: signed.url,
     signedUrl: signed.url,
     mimeType: asset.mimeType,
     kind: asset.kind,
@@ -136,6 +153,8 @@ export async function getOrgAsset(input: {
     provider: asset.provider,
     model: asset.model,
     derivedFromAssetId: asset.derivedFromAssetId,
+    storageKey: asset.storageKey,
+    expiresAt: signed.expiresAt.toISOString(),
   };
 }
 
@@ -147,17 +166,13 @@ export async function loadAssetBytes(input: {
     where: { id: input.assetId, organisationId: input.organisationId },
   });
   if (!asset) return null;
-  const signed = await getSignedAssetUrl({
+  const bytes = await fetchAssetObjectBytes({
     organisationId: input.organisationId,
     storageKey: asset.storageKey,
     storedUrl: asset.url,
   });
-  const res = await fetch(signed.url);
-  if (!res.ok) {
-    throw new Error(`Could not read asset bytes (${res.status})`);
-  }
   return {
-    bytes: Buffer.from(await res.arrayBuffer()),
+    bytes,
     mimeType: asset.mimeType,
     assetId: asset.id,
   };
