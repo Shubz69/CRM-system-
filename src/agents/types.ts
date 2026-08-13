@@ -38,4 +38,6 @@ export type Agent<TIn = unknown, TOut = unknown> = {
   execute: (input: TIn, ctx: AgentContext) => Promise<AgentExecuteResult<TOut>>;
 };
 
-export type AnyAgent = Agent<never, unknown> | Agent<any, any>;
+/** Heterogeneous registry entry — agents differ in In/Out; callers narrow via schemas. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional for mixed agent map
+export type AnyAgent = Agent<any, any>;

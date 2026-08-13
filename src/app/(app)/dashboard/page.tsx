@@ -55,17 +55,6 @@ function MetricCard({
   return <div className="surface p-4">{inner}</div>;
 }
 
-function EmptyHint({ title, ctaHref, ctaLabel }: { title: string; ctaHref: string; ctaLabel: string }) {
-  return (
-    <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)]/50 p-4 text-sm">
-      <p className="text-[var(--muted)]">{title}</p>
-      <Link href={ctaHref} className="btn btn-secondary mt-3">
-        {ctaLabel}
-      </Link>
-    </div>
-  );
-}
-
 export default function DashboardPage() {
   const { data: session } = useSession();
   const [data, setData] = useState<DashboardData | null>(null);

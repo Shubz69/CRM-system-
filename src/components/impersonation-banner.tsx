@@ -37,6 +37,8 @@ export function ImpersonationBanner() {
     sessionStorage.removeItem("dm_impersonation");
     setState(null);
     toast.success("Exited impersonation");
+    // Full reload so session/JWT and middleware drop impersonation.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = "/admin/workspaces";
   }
 

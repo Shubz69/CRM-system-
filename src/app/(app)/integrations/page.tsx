@@ -108,7 +108,7 @@ export default function IntegrationsPage() {
     setStatus(json);
   }, []);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const providersPromise = fetch("/api/health/providers");
@@ -123,11 +123,11 @@ export default function IntegrationsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadManyChat, loadReadiness]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   async function saveChannel(e: FormEvent) {
     e.preventDefault();

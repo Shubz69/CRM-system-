@@ -108,7 +108,8 @@ class NotConfiguredMessagingAdapter implements MessagingAdapter {
   constructor(name: string) {
     this.name = name;
   }
-  async sendMessage(_message: OutboundMessage): Promise<OutboundResult> {
+  async sendMessage(message: OutboundMessage): Promise<OutboundResult> {
+    void message;
     return {
       ok: false,
       provider: this.name,

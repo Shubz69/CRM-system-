@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: resolved.error }, { status: resolved.status });
     }
 
-    let organisationId = resolved.organisationId;
+    const organisationId = resolved.organisationId;
     let channelExternalId = resolved.channelExternalId;
 
     if (!channelExternalId) {

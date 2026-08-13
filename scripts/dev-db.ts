@@ -32,7 +32,6 @@ type EmbeddedPostgresConstructor = new (options: {
 async function loadEmbeddedPostgres(): Promise<EmbeddedPostgresConstructor> {
   const require = createRequire(import.meta.url);
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("embedded-postgres") as {
       default?: EmbeddedPostgresConstructor;
     } & EmbeddedPostgresConstructor;

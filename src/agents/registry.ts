@@ -1,4 +1,4 @@
-import type { Agent, AnyAgent } from "@/agents/types";
+import type { AnyAgent } from "@/agents/types";
 
 const agents = new Map<string, AnyAgent>();
 

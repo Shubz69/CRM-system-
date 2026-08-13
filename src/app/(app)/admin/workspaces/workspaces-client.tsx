@@ -101,6 +101,8 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
         body: JSON.stringify({ organisationId }),
       });
       toast.success(`Viewing workspace as ${json.impersonation.targetName}`);
+      // Full reload so session/JWT and middleware pick up the impersonation cookie.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = "/dashboard";
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Impersonation failed");
