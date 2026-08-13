@@ -440,11 +440,7 @@ async function testRedis(): Promise<{ ok: boolean; message: string }> {
 
   // Match the production worker connection options (src/workers/index.ts + followups.ts).
   let redis: IORedis | null = null;
-  let queue: {
-    close: () => Promise<void>;
-    waitUntilReady: () => Promise<unknown>;
-    client: Promise<{ ping: () => Promise<unknown> }>;
-  } | null = null;
+  let queue: { close: () => Promise<void> } | null = null;
   try {
     redis = new IORedis(explicitUrl, {
       maxRetriesPerRequest: null,
@@ -462,10 +458,11 @@ async function testRedis(): Promise<{ ok: boolean; message: string }> {
     }
 
     // Prove BullMQ can open the same queue the worker uses — not merely that the URL parses.
+    // Redis PING above already verified the client; waitUntilReady proves the queue wiring.
     const { Queue } = await import("bullmq");
-    queue = new Queue("follow-ups", { connection: redis });
-    await queue.waitUntilReady();
-    await queue.client.then((client) => client.ping());
+    const followUpsQueue = new Queue("follow-ups", { connection: redis });
+    queue = followUpsQueue;
+    await followUpsQueue.waitUntilReady();
 
     return {
       ok: true,
