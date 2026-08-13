@@ -14,6 +14,7 @@ No production database existed, so migration history was deleted and rebuilt:
 | `20260812170001_audit_scope_check_and_platform_org_triggers` | SQL-only: `AuditLog_scope_organisation_check` + platform-org delete triggers |
 | `20260813180000_agent_retention` | Per-org retention windows + AgentRun/Step/ToolCall retention markers |
 | `20260813180001_knowledge_pgvector` | `vector` extension, `KnowledgeChunk.embedding` + HNSW, denormalised `organisationId` |
+| `20260813190000_research_social_listening` | ResearchJob / ResearchSource / ResearchFinding / SocialPost / TrendSignal |
 
 Intent preserved from prior branches: AuditLog `ORG`/`PLATFORM` scope, ledger `organisationId` NOT NULL (except AuditLog), `ON DELETE RESTRICT` on AuditLog / UsageRecord / AiExecution / WebhookEvent / FailedJob, `Organisation.isPlatform`, OrganisationAiBudget, AgentRun / AgentStep / ToolCall, Lead `(organisationId, stageId, updatedAt)` and AgentStep `(organisationId, createdAt)` indexes. Redundant `ContactIdentifier(organisationId)` and `OrganisationAiBudget(organisationId)` indexes dropped (covered by unique constraints).
 

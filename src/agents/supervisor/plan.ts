@@ -25,7 +25,18 @@ function looksLikeEcho(request: string): boolean {
 }
 
 function looksLikeSummarise(request: string): boolean {
-  return /\b(summaris[e]|summarize|summary|tl;?dr|shorten|condense|brief)\b/i.test(
+  return /\b(summaris[e]|summarize|summary|tl;?dr|shorten|condense)\b/i.test(request);
+}
+
+function looksLikeSocialListening(request: string): boolean {
+  return /\b(social listening|what('?s| is) (trending|getting attention)|high[- ]engagement|hooks and formats|content themes|audience complaints)\b/i.test(
+    request,
+  );
+}
+
+function looksLikeResearch(request: string): boolean {
+  if (looksLikeSocialListening(request)) return false;
+  return /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
     request,
   );
 }
@@ -33,12 +44,21 @@ function looksLikeSummarise(request: string): boolean {
 function isTooVague(request: string): boolean {
   const trimmed = request.trim();
   if (trimmed.length < 8) return true;
-  if (AMBIGUOUS_MARKERS.some((re) => re.test(trimmed)) && !looksLikeEcho(trimmed) && !looksLikeSummarise(trimmed)) {
+  if (
+    AMBIGUOUS_MARKERS.some((re) => re.test(trimmed)) &&
+    !looksLikeEcho(trimmed) &&
+    !looksLikeSummarise(trimmed) &&
+    !looksLikeResearch(trimmed) &&
+    !looksLikeSocialListening(trimmed)
+  ) {
     return true;
   }
-  // Bare text with no clear intent and no "summarise/echo" verb → clarify
-  if (!looksLikeEcho(trimmed) && !looksLikeSummarise(trimmed)) {
-    // Long enough body might imply "summarise this"
+  if (
+    !looksLikeEcho(trimmed) &&
+    !looksLikeSummarise(trimmed) &&
+    !looksLikeResearch(trimmed) &&
+    !looksLikeSocialListening(trimmed)
+  ) {
     if (trimmed.split(/\s+/).length >= 40) return false;
     return true;
   }
@@ -54,11 +74,13 @@ function clarificationFor(request: string): Clarification {
       ? [
           "Summarise it into a short brief",
           "Repeat it back to me",
-          "Summarise it, then repeat the original",
+          "Research this topic with sources",
+          "Social listening on this topic",
         ]
       : [
           "Summarise some text I'll paste next",
-          "Repeat text back to me",
+          "Research a topic for me",
+          "Social listening on a niche",
           "I'm not sure — show me an example",
         ],
   };
@@ -102,9 +124,38 @@ function planSummariseThenEcho(text: string): PlanResult {
   };
 }
 
+function planResearchPipeline(topic: string): PlanResult {
+  const clean = topic.trim().slice(0, 2000);
+  return {
+    kind: "plan",
+    plan: {
+      steps: [
+        { agentName: "research", input: { topic: clean } },
+        { agentName: "analyst", input: { topic: clean } },
+        { agentName: "critic", input: {} },
+      ],
+      plainEnglishPlan: `I'll research “${clean.slice(0, 80)}”, write a sourced brief, then check every claim against the collected links.`,
+    },
+  };
+}
+
+function planSocialListeningPipeline(topic: string): PlanResult {
+  const clean = topic.trim().slice(0, 2000);
+  return {
+    kind: "plan",
+    plan: {
+      steps: [
+        { agentName: "social_listening", input: { topic: clean } },
+        { agentName: "analyst", input: { topic: clean } },
+        { agentName: "critic", input: {} },
+      ],
+      plainEnglishPlan: `I'll look for recent high-engagement posts about “${clean.slice(0, 80)}”, draft a brief from what people are saying, then verify every citation.`,
+    },
+  };
+}
+
 /**
- * Deterministic planner for the Echo + Summarise proof agents.
- * Prefer clarity over guessing — one clarifying question when intent is unclear.
+ * Deterministic planner. Prefer clarity over guessing — one clarifying question when unclear.
  */
 export function planAgentRunDeterministic(
   request: string,
@@ -116,7 +167,13 @@ export function planAgentRunDeterministic(
     return clarificationFor(trimmed);
   }
 
-  // Clarification answers (tapped options) map to plans.
+  if (/^research this topic with sources$/i.test(trimmed)) {
+    return clarificationFor("please paste the topic");
+  }
+  if (/^social listening on (this topic|a niche)$/i.test(trimmed)) {
+    return clarificationFor("please paste the topic or niche");
+  }
+
   if (/summarise it, then repeat/i.test(trimmed) || /summary.+then.+repeat/i.test(trimmed)) {
     const text = extractQuotedOrRemainder(trimmed, /summarise it, then repeat[^.]*\.?/i) || trimmed;
     return planSummariseThenEcho(text.length > 40 ? text : trimmed);
@@ -126,6 +183,24 @@ export function planAgentRunDeterministic(
   }
   if (/^repeat it back to me$/i.test(trimmed)) {
     return clarificationFor("please paste the text");
+  }
+
+  if (looksLikeSocialListening(trimmed)) {
+    const topic =
+      extractQuotedOrRemainder(
+        trimmed,
+        /^(please\s+)?(social listening|listen|what('?s| is) (trending|getting attention))( (on|for|about))?\s*/i,
+      ) || trimmed;
+    return planSocialListeningPipeline(topic);
+  }
+
+  if (looksLikeResearch(trimmed)) {
+    const topic =
+      extractQuotedOrRemainder(
+        trimmed,
+        /^(please\s+)?(research|look up|find out|investigate|compare|market scan)( (on|for|about))?\s*/i,
+      ) || trimmed;
+    return planResearchPipeline(topic);
   }
 
   if (looksLikeEcho(trimmed) && looksLikeSummarise(trimmed)) {
@@ -152,7 +227,6 @@ export function planAgentRunDeterministic(
     return planSummarise(text);
   }
 
-  // Long body with no verb → treat as summarise (sensible default).
   if (trimmed.split(/\s+/).length >= 40) {
     return planSummarise(trimmed);
   }
@@ -171,8 +245,16 @@ const llmPlanSchema = z.object({
   steps: z
     .array(
       z.object({
-        agentName: z.enum(["echo", "summarise"]),
-        text: z.string(),
+        agentName: z.enum([
+          "echo",
+          "summarise",
+          "research",
+          "social_listening",
+          "analyst",
+          "critic",
+        ]),
+        text: z.string().optional(),
+        topic: z.string().optional(),
         maxSentences: z.number().int().min(1).max(8).optional(),
       }),
     )
@@ -182,7 +264,6 @@ const llmPlanSchema = z.object({
 
 /**
  * Supervisor entry: natural-language request → plan or one clarification.
- * Uses deterministic rules first; optional LLM assist when `useLlm` is true.
  */
 export async function planAgentRun(
   request: string,
@@ -195,7 +276,6 @@ export async function planAgentRun(
     return deterministic;
   }
 
-  // Ambiguous + LLM assist: still only Echo/Summarise, still one question max.
   const agentCatalog = listAgents()
     .map((a) => `- ${a.name}: ${a.description}`)
     .join("\n");
@@ -203,7 +283,7 @@ export async function planAgentRun(
   const result = await completeStructuredSafe(llmPlanSchema, {
     organisationId: org.organisationId,
     tier: "cheap",
-    system: `You plan simple text jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. If unclear, ask ONE clarifying question with 2-4 short options.`,
+    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research or social listening, prefer the full pipeline (research|social_listening → analyst → critic). If unclear, ask ONE clarifying question with 2-4 short options.`,
     prompt: `Request:\n${request}\n\nOrganisation: ${org.organisationName || org.organisationId}`,
     skipSpendGate: false,
   });
@@ -226,14 +306,36 @@ export async function planAgentRun(
   }
 
   const steps = (data.steps || [])
-    .filter((s) => hasAgent(s.agentName) && s.text.trim().length > 0)
-    .map((s) => ({
-      agentName: s.agentName,
-      input:
-        s.agentName === "summarise"
-          ? { text: s.text, maxSentences: s.maxSentences ?? 3 }
-          : { text: s.text },
-    }));
+    .filter((s) => hasAgent(s.agentName))
+    .map((s) => {
+      if (s.agentName === "summarise") {
+        return {
+          agentName: s.agentName,
+          input: { text: s.text || s.topic || "", maxSentences: s.maxSentences ?? 3 },
+        };
+      }
+      if (s.agentName === "echo") {
+        return { agentName: s.agentName, input: { text: s.text || s.topic || "" } };
+      }
+      if (s.agentName === "research" || s.agentName === "social_listening") {
+        return { agentName: s.agentName, input: { topic: s.topic || s.text || request } };
+      }
+      if (s.agentName === "analyst") {
+        return { agentName: s.agentName, input: { topic: s.topic || s.text || request } };
+      }
+      return { agentName: s.agentName, input: {} };
+    })
+    .filter((s) => {
+      if (s.agentName === "echo" || s.agentName === "summarise") {
+        return typeof (s.input as { text?: string }).text === "string" &&
+          Boolean((s.input as { text: string }).text.trim());
+      }
+      if (s.agentName === "research" || s.agentName === "social_listening") {
+        return typeof (s.input as { topic?: string }).topic === "string" &&
+          Boolean((s.input as { topic: string }).topic.trim());
+      }
+      return true;
+    });
 
   if (!steps.length || !data.plainEnglishPlan?.trim()) {
     return deterministic;

@@ -1,16 +1,29 @@
 import { registerAgent, hasAgent, clearAgentRegistry as clearRegistry } from "@/agents/registry";
 import { echoAgent } from "@/agents/echo";
 import { summariseAgent } from "@/agents/summarise";
+import { researchAgent } from "@/agents/research";
+import { socialListeningAgent } from "@/agents/social-listening";
+import { analystAgent } from "@/agents/analyst";
+import { criticAgent } from "@/agents/critic";
 
 let bootstrapped = false;
 
-/** Register the built-in agents once. Only Echo and Summarise in Prompt 2B. */
+const BUILTIN = [
+  echoAgent,
+  summariseAgent,
+  researchAgent,
+  socialListeningAgent,
+  analystAgent,
+  criticAgent,
+] as const;
+
+/** Register built-in agents once. */
 export function ensureAgentsRegistered(): void {
-  if (bootstrapped && hasAgent(echoAgent.name) && hasAgent(summariseAgent.name)) {
-    return;
+  const allPresent = BUILTIN.every((a) => hasAgent(a.name));
+  if (bootstrapped && allPresent) return;
+  for (const agent of BUILTIN) {
+    if (!hasAgent(agent.name)) registerAgent(agent);
   }
-  if (!hasAgent(echoAgent.name)) registerAgent(echoAgent);
-  if (!hasAgent(summariseAgent.name)) registerAgent(summariseAgent);
   bootstrapped = true;
 }
 
@@ -20,7 +33,14 @@ export function resetAgentBootstrap(): void {
   bootstrapped = false;
 }
 
-export { echoAgent, summariseAgent };
+export {
+  echoAgent,
+  summariseAgent,
+  researchAgent,
+  socialListeningAgent,
+  analystAgent,
+  criticAgent,
+};
 export {
   getAgent,
   listAgents,

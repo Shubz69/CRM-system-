@@ -1,13 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetEnvCache } from "@/lib/env";
 
 describe("embedding provider factory", () => {
-  afterEach(() => {
+  beforeEach(() => {
     vi.resetModules();
+    resetEnvCache();
+  });
+
+  afterEach(() => {
     vi.unstubAllEnvs();
+    resetEnvCache();
+    vi.resetModules();
   });
 
   it("throws an explicit error when embedding provider is not configured", async () => {
     vi.stubEnv("EMBEDDING_PROVIDER", "none");
+    resetEnvCache();
     const { getEmbeddingProvider, EmbeddingNotConfiguredError, isEmbeddingConfigured } =
       await import("@/adapters/embeddings");
     expect(isEmbeddingConfigured()).toBe(false);
@@ -15,6 +23,8 @@ describe("embedding provider factory", () => {
   });
 
   it("rejects unknown vendors instead of inventing fake vectors", async () => {
+    vi.stubEnv("EMBEDDING_PROVIDER", "none");
+    resetEnvCache();
     const { getEmbeddingProvider, EmbeddingNotConfiguredError } = await import(
       "@/adapters/embeddings"
     );
@@ -26,6 +36,9 @@ describe("embedding provider factory", () => {
     vi.stubEnv("EMBEDDING_PROVIDER", "openai");
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("EMBEDDING_API_KEY", "");
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EMBEDDING_API_KEY;
+    resetEnvCache();
     const { getEmbeddingProvider, EmbeddingNotConfiguredError } = await import(
       "@/adapters/embeddings"
     );

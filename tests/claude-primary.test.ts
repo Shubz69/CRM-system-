@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAiProvider } from "@/adapters/ai";
 import {
   DEFAULT_TASK_TIERS,
@@ -8,13 +8,28 @@ import {
 } from "@/lib/ai-models";
 import { parseAiAnalysis, normalizeClaudeDecision } from "@/schemas/ai";
 import { selectModelForTask } from "@/services/ai-router";
+import { resetEnvCache } from "@/lib/env";
 
 describe("Claude is primary AI", () => {
-  it("defaults provider to anthropic", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetEnvCache();
+  });
+
+  it("defaults provider to anthropic when AI_PROVIDER is unset", () => {
+    vi.stubEnv("AI_PROVIDER", "");
+    delete process.env.AI_PROVIDER;
     expect(getAiProviderDefaults().provider).toBe("anthropic");
   });
 
-  it("resolves Claude model tiers from config", () => {
+  it("resolves Claude model tiers from built-in defaults when model env is unset", () => {
+    vi.stubEnv("ANTHROPIC_DEFAULT_MODEL", "");
+    vi.stubEnv("ANTHROPIC_ECONOMY_MODEL", "");
+    vi.stubEnv("ANTHROPIC_ADVANCED_MODEL", "");
+    delete process.env.ANTHROPIC_DEFAULT_MODEL;
+    delete process.env.ANTHROPIC_ECONOMY_MODEL;
+    delete process.env.ANTHROPIC_ADVANCED_MODEL;
+
     const models = getAiModels();
     expect(models.default).toContain("claude");
     expect(models.economy).toContain("claude");
@@ -40,13 +55,13 @@ describe("Claude is primary AI", () => {
   });
 
   it("operates without OPENAI_API_KEY", () => {
-    const prev = process.env.OPENAI_API_KEY;
+    vi.stubEnv("OPENAI_API_KEY", "");
     delete process.env.OPENAI_API_KEY;
-    // With anthropic key absent in test, mock is allowed
+    resetEnvCache();
+    // Explicit anthropic request — never silently routes to OpenAI.
     const provider = getAiProvider("anthropic");
     expect(["anthropic", "mock", "not_configured"]).toContain(provider.name);
     expect(provider.name).not.toBe("openai");
-    if (prev) process.env.OPENAI_API_KEY = prev;
   });
 
   it("parses Claude structured decision into rule-engine analysis", () => {

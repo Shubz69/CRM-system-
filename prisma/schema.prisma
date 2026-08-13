@@ -174,6 +174,11 @@ model Organisation {
   agentLimits          OrganisationAgentLimits?
   agentRetention       OrganisationAgentRetention?
   knowledgeChunks      KnowledgeChunk[]
+  researchJobs         ResearchJob[]
+  researchSources      ResearchSource[]
+  researchFindings     ResearchFinding[]
+  socialPosts          SocialPost[]
+  trendSignals         TrendSignal[]
 }
 
 model User {
@@ -1264,5 +1269,148 @@ model ToolCall {
   @@index([organisationId, agentStepId])
   @@index([organisationId, payloadClearedAt, createdAt])
   @@index([agentStepId, createdAt])
+}
+
+
+enum ResearchJobKind {
+  RESEARCH
+  SOCIAL_LISTENING
+}
+
+enum ResearchJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+/// Org-scoped research / social-listening run (paired with AgentRun when started from Ask).
+model ResearchJob {
+  id              String            @id @default(cuid())
+  organisationId  String
+  agentRunId      String?
+  kind            ResearchJobKind
+  topic           String            @db.Text
+  status          ResearchJobStatus @default(PENDING)
+  /// Expanded search queries used for this job.
+  queries         Json              @default("[]")
+  /// Analyst brief (claims must cite source URLs).
+  brief           Json?
+  contradictions  Json?
+  gaps            Json?
+  criticReport    Json?
+  totalCostCents  Int               @default(0)
+  error           String?           @db.Text
+  userFacingError String?           @db.Text
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  organisation Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  sources      ResearchSource[]
+  findings     ResearchFinding[]
+  socialPosts  SocialPost[]
+  trendSignals TrendSignal[]
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, status])
+  @@index([organisationId, kind, createdAt])
+  @@index([agentRunId])
+}
+
+model ResearchSource {
+  id             String    @id @default(cuid())
+  organisationId String
+  researchJobId  String
+  url            String
+  title          String?
+  platform       String
+  author         String?
+  publishedAt    DateTime?
+  content        String?   @db.Text
+  engagement     Json?
+  rawMetadata    Json      @default("{}")
+  queryUsed      String?
+  createdAt      DateTime  @default(now())
+
+  organisation Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob  ResearchJob       @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  findings     ResearchFinding[]
+  socialPosts  SocialPost[]
+
+  @@unique([researchJobId, url])
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, platform, createdAt])
+}
+
+/// A claim grounded in exactly one source URL (via ResearchSource).
+model ResearchFinding {
+  id                  String   @id @default(cuid())
+  organisationId      String
+  researchJobId       String
+  researchSourceId    String
+  claim               String   @db.Text
+  evidenceExcerpt     String?  @db.Text
+  confidence          Float?
+  verifiedByCritic    Boolean  @default(false)
+  flaggedUnsupported  Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob  ResearchJob   @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  source       ResearchSource @relation(fields: [researchSourceId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, researchSourceId])
+}
+
+model SocialPost {
+  id                  String    @id @default(cuid())
+  organisationId      String
+  researchJobId       String
+  researchSourceId    String?
+  platform            String
+  url                 String
+  title               String?
+  author              String?
+  publishedAt         DateTime?
+  content             String?   @db.Text
+  engagement          Json?
+  extractedThemes     Json      @default("[]")
+  extractedHooks      Json      @default("[]")
+  extractedFormats    Json      @default("[]")
+  extractedQuestions  Json      @default("[]")
+  extractedComplaints Json      @default("[]")
+  createdAt           DateTime  @default(now())
+
+  organisation Organisation   @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob  ResearchJob    @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  source       ResearchSource? @relation(fields: [researchSourceId], references: [id], onDelete: SetNull)
+
+  @@unique([researchJobId, url])
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, platform, createdAt])
+}
+
+model TrendSignal {
+  id             String   @id @default(cuid())
+  organisationId String
+  researchJobId  String
+  /// theme | hook | format | question | complaint
+  signalType     String
+  label          String
+  frequency      Int      @default(1)
+  evidenceUrls   String[] @default([])
+  summary        String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob  ResearchJob  @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, signalType, frequency])
 }
 

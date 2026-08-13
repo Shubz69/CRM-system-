@@ -49,7 +49,41 @@ function renderAnswer(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    if (typeof obj.summary === "string") return obj.summary;
+    if (typeof obj.summary === "string") {
+      const claims = Array.isArray(obj.claims)
+        ? obj.claims
+            .map((c) => {
+              if (!c || typeof c !== "object") return null;
+              const claim = (c as { claim?: unknown; sourceUrl?: unknown }).claim;
+              const url = (c as { claim?: unknown; sourceUrl?: unknown }).sourceUrl;
+              if (typeof claim !== "string") return null;
+              return typeof url === "string" ? `• ${claim} (${url})` : `• ${claim}`;
+            })
+            .filter(Boolean)
+            .join("\n")
+        : "";
+      const gaps = Array.isArray(obj.gaps)
+        ? obj.gaps.filter((g): g is string => typeof g === "string").map((g) => `• ${g}`).join("\n")
+        : "";
+      const unsupported = Array.isArray(obj.unsupportedClaims)
+        ? obj.unsupportedClaims
+            .map((c) => {
+              if (!c || typeof c !== "object") return null;
+              const claim = (c as { claim?: unknown }).claim;
+              return typeof claim === "string" ? `• ${claim}` : null;
+            })
+            .filter(Boolean)
+            .join("\n")
+        : "";
+      return [
+        obj.summary,
+        claims ? `\nClaims\n${claims}` : "",
+        gaps ? `\nGaps\n${gaps}` : "",
+        unsupported ? `\nNeeds a source\n${unsupported}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     if (typeof obj.echo === "string") return obj.echo;
     return JSON.stringify(value, null, 2);
   }

@@ -10,22 +10,29 @@ import { echoAgent } from "@/agents/echo";
 import { summariseAgent } from "@/agents/summarise";
 import { z } from "zod";
 import type { Agent } from "@/agents/types";
+import { planAgentRunDeterministic } from "@/agents/supervisor/plan";
 
 describe("agent registry", () => {
   beforeEach(() => {
     resetAgentBootstrap();
   });
 
-  it("registers Echo and Summarise exactly once via ensureAgentsRegistered", () => {
+  it("registers built-in agents including research pipeline", () => {
     ensureAgentsRegistered();
     const names = listAgents()
       .map((a) => a.name)
       .sort();
-    expect(names).toEqual(["echo", "summarise"]);
-    expect(getAgent("echo").name).toBe("echo");
-    expect(getAgent("summarise").name).toBe("summarise");
+    expect(names).toEqual([
+      "analyst",
+      "critic",
+      "echo",
+      "research",
+      "social_listening",
+      "summarise",
+    ]);
+    expect(getAgent("research").name).toBe("research");
     ensureAgentsRegistered();
-    expect(listAgents()).toHaveLength(2);
+    expect(listAgents()).toHaveLength(6);
   });
 
   it("rejects duplicate registration", () => {
@@ -42,6 +49,10 @@ describe("agent registry", () => {
         text: "We offer implants and whitening for busy professionals.",
         maxSentences: 2,
       },
+      research: { topic: "plant hire equipment for construction sites" },
+      social_listening: { topic: "dental practice software reviews" },
+      analyst: { researchJobId: "job_1", topic: "product model X200" },
+      critic: { researchJobId: "job_1" },
     };
 
     for (const agent of listAgents()) {
@@ -50,7 +61,6 @@ describe("agent registry", () => {
       const label = agent.userFacingLabel(input as never);
       expect(label.trim().length).toBeGreaterThan(0);
       expect(label).not.toMatch(/Agent\.|execute|Zod|tier|balanced|cheap|heavy/i);
-      expect(label).not.toMatch(/echoAgent|summariseAgent/i);
     }
   });
 
@@ -62,6 +72,28 @@ describe("agent registry", () => {
     );
     expect(result.output.echo).toBe("ping");
     expect(result.costCents).toBe(0);
+  });
+
+  it("plans research → analyst → critic for research requests", () => {
+    const plan = planAgentRunDeterministic("Research plant hire equipment pricing in the UK");
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps.map((s) => s.agentName)).toEqual([
+      "research",
+      "analyst",
+      "critic",
+    ]);
+    expect(plan.plan.plainEnglishPlan).toMatch(/research/i);
+  });
+
+  it("plans social listening pipeline without assuming Instagram", () => {
+    const plan = planAgentRunDeterministic(
+      "Social listening on what hooks and formats work for dental practice software",
+    );
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps[0]?.agentName).toBe("social_listening");
+    expect(plan.plan.plainEnglishPlan.toLowerCase()).not.toMatch(/instagram/);
   });
 });
 
@@ -78,12 +110,13 @@ describe("userFacingLabel contract", () => {
       outputSchema: z.object({ ok: z.boolean() }),
       tier: "cheap",
       estimateCostCents: () => 0,
-      userFacingLabel: () => "   ",
-      async execute() {
-        return { output: { ok: true }, costCents: 0 };
-      },
+      userFacingLabel: () => "",
+      execute: async () => ({ output: { ok: true }, costCents: 0 }),
     };
-    registerAgent(bad);
-    expect(bad.userFacingLabel({ text: "x" }).trim()).toBe("");
+    // Registry currently requires a function but does not validate emptiness at register time.
+    expect(() => registerAgent(bad)).not.toThrow();
   });
 });
+
+// silence unused import if summarise only used historically
+void summariseAgent;

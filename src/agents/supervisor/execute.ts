@@ -227,17 +227,32 @@ export async function executeAgentRun(input: {
       });
     }
 
-    // Forward prior output when the next step expects text and input is a placeholder.
+    // Forward prior output when the next step expects text / researchJobId.
     const rawInput = { ...step.input } as Record<string, unknown>;
-    if (
-      typeof rawInput.text !== "string" &&
-      previousOutput &&
-      typeof previousOutput === "object" &&
-      previousOutput !== null
-    ) {
+    if (previousOutput && typeof previousOutput === "object" && previousOutput !== null) {
       const prev = previousOutput as Record<string, unknown>;
-      if (typeof prev.summary === "string") rawInput.text = prev.summary;
-      else if (typeof prev.echo === "string") rawInput.text = prev.echo;
+      if (typeof rawInput.text !== "string") {
+        if (typeof prev.summary === "string") rawInput.text = prev.summary;
+        else if (typeof prev.echo === "string") rawInput.text = prev.echo;
+      }
+      if (typeof rawInput.researchJobId !== "string" && typeof prev.researchJobId === "string") {
+        rawInput.researchJobId = prev.researchJobId;
+      }
+      if (!rawInput.claims && Array.isArray(prev.claims)) {
+        rawInput.claims = prev.claims;
+      }
+      if (!rawInput.contradictions && Array.isArray(prev.contradictions)) {
+        rawInput.contradictions = prev.contradictions;
+      }
+      if (!rawInput.gaps && Array.isArray(prev.gaps)) {
+        rawInput.gaps = prev.gaps;
+      }
+      if (typeof rawInput.summary !== "string" && typeof prev.summary === "string") {
+        rawInput.summary = prev.summary;
+      }
+      if (typeof rawInput.topic !== "string" && typeof prev.topic === "string") {
+        rawInput.topic = prev.topic;
+      }
     }
 
     const parsedInput = agent.inputSchema.safeParse(rawInput);
