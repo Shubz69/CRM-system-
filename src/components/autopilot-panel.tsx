@@ -107,7 +107,7 @@ export function AutopilotPanel({ compact = false }: { compact?: boolean }) {
           <div className="flex items-center gap-2">
             <span
               className={`inline-block h-2.5 w-2.5 rounded-full ${
-                pulse ? "animate-pulse bg-teal-600" : "bg-[var(--muted)]"
+                pulse ? "animate-pulse bg-[var(--accent)]" : "bg-[var(--muted)]"
               }`}
             />
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">

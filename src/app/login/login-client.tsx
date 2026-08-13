@@ -38,18 +38,21 @@ export default function LoginClient() {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
       <div className="hero-plane absolute inset-0 animate-drift" aria-hidden />
-      <div className="relative grid w-full max-w-5xl gap-8 lg:grid-cols-2">
-        <div className="animate-rise hidden text-white lg:flex lg:flex-col lg:justify-center">
-          <p className="font-[family-name:var(--font-fraunces)] text-4xl leading-tight">
+      <div className="hero-desk-grid absolute inset-0" aria-hidden />
+      <div className="relative grid w-full max-w-5xl gap-10 lg:grid-cols-2 lg:items-center">
+        <div className="animate-rise hidden text-white lg:block">
+          <p className="font-[family-name:var(--font-fraunces)] text-5xl leading-tight">
             Agent Desk
           </p>
-          <p className="mt-4 max-w-md text-lg text-teal-50/80">
-            Sign in to research markets, listen for trends, qualify conversations, and run your
-            pipeline from one desk.
+          <p className="mt-5 max-w-md text-lg text-white/70">
+            Research markets, listen for trends, qualify conversations, and run your pipeline from
+            one desk.
           </p>
         </div>
-        <form onSubmit={onSubmit} className="animate-rise-delay surface p-8 shadow-xl shadow-black/10">
-          <p className="text-sm font-medium text-[var(--accent)] lg:hidden">Agent Desk</p>
+        <form onSubmit={onSubmit} className="animate-rise-delay surface p-8">
+          <p className="text-sm font-semibold tracking-wide text-[var(--accent)] lg:hidden">
+            Agent Desk
+          </p>
           <h1 className="h-display mt-1 text-3xl">Sign in</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
             Demo (local/DEMO_MODE): demo@dminelligence.local / demo1234
@@ -66,6 +69,7 @@ export default function LoginClient() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="username"
             />
           </label>
           <label className="mt-4 block text-sm font-medium">
@@ -76,6 +80,7 @@ export default function LoginClient() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
             />
           </label>
           {error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}

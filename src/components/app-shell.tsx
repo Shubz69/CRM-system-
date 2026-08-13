@@ -46,7 +46,7 @@ function NavLink({
         "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
         active
           ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
-          : "text-teal-50/70 hover:bg-white/8 hover:text-white",
+          : "text-white/65 hover:bg-white/8 hover:text-white",
         collapsed && "justify-center px-2",
       )}
     >
@@ -125,7 +125,7 @@ export function AppShell({
     orgs.find((o) => o.isActive)?.name ||
     session?.user?.organisationName ||
     orgName ||
-    "CRM";
+    "Workspace";
 
   const title = useMemo(() => pageTitleFromPath(pathname), [pathname]);
   const isHome = pathname === "/ask";
@@ -167,12 +167,12 @@ export function AppShell({
                 {collapsed ? "AD" : "Agent Desk"}
               </p>
               {!collapsed && (
-                <p className="mt-1 truncate text-xs text-teal-100/60">{activeName}</p>
+                <p className="mt-1 truncate text-xs text-white/50">{activeName}</p>
               )}
             </div>
             <button
               type="button"
-              className="hidden rounded-lg p-1.5 text-teal-100/70 hover:bg-white/10 hover:text-white lg:inline-flex"
+              className="hidden rounded-lg p-1.5 text-white/60 hover:bg-white/10 hover:text-white lg:inline-flex"
               onClick={() => setCollapsed((v) => !v)}
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
@@ -180,7 +180,7 @@ export function AppShell({
             </button>
           </div>
           {!collapsed && orgs.length > 1 && (
-            <label className="mt-3 block text-[11px] uppercase tracking-[0.14em] text-teal-100/50">
+            <label className="mt-3 block text-[11px] uppercase tracking-[0.14em] text-white/40">
               Workspace
               <select
                 className="mt-1.5 w-full rounded-xl border border-white/12 bg-white/8 px-2.5 py-2 text-sm text-white outline-none focus:border-[var(--accent)]"
@@ -212,7 +212,7 @@ export function AppShell({
           {!collapsed ? (
             <button
               type="button"
-              className="mt-4 flex w-full items-center justify-between rounded-xl px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/50 hover:bg-white/6 hover:text-teal-100/80"
+              className="mt-4 flex w-full items-center justify-between rounded-xl px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-white/40 hover:bg-white/6 hover:text-white/75"
               onClick={() => setToolsOpen((v) => !v)}
               aria-expanded={toolsOpen}
             >
@@ -240,7 +240,7 @@ export function AppShell({
           {isSuperAdmin && (
             <>
               {!collapsed && (
-                <p className="mt-5 px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/40">
+                <p className="mt-5 px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-white/35">
                   Admin
                 </p>
               )}
@@ -264,10 +264,10 @@ export function AppShell({
               <p className="truncate text-sm font-medium text-white">
                 {userName || session?.user?.name || "User"}
               </p>
-              <p className="truncate text-xs text-teal-100/55">{session?.user?.email}</p>
+              <p className="truncate text-xs text-white/45">{session?.user?.email}</p>
               <button
                 type="button"
-                className="mt-3 inline-flex items-center gap-2 text-xs text-teal-100/70 hover:text-white"
+                className="mt-3 inline-flex items-center gap-2 text-xs text-white/60 hover:text-white"
                 onClick={() => signOut({ callbackUrl: "/login" })}
               >
                 <LogOut size={14} /> Sign out
@@ -276,7 +276,7 @@ export function AppShell({
           ) : (
             <button
               type="button"
-              className="mx-auto flex rounded-lg p-2 text-teal-100/70 hover:bg-white/10 hover:text-white"
+              className="mx-auto flex rounded-lg p-2 text-white/60 hover:bg-white/10 hover:text-white"
               onClick={() => signOut({ callbackUrl: "/login" })}
               aria-label="Sign out"
             >

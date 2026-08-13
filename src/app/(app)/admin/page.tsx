@@ -154,7 +154,7 @@ export default async function AdminOverviewPage() {
         </div>
         <div className="surface px-4 py-2 text-sm">
           System status:{" "}
-          <span className={dbOk ? "text-teal-700" : "text-red-600"}>
+          <span className={dbOk ? "text-[var(--accent)]" : "text-red-600"}>
             {dbOk ? "Operational" : "Database error"}
           </span>
         </div>

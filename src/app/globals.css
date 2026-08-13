@@ -1,22 +1,23 @@
 @import "tailwindcss";
 
 :root {
-  /* Cool ocean ink — deliberately not cream/terracotta or purple */
-  --background: #e7eef3;
-  --foreground: #0b1f2a;
-  --surface: #f7fafc;
-  --surface-2: #d9e4ec;
-  --border: #b7c9d4;
-  --accent: #0a6f7a;
-  --accent-soft: #d2eef1;
-  --accent-2: #1f4e79;
+  /* Steel desk + amber copper — not cream/terracotta, not purple */
+  --background: #e8ebf0;
+  --foreground: #151821;
+  --surface: #f5f6f9;
+  --surface-2: #dce1e9;
+  --border: #c2c9d4;
+  --accent: #c46b1f;
+  --accent-soft: #f3e4d2;
+  --accent-2: #2c4060;
   --danger: #b42318;
-  --muted: #4f6572;
-  --sidebar: #0b1f2a;
-  --sidebar-text: #e6eef3;
-  --ring: #0a6f7a;
-  --hero-ink: #07151d;
-  --hero-mist: #9ec5c9;
+  --muted: #5a6474;
+  --sidebar: #151821;
+  --sidebar-text: #e8ebf0;
+  --ring: #c46b1f;
+  --hero-ink: #0e1118;
+  --hero-mist: #d4a574;
+  --hero-steel: #3d5578;
 }
 
 @theme inline {
@@ -32,7 +33,7 @@
   --color-muted: var(--muted);
   --color-sidebar: var(--sidebar);
   --color-sidebar-text: var(--sidebar-text);
-  --font-sans: var(--font-outfit);
+  --font-sans: var(--font-manrope);
   --font-display: var(--font-fraunces);
 }
 
@@ -42,11 +43,11 @@
 
 body {
   background:
-    radial-gradient(circle at 12% 8%, rgba(10, 111, 122, 0.14), transparent 34%),
-    radial-gradient(circle at 88% 0%, rgba(31, 78, 121, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef4f7 0%, var(--background) 48%, #dfe8ee 100%);
+    radial-gradient(circle at 10% 0%, rgba(196, 107, 31, 0.1), transparent 36%),
+    radial-gradient(circle at 92% 6%, rgba(44, 64, 96, 0.1), transparent 30%),
+    linear-gradient(180deg, #f0f2f6 0%, var(--background) 42%, #dfe3ea 100%);
   color: var(--foreground);
-  font-family: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
 }
 
 h1,
@@ -62,31 +63,27 @@ a {
 }
 
 .surface {
-  background: color-mix(in oklab, var(--surface) 94%, white);
-  border: 1px solid color-mix(in oklab, var(--border) 70%, white);
-  border-radius: 16px;
-  box-shadow:
-    0 1px 0 rgba(11, 31, 42, 0.03),
-    0 10px 28px -22px rgba(11, 31, 42, 0.35);
+  background: color-mix(in oklab, var(--surface) 96%, white);
+  border: 1px solid color-mix(in oklab, var(--border) 75%, white);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(21, 24, 33, 0.04);
 }
 
 .surface-interactive {
-  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
 
 .surface-interactive:hover {
   transform: translateY(-1px);
-  border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
-  box-shadow:
-    0 1px 0 rgba(11, 31, 42, 0.03),
-    0 16px 34px -24px rgba(10, 111, 122, 0.45);
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+  background: white;
 }
 
 .app-atmosphere {
   background:
-    radial-gradient(circle at 8% 0%, rgba(10, 111, 122, 0.12), transparent 32%),
-    radial-gradient(circle at 92% 8%, rgba(31, 78, 121, 0.1), transparent 30%),
-    radial-gradient(circle at 50% 100%, rgba(10, 111, 122, 0.06), transparent 40%);
+    radial-gradient(circle at 6% 0%, rgba(196, 107, 31, 0.09), transparent 34%),
+    radial-gradient(circle at 94% 4%, rgba(44, 64, 96, 0.08), transparent 32%),
+    radial-gradient(circle at 50% 100%, rgba(196, 107, 31, 0.05), transparent 42%);
 }
 
 .metric-value {
@@ -96,10 +93,10 @@ a {
 }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--surface-2) 25%, #eef4f7 50%, var(--surface-2) 75%);
+  background: linear-gradient(90deg, var(--surface-2) 25%, #eef1f5 50%, var(--surface-2) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.2s ease-in-out infinite;
-  border-radius: 12px;
+  border-radius: 10px;
 }
 
 @keyframes shimmer {
@@ -116,7 +113,7 @@ a {
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 0.65rem 1.1rem;
   font-size: 0.875rem;
   font-weight: 600;
@@ -134,7 +131,7 @@ a {
 }
 
 .btn-primary:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.05);
 }
 
 .btn-secondary {
@@ -153,8 +150,7 @@ a {
   width: 100%;
   border: 1px solid var(--border);
   background: white;
-  border-radius: 12px;
-  /* Separate axes so Tailwind pl-* / pr-* can override without fighting shorthand */
+  border-radius: 10px;
   padding-block: 0.7rem;
   padding-inline: 0.85rem;
   outline: none;
@@ -172,7 +168,7 @@ a {
 .badge {
   display: inline-flex;
   align-items: center;
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 0.15rem 0.55rem;
   font-size: 0.72rem;
   font-weight: 600;
@@ -182,7 +178,7 @@ a {
 
 .badge-success {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: color-mix(in oklab, var(--accent) 80%, #151821);
 }
 
 .badge-warn {
@@ -198,7 +194,7 @@ a {
 @keyframes rise-in {
   from {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
@@ -211,17 +207,17 @@ a {
     transform: translate3d(0, 0, 0) scale(1);
   }
   to {
-    transform: translate3d(2%, -1.5%, 0) scale(1.04);
+    transform: translate3d(1.5%, -1%, 0) scale(1.03);
   }
 }
 
-@keyframes pulse-soft {
+@keyframes desk-sheen {
   0%,
   100% {
-    opacity: 0.45;
+    opacity: 0.35;
   }
   50% {
-    opacity: 0.8;
+    opacity: 0.7;
   }
 }
 
@@ -238,22 +234,24 @@ a {
 }
 
 .animate-drift {
-  animation: drift 18s ease-in-out infinite alternate;
+  animation: drift 20s ease-in-out infinite alternate;
 }
 
 .animate-pulse-soft {
-  animation: pulse-soft 4.5s ease-in-out infinite;
+  animation: desk-sheen 5s ease-in-out infinite;
 }
 
 .hero-plane {
   background:
-    radial-gradient(ellipse at 30% 20%, rgba(158, 197, 201, 0.35), transparent 50%),
-    radial-gradient(ellipse at 70% 60%, rgba(10, 111, 122, 0.35), transparent 45%),
-    linear-gradient(145deg, #07151d 0%, #0b2a33 42%, #0a4f58 100%);
+    radial-gradient(ellipse at 18% 12%, rgba(212, 165, 116, 0.28), transparent 42%),
+    radial-gradient(ellipse at 82% 70%, rgba(61, 85, 120, 0.45), transparent 48%),
+    linear-gradient(152deg, #0e1118 0%, #1a2230 46%, #2c4060 100%);
 }
 
-.dm-thread {
-  background: linear-gradient(180deg, rgba(247, 250, 252, 0.12), rgba(247, 250, 252, 0.04));
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(8px);
+.hero-desk-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 70% 55%, black 20%, transparent 72%);
 }

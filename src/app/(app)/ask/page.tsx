@@ -404,7 +404,7 @@ export default function AskPage() {
           onChange={(e) => setRequest(e.target.value)}
           rows={4}
           placeholder="Research plant hire pricing in the UK…"
-          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-base outline-none focus:border-[var(--accent)]"
+          className="input min-h-[7rem] resize-y text-base"
           disabled={submitting}
         />
 
@@ -425,7 +425,7 @@ export default function AskPage() {
               type="button"
               disabled={uploading || submitting}
               onClick={() => fileRef.current?.click()}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-50"
+              className="btn btn-secondary"
             >
               {uploading ? "Uploading…" : "Upload reference image"}
             </button>
