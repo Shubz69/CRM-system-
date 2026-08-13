@@ -48,7 +48,7 @@ export async function middleware(request: NextRequest) {
       token.role === "SUPER_ADMIN" ||
       token.role === "OWNER";
     if (!isAdmin) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
+      return NextResponse.redirect(new URL("/ask", request.url));
     }
   }
 
@@ -57,6 +57,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/ask/:path*",
     "/dashboard/:path*",
     "/inbox/:path*",
     "/pipeline/:path*",
@@ -73,5 +74,8 @@ export const config = {
     "/integrations/:path*",
     "/admin/:path*",
     "/account/:path*",
+    "/attention/:path*",
+    "/autopilot/:path*",
+    "/setup/:path*",
   ],
 };

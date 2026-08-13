@@ -14,7 +14,7 @@ export default async function HomePage() {
   }
 
   if (signedIn) {
-    redirect("/dashboard");
+    redirect("/ask");
   }
 
   const missing = getMissingRuntimeConfig();

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 type Insight = {
   type: string;
@@ -138,7 +139,14 @@ export default function InsightsPage() {
         <h2 className="h-display text-3xl">Content ideas</h2>
         <p className="text-sm text-[var(--muted)]">AI-generated suggestions grounded in conversation evidence.</p>
         <div className="grid gap-3 md:grid-cols-2">
-          {contentIdeas.length === 0 && <div className="surface p-4 text-sm text-[var(--muted)]">No content ideas yet.</div>}
+          {contentIdeas.length === 0 && (
+            <EmptyState
+              title="No content ideas yet"
+              body="Ideas appear after conversations reveal questions and objections. Handle some DMs first, or research a topic on Home."
+              actionHref="/ask"
+              actionLabel="Go to Home"
+            />
+          )}
           {contentIdeas.map((idea, idx) => (
             <article key={`c-${idx}`} className="surface p-4">
               <div className="flex flex-wrap gap-2">
@@ -156,7 +164,14 @@ export default function InsightsPage() {
       <section className="space-y-3">
         <h2 className="h-display text-3xl">Advertisement ideas</h2>
         <div className="grid gap-3 md:grid-cols-2">
-          {adIdeas.length === 0 && <div className="surface p-4 text-sm text-[var(--muted)]">No ad ideas yet.</div>}
+          {adIdeas.length === 0 && (
+            <EmptyState
+              title="No ad ideas yet"
+              body="Ad angles are built from real buyer language in your inbox. Once conversations flow, suggestions show up here."
+              actionHref="/inbox"
+              actionLabel="Open Inbox"
+            />
+          )}
           {adIdeas.map((idea, idx) => (
             <article key={`a-${idx}`} className="surface p-4">
               <div className="flex flex-wrap gap-2">

@@ -46,8 +46,8 @@ export default function NeedsAttentionPage() {
           <p className="mt-2 text-sm text-[var(--muted)]">
             Your AI operator has no exceptions waiting. Check the dashboard for activity.
           </p>
-          <Link href="/dashboard" className="btn btn-primary mt-4">
-            Back to dashboard
+          <Link href="/ask" className="btn btn-primary mt-4">
+            Go to Home
           </Link>
         </div>
       ) : (

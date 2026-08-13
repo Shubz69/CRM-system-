@@ -4,6 +4,10 @@ import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { ensureAgentsRegistered } from "@/agents";
 import { logger } from "@/lib/logger";
 import { STEPS_CLEARED_MESSAGE } from "@/services/agent-retention";
+import {
+  getOrganisationAiBudget,
+  getOrganisationPeriodSpendCents,
+} from "@/services/ai-spend-gate";
 
 export type AgentRunProgress = {
   runId: string;
@@ -18,6 +22,8 @@ export type AgentRunProgress = {
   referenceAssetId: string | null;
   /** Plain cost estimate before generation confirm. */
   pendingCostNote: string | null;
+  /** Remaining monthly AI allowance in plain English — never token counts. */
+  remainingAllowanceNote: string | null;
   currentStep: {
     position: number;
     userFacingLabel: string;
@@ -56,11 +62,44 @@ function parseOptions(value: unknown): string[] | null {
   return value.filter((v): v is string => typeof v === "string");
 }
 
-function nextActionsFor(status: AgentRun["status"]): string[] {
+function nextActionsFor(
+  status: AgentRun["status"],
+  finalOutput: unknown,
+): string[] {
+  const looksLikeResearch =
+    finalOutput &&
+    typeof finalOutput === "object" &&
+    (Array.isArray((finalOutput as { claims?: unknown }).claims) ||
+      typeof (finalOutput as { researchJobId?: unknown }).researchJobId === "string");
+  const looksLikeImage =
+    finalOutput &&
+    typeof finalOutput === "object" &&
+    typeof (finalOutput as { url?: unknown }).url === "string" &&
+    typeof (finalOutput as { assetId?: unknown }).assetId === "string";
+
   switch (status) {
     case "COMPLETED":
-      return ["Ask something else", "Run this again", "Copy the answer"];
+      if (looksLikeResearch) {
+        return [
+          "Turn this into content",
+          "Save to Knowledge",
+          "Run this again next month",
+          "Ask something else",
+        ];
+      }
+      if (looksLikeImage) {
+        return ["Make another image", "Ask something else"];
+      }
+      return ["Ask something else", "Run this again"];
     case "PARTIAL":
+      if (looksLikeResearch) {
+        return [
+          "Turn this into content",
+          "Save to Knowledge",
+          "Try again",
+          "Ask something else",
+        ];
+      }
       return ["Try again", "Ask something else"];
     case "FAILED":
       return ["Try again", "Rephrase your request"];
@@ -91,6 +130,13 @@ function pendingCostNote(cents: number | null | undefined): string | null {
   if (cents <= 0) return "No generation charge estimated.";
   if (cents < 100) return `Estimated generation cost: about ${cents}¢.`;
   return `Estimated generation cost: about $${(cents / 100).toFixed(2)}.`;
+}
+
+function remainingAllowanceNote(spentCents: number, capCents: number | null): string | null {
+  if (capCents == null) return null;
+  const left = Math.max(0, capCents - spentCents);
+  if (left < 100) return `About ${left}¢ left in this month's AI allowance.`;
+  return `About $${(left / 100).toFixed(2)} left in this month's AI allowance.`;
 }
 
 /**
@@ -354,6 +400,13 @@ export async function getAgentRunProgress(input: {
     : [...run.steps].reverse().find((s) => s.status === "COMPLETED" && s.output != null)?.output ??
       null;
 
+  const displayOutput = run.finalOutput ?? lastCompletedOutput;
+  const budget = await getOrganisationAiBudget(input.organisationId);
+  const spentCents =
+    budget?.monthlyCapCents != null
+      ? await getOrganisationPeriodSpendCents(input.organisationId)
+      : 0;
+
   return {
     runId: run.id,
     status: run.status,
@@ -365,6 +418,10 @@ export async function getAgentRunProgress(input: {
     pendingCostEstimateCents: run.pendingCostEstimateCents,
     referenceAssetId: run.referenceAssetId,
     pendingCostNote: pendingCostNote(run.pendingCostEstimateCents),
+    remainingAllowanceNote: remainingAllowanceNote(
+      spentCents,
+      budget?.monthlyCapCents ?? null,
+    ),
     currentStep: current
       ? {
           position: current.position,
@@ -392,6 +449,6 @@ export async function getAgentRunProgress(input: {
       costCents: s.costCents,
       detailRetention: s.detailRetention,
     })),
-    nextActions: nextActionsFor(run.status),
+    nextActions: nextActionsFor(run.status, displayOutput),
   };
 }

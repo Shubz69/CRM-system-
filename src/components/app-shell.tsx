@@ -4,10 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
-import { Bell, ChevronsLeft, ChevronsRight, LogOut, Search } from "lucide-react";
+import { Bell, ChevronsLeft, ChevronsRight, ChevronDown, LogOut, Search } from "lucide-react";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { openCommandPalette } from "@/components/command-palette";
-import { ADMIN_NAV, WORKSPACE_NAV, isNavActive, pageTitleFromPath } from "@/lib/navigation";
+import {
+  ADMIN_NAV,
+  PRIMARY_NAV,
+  SECONDARY_NAV,
+  isNavActive,
+  pageTitleFromPath,
+} from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -17,6 +23,38 @@ type OrgOption = {
   role: string;
   isActive: boolean;
 };
+
+function NavLink({
+  item,
+  pathname,
+  collapsed,
+  onNavigate,
+}: {
+  item: (typeof PRIMARY_NAV)[number];
+  pathname: string;
+  collapsed: boolean;
+  onNavigate: () => void;
+}) {
+  const active = isNavActive(pathname, item);
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      title={collapsed ? item.label : undefined}
+      onClick={onNavigate}
+      className={cn(
+        "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
+        active
+          ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
+          : "text-teal-50/70 hover:bg-white/8 hover:text-white",
+        collapsed && "justify-center px-2",
+      )}
+    >
+      <Icon size={17} className={cn(active ? "text-[var(--hero-mist)]" : "")} />
+      {!collapsed && <span>{item.label}</span>}
+    </Link>
+  );
+}
 
 export function AppShell({
   children,
@@ -37,6 +75,9 @@ export function AppShell({
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(() =>
+    SECONDARY_NAV.some((item) => isNavActive(pathname, item)),
+  );
 
   const locked =
     navigationLocked || Boolean(session?.user?.mustChangePassword);
@@ -56,6 +97,12 @@ export function AppShell({
       })
       .catch(() => undefined);
   }, [session?.user?.organisationId, locked]);
+
+  useEffect(() => {
+    if (SECONDARY_NAV.some((item) => isNavActive(pathname, item))) {
+      setToolsOpen(true);
+    }
+  }, [pathname]);
 
   async function switchOrg(organisationId: string) {
     try {
@@ -81,6 +128,7 @@ export function AppShell({
     "CRM";
 
   const title = useMemo(() => pageTitleFromPath(pathname), [pathname]);
+  const isHome = pathname === "/ask";
 
   if (locked) {
     return (
@@ -151,64 +199,61 @@ export function AppShell({
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {!collapsed && (
-            <p className="px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/40">
-              Workspace
-            </p>
+          {PRIMARY_NAV.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              collapsed={collapsed}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          ))}
+
+          {!collapsed ? (
+            <button
+              type="button"
+              className="mt-4 flex w-full items-center justify-between rounded-xl px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/50 hover:bg-white/6 hover:text-teal-100/80"
+              onClick={() => setToolsOpen((v) => !v)}
+              aria-expanded={toolsOpen}
+            >
+              <span>More tools</span>
+              <ChevronDown
+                size={14}
+                className={cn("transition-transform", toolsOpen && "rotate-180")}
+              />
+            </button>
+          ) : (
+            <div className="my-3 border-t border-white/10" />
           )}
-          {WORKSPACE_NAV.map((item) => {
-            const active = isNavActive(pathname, item);
-            const Icon = item.icon;
-            return (
-              <Link
+
+          {(collapsed || toolsOpen) &&
+            SECONDARY_NAV.map((item) => (
+              <NavLink
                 key={item.href}
-                href={item.href}
-                title={collapsed ? item.label : undefined}
-                onClick={() => setMobileOpen(false)}
-                className={cn(
-                  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
-                  active
-                    ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
-                    : "text-teal-50/70 hover:bg-white/8 hover:text-white",
-                  collapsed && "justify-center px-2",
-                )}
-              >
-                <Icon size={17} className={cn(active ? "text-[var(--hero-mist)]" : "")} />
-                {!collapsed && <span>{item.label}</span>}
-              </Link>
-            );
-          })}
+                item={item}
+                pathname={pathname}
+                collapsed={collapsed}
+                onNavigate={() => setMobileOpen(false)}
+              />
+            ))}
 
           {isSuperAdmin && (
             <>
               {!collapsed && (
                 <p className="mt-5 px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-teal-200/40">
-                  Super Admin
+                  Admin
                 </p>
               )}
               {collapsed && <div className="my-3 border-t border-white/10" />}
-              {ADMIN_NAV.map((item) => {
-                const active = isNavActive(pathname, item);
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    title={collapsed ? item.label : undefined}
-                    onClick={() => setMobileOpen(false)}
-                    className={cn(
-                      "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
-                      active
-                        ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
-                        : "text-teal-50/70 hover:bg-white/8 hover:text-white",
-                      collapsed && "justify-center px-2",
-                    )}
-                  >
-                    <Icon size={17} />
-                    {!collapsed && <span>{item.label}</span>}
-                  </Link>
-                );
-              })}
+              {ADMIN_NAV.map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  collapsed={collapsed}
+                  onNavigate={() => setMobileOpen(false)}
+                />
+              ))}
             </>
           )}
         </nav>
@@ -265,21 +310,18 @@ export function AppShell({
               <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
                 {activeName}
               </p>
-              <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
-                {title}
-              </h1>
+              {!isHome && (
+                <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
+                  {title}
+                </h1>
+              )}
+              {isHome && (
+                <p className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
+                  What do you need?
+                </p>
+              )}
             </div>
             <div className="hidden items-center gap-2 md:flex">
-              <Link
-                href="/autopilot"
-                className="badge border border-teal-700/20 bg-teal-50 text-teal-900"
-                title="Autopilot control centre"
-              >
-                Autopilot
-              </Link>
-              <Link href="/attention" className="badge badge-warn" title="Needs Attention queue">
-                Attention
-              </Link>
               <button
                 type="button"
                 className="relative w-56 text-left"

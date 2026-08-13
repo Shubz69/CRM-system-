@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 export default function ReportsPage() {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
@@ -126,7 +127,16 @@ export default function ReportsPage() {
               </button>
             </li>
           ))}
-          {!reports.length && <li className="text-[var(--muted)]">No reports generated yet.</li>}
+          {!reports.length && (
+            <li>
+              <EmptyState
+                title="No reports yet"
+                body="Generate a daily or weekly snapshot from your live conversations. If you have not connected Instagram, start there first — reports need real activity."
+                actionHref="/settings/go-live"
+                actionLabel="Finish setup"
+              />
+            </li>
+          )}
         </ul>
       </section>
     </div>

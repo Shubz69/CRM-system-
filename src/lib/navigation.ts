@@ -18,7 +18,8 @@ import {
   ScrollText,
   Building2,
   Cpu,
-  MessageCircleQuestion,
+  Home,
+  Plug,
 } from "lucide-react";
 
 export type NavItem = {
@@ -28,26 +29,37 @@ export type NavItem = {
   match?: "exact" | "prefix";
 };
 
-export const WORKSPACE_NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
+/** Always visible — the product home for a business owner. */
+export const PRIMARY_NAV: NavItem[] = [
+  { href: "/ask", label: "Home", icon: Home, match: "exact" },
+];
+
+/**
+ * Power-user tools — kept, but behind secondary navigation so new users
+ * are not drowning in setup screens on day one.
+ */
+export const SECONDARY_NAV: NavItem[] = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-  { href: "/ask", label: "Ask", icon: MessageCircleQuestion },
+  { href: "/insights", label: "Insights", icon: Sparkles },
+  { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/integrations", label: "Integrations", icon: Plug },
+  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  { href: "/contacts", label: "Contacts", icon: Users },
+  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
   { href: "/agent", label: "AI Agent", icon: Bot },
   { href: "/setup", label: "Setup Assistant", icon: ListChecks },
   { href: "/autopilot", label: "Autopilot", icon: Sparkles },
-  { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },
   { href: "/qualification", label: "Qualification", icon: ListChecks },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
-  { href: "/integrations", label: "Integrations", icon: Settings },
   { href: "/simulator", label: "Simulator", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
 ];
+
+/** @deprecated Prefer PRIMARY_NAV + SECONDARY_NAV — kept for command palette. */
+export const WORKSPACE_NAV: NavItem[] = [...PRIMARY_NAV, ...SECONDARY_NAV];
 
 export const ADMIN_NAV: NavItem[] = [
   { href: "/admin", label: "Platform Overview", icon: Shield, match: "exact" },
@@ -61,6 +73,54 @@ export const ADMIN_NAV: NavItem[] = [
   { href: "/admin/settings", label: "Global Settings", icon: Settings },
 ];
 
+export type OutcomeCard = {
+  id: string;
+  title: string;
+  hint: string;
+  /** Prefill for Ask, or href for a first useful action elsewhere. */
+  prefill?: string;
+  href?: string;
+};
+
+export const HOME_OUTCOME_CARDS: OutcomeCard[] = [
+  {
+    id: "dms",
+    title: "Handle my DMs",
+    hint: "Connect Instagram and let AI qualify conversations",
+    href: "/settings/go-live",
+  },
+  {
+    id: "research",
+    title: "Research a topic",
+    hint: "Sourced brief with citations you can trust",
+    prefill: "Research ",
+  },
+  {
+    id: "trending",
+    title: "What's trending",
+    hint: "Hooks, themes, and complaints from recent posts",
+    prefill: "Social listening on ",
+  },
+  {
+    id: "image",
+    title: "Make an image",
+    hint: "Upload a reference, edit the prompt, then generate",
+    prefill: "Make something like this reference: ",
+  },
+  {
+    id: "content",
+    title: "Write content",
+    hint: "Posts, emails, or scripts in your voice",
+    prefill: "Write content about ",
+  },
+  {
+    id: "reports",
+    title: "Show me reports",
+    hint: "Daily and weekly results from live data",
+    href: "/reports",
+  },
+];
+
 export function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.match === "exact") return pathname === item.href;
   if (pathname === item.href) return true;
@@ -68,7 +128,7 @@ export function isNavActive(pathname: string, item: NavItem): boolean {
 }
 
 export function pageTitleFromPath(pathname: string): string {
-  const all = [...WORKSPACE_NAV, ...ADMIN_NAV];
+  const all = [...PRIMARY_NAV, ...SECONDARY_NAV, ...ADMIN_NAV];
   const exact = all.find((i) => i.href === pathname);
   if (exact) return exact.label;
   const nested = all

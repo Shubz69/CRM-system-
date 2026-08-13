@@ -17,7 +17,7 @@ export default function LoginClient() {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+    const callbackUrl = searchParams.get("callbackUrl") || "/ask";
     const result = await signIn("credentials", {
       email: email.trim().toLowerCase(),
       password,
@@ -31,7 +31,7 @@ export default function LoginClient() {
       );
       return;
     }
-    router.push(callbackUrl.startsWith("/") ? callbackUrl : "/dashboard");
+    router.push(callbackUrl.startsWith("/") ? callbackUrl : "/ask");
     router.refresh();
   }
 

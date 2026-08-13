@@ -172,21 +172,20 @@ export default function DashboardPage() {
       {empty && (
         <div className="surface p-5">
           <p className="font-[family-name:var(--font-fraunces)] text-2xl">
-            Your AI operator is ready to begin.
+            Start from Home — tell us what you need
           </p>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Complete setup, connect Instagram, then turn Autopilot on.
+            Research a topic, connect Instagram for DMs, or generate a report. You do not need to
+            configure models or agents first.
           </p>
-          <div className="mt-4 flex flex-wrap gap-2 text-sm">
-            <span className="badge">Business Knowledge ○</span>
-            <span className="badge">AI Agent ○</span>
-            <span className="badge">Instagram ○</span>
-            <span className="badge">Calendar ○</span>
-            <span className="badge">Autopilot ○</span>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/ask" className="btn btn-primary">
+              Go to Home
+            </Link>
+            <Link href="/settings/go-live" className="btn btn-secondary">
+              Connect Instagram
+            </Link>
           </div>
-          <Link href="/settings/go-live" className="btn btn-primary mt-4">
-            Continue Setup
-          </Link>
         </div>
       )}
 

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 type Rule = {
   id: string;
@@ -80,7 +81,14 @@ export default function AutomationsPage() {
             </p>
           </article>
         ))}
-        {rules.length === 0 && <div className="surface p-6 text-[var(--muted)]">No rules yet.</div>}
+        {rules.length === 0 && (
+          <EmptyState
+            title="No automations yet"
+            body="Automations move leads and send follow-ups without you watching the inbox. Start with Autopilot if you just want DMs handled."
+            actionHref="/autopilot"
+            actionLabel="Open Autopilot"
+          />
+        )}
       </div>
     </div>
   );

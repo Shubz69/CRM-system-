@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 type Contact = {
   id: string;
@@ -81,8 +82,13 @@ export default function ContactsPage() {
           <tbody>
             {contacts.length === 0 && (
               <tr>
-                <td className="px-4 py-6 text-[var(--muted)]" colSpan={6}>
-                  No contacts yet.
+                <td className="px-4 py-6" colSpan={6}>
+                  <EmptyState
+                    title="No contacts yet"
+                    body="People appear here after they message you on Instagram. Connect your account to start collecting leads."
+                    actionHref="/settings/go-live"
+                    actionLabel="Connect Instagram"
+                  />
                 </td>
               </tr>
             )}

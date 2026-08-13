@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 type Doc = {
   id: string;
@@ -183,6 +184,14 @@ export default function KnowledgePage() {
       </section>
 
       <div className="grid gap-3">
+        {docs.length === 0 && (
+          <EmptyState
+            title="Teach the AI what your business knows"
+            body="Add FAQs, pricing, and tone of voice so replies stay accurate. Or research a topic on Home and save the brief here as a draft."
+            actionHref="/ask"
+            actionLabel="Research something first"
+          />
+        )}
         {docs.map((doc) => (
           <article key={doc.id} className="surface p-5">
             <div className="flex flex-wrap items-center gap-2">

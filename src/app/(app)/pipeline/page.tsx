@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 
 type Lead = {
   id: string;
@@ -75,6 +76,8 @@ export default function PipelinePage() {
 
   if (loading) return <div className="surface p-6">Loading pipeline…</div>;
 
+  const totalLeads = stages.reduce((n, s) => n + s.leads.length, 0);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -94,6 +97,15 @@ export default function PipelinePage() {
           </button>
         </div>
       </div>
+
+      {totalLeads === 0 && (
+        <EmptyState
+          title="Your pipeline is ready — it just needs conversations"
+          body="Leads show up here when people message you and the AI qualifies them. Connect Instagram or send a test DM to see the first card appear."
+          actionHref="/ask"
+          actionLabel="Go to Home"
+        />
+      )}
 
       {view === "kanban" ? (
         <div className="flex gap-3 overflow-x-auto pb-4">

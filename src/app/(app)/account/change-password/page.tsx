@@ -39,7 +39,7 @@ export default function ChangePasswordPage() {
       toast.success("Password updated — opening dashboard");
       // Hard navigation ensures middleware reads the refreshed session cookie.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- must force full reload for JWT/middleware
-      window.location.assign("/dashboard");
+      window.location.assign("/ask");
     } catch {
       toast.error("Could not update password");
     } finally {

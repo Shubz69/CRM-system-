@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { HOME_OUTCOME_CARDS } from "@/lib/navigation";
 
 type Progress = {
   runId: string;
@@ -13,6 +16,7 @@ type Progress = {
   pendingPrompt: string | null;
   pendingCostEstimateCents: number | null;
   pendingCostNote: string | null;
+  remainingAllowanceNote: string | null;
   referenceAssetId: string | null;
   currentStep: {
     position: number;
@@ -55,56 +59,71 @@ function imageUrlFromOutput(value: unknown): string | null {
   return null;
 }
 
-function renderAnswer(value: unknown): string {
+type SourceItem = { label: string; url?: string };
+
+function extractSources(value: unknown): SourceItem[] {
+  if (!value || typeof value !== "object") return [];
+  const obj = value as Record<string, unknown>;
+  const out: SourceItem[] = [];
+  if (Array.isArray(obj.claims)) {
+    for (const c of obj.claims) {
+      if (!c || typeof c !== "object") continue;
+      const claim = (c as { claim?: unknown }).claim;
+      const url = (c as { sourceUrl?: unknown }).sourceUrl;
+      if (typeof claim === "string") {
+        out.push({
+          label: claim,
+          url: typeof url === "string" ? url : undefined,
+        });
+      }
+    }
+  }
+  if (Array.isArray(obj.sources)) {
+    for (const s of obj.sources) {
+      if (!s || typeof s !== "object") continue;
+      const title = (s as { title?: unknown }).title;
+      const url = (s as { url?: unknown }).url;
+      if (typeof url === "string") {
+        out.push({
+          label: typeof title === "string" ? title : url,
+          url,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function renderAnswerBody(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    if (typeof obj.summary === "string" && typeof obj.url === "string") {
-      return obj.summary;
-    }
-    if (typeof obj.summary === "string") {
-      const claims = Array.isArray(obj.claims)
-        ? obj.claims
-            .map((c) => {
-              if (!c || typeof c !== "object") return null;
-              const claim = (c as { claim?: unknown; sourceUrl?: unknown }).claim;
-              const url = (c as { claim?: unknown; sourceUrl?: unknown }).sourceUrl;
-              if (typeof claim !== "string") return null;
-              return typeof url === "string" ? `• ${claim} (${url})` : `• ${claim}`;
-            })
-            .filter(Boolean)
-            .join("\n")
-        : "";
-      const gaps = Array.isArray(obj.gaps)
-        ? obj.gaps.filter((g): g is string => typeof g === "string").map((g) => `• ${g}`).join("\n")
-        : "";
-      const unsupported = Array.isArray(obj.unsupportedClaims)
-        ? obj.unsupportedClaims
-            .map((c) => {
-              if (!c || typeof c !== "object") return null;
-              const claim = (c as { claim?: unknown }).claim;
-              return typeof claim === "string" ? `• ${claim}` : null;
-            })
-            .filter(Boolean)
-            .join("\n")
-        : "";
-      return [
-        obj.summary,
-        claims ? `\nClaims\n${claims}` : "",
-        gaps ? `\nGaps\n${gaps}` : "",
-        unsupported ? `\nNeeds a source\n${unsupported}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    }
+    if (typeof obj.summary === "string") return obj.summary;
     if (typeof obj.echo === "string") return obj.echo;
-    return JSON.stringify(value, null, 2);
+    return "";
   }
   return String(value);
 }
 
+function WorkingPulse({ label }: { label: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/60 px-4 py-3">
+      <span className="mt-1.5 flex gap-1" aria-hidden>
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:150ms]" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)] [animation-delay:300ms]" />
+      </span>
+      <div>
+        <p className="text-sm font-medium text-[var(--foreground)]">{label}</p>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">Working — this updates as each step finishes.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function AskPage() {
+  const router = useRouter();
   const [request, setRequest] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -113,8 +132,10 @@ export default function AskPage() {
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [editablePrompt, setEditablePrompt] = useState("");
+  const [wantImageUpload, setWantImageUpload] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -152,6 +173,20 @@ export default function AskPage() {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
+  function applyOutcome(card: (typeof HOME_OUTCOME_CARDS)[number]) {
+    if (card.href) {
+      router.push(card.href);
+      return;
+    }
+    if (card.id === "image") {
+      setWantImageUpload(true);
+    }
+    if (card.prefill) {
+      setRequest(card.prefill);
+      inputRef.current?.focus();
+    }
+  }
+
   async function onUpload(file: File) {
     setUploading(true);
     try {
@@ -170,10 +205,7 @@ export default function AskPage() {
     }
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const text = request.trim();
-    if (!text) return;
+  async function startRun(text: string) {
     setSubmitting(true);
     setProgress(null);
     stopPolling();
@@ -196,6 +228,13 @@ export default function AskPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    const text = request.trim();
+    if (!text) return;
+    await startRun(text);
   }
 
   async function onClarify(option: string) {
@@ -240,84 +279,193 @@ export default function AskPage() {
     }
   }
 
+  async function saveToKnowledge() {
+    const source = progress?.finalOutput ?? progress?.outputSoFar;
+    const body = renderAnswerBody(source);
+    if (!body.trim()) {
+      toast.error("Nothing to save yet.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/knowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Research draft — ${new Date().toLocaleDateString()}`,
+          category: "research",
+          content: body,
+          tags: ["draft", "from-ask"],
+          status: "INACTIVE",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not save");
+      toast.success("Saved to Knowledge as a draft.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+    }
+  }
+
+  async function onNextAction(action: string) {
+    const cleaned = (progress?.request || request).replace(/\n\n\[User chose:.*$/, "");
+    if (action === "Ask something else") {
+      setProgress(null);
+      setRunId(null);
+      setEditablePrompt("");
+      setRequest("");
+      inputRef.current?.focus();
+      return;
+    }
+    if (action === "Try again" || action === "Run this again" || action === "Run this again next month") {
+      setRequest(cleaned);
+      setProgress(null);
+      setRunId(null);
+      await startRun(cleaned);
+      return;
+    }
+    if (action === "Rephrase your request") {
+      setRequest(cleaned);
+      setProgress(null);
+      setRunId(null);
+      inputRef.current?.focus();
+      return;
+    }
+    if (action === "Turn this into content") {
+      const summary = renderAnswerBody(progress?.finalOutput ?? progress?.outputSoFar);
+      const seeded = `Write content based on this brief:\n\n${summary.slice(0, 3500)}`;
+      setRequest(seeded);
+      setProgress(null);
+      setRunId(null);
+      inputRef.current?.focus();
+      return;
+    }
+    if (action === "Save to Knowledge") {
+      await saveToKnowledge();
+      return;
+    }
+    if (action === "Make another image") {
+      setWantImageUpload(true);
+      setRequest("Make something like this reference: ");
+      setProgress(null);
+      setRunId(null);
+      inputRef.current?.focus();
+      return;
+    }
+  }
+
   const answerSource =
     progress?.finalOutput != null ? progress.finalOutput : progress?.outputSoFar;
-  const answer = answerSource != null ? renderAnswer(answerSource) : "";
+  const answerBody = answerSource != null ? renderAnswerBody(answerSource) : "";
   const imageUrl = imageUrlFromOutput(answerSource);
+  const sources = extractSources(answerSource);
+  const isPartial = progress?.status === "PARTIAL";
+  const showAnswer =
+    Boolean(answerBody || imageUrl) &&
+    ["COMPLETED", "PARTIAL", "FAILED", "RUNNING"].includes(progress?.status || "");
 
   const isLive =
     progress && ["PENDING", "PLANNING", "RUNNING"].includes(progress.status);
 
+  const workingLabel =
+    progress?.currentStep?.userFacingLabel ||
+    progress?.plainEnglishPlan ||
+    "Figuring out the best approach";
+
+  const showHomeCards = !progress && !submitting;
+
   return (
     <div className="mx-auto max-w-2xl space-y-8">
-      <div>
-        <h1 className="h-display text-4xl">Ask</h1>
-        <p className="mt-2 text-[var(--muted)]">
-          Describe what you need in plain English. We&apos;ll show each step as it
-          happens — no setup required.
-        </p>
-      </div>
+      {showHomeCards && (
+        <div>
+          <h1 className="sr-only">What do you need?</h1>
+          <p className="text-[var(--muted)]">
+            Describe the outcome in plain English. You never pick an agent, model, or tier —
+            we route that for you.
+          </p>
+        </div>
+      )}
 
       <form onSubmit={onSubmit} className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            className="sr-only"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void onUpload(file);
-              e.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            disabled={uploading || submitting}
-            onClick={() => fileRef.current?.click()}
-            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-50"
-          >
-            {uploading ? "Uploading…" : "Upload reference image"}
-          </button>
-          {referenceName && (
-            <span className="text-sm text-[var(--muted)]">
-              Using {referenceName}
-              <button
-                type="button"
-                className="ml-2 underline"
-                onClick={() => {
-                  setReferenceAssetId(null);
-                  setReferenceName(null);
-                }}
-              >
-                Clear
-              </button>
-            </span>
-          )}
-        </div>
-        <label htmlFor="ask-request" className="sr-only">
-          Your request
+        <label htmlFor="ask-request" className="text-sm font-medium text-[var(--foreground)]">
+          What do you need?
         </label>
         <textarea
+          ref={inputRef}
           id="ask-request"
           value={request}
           onChange={(e) => setRequest(e.target.value)}
-          rows={5}
-          placeholder='Try: “Make something like this reference, warmer tones” or “Summarise this: We offer dental implants…”'
-          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-base outline-none focus:border-[var(--accent)]"
+          rows={4}
+          placeholder="Research plant hire pricing in the UK…"
+          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-base outline-none focus:border-[var(--accent)]"
           disabled={submitting}
         />
+
+        {(wantImageUpload || referenceAssetId) && (
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void onUpload(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              disabled={uploading || submitting}
+              onClick={() => fileRef.current?.click()}
+              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-50"
+            >
+              {uploading ? "Uploading…" : "Upload reference image"}
+            </button>
+            {referenceName && (
+              <span className="text-sm text-[var(--muted)]">
+                Using {referenceName}
+                <button
+                  type="button"
+                  className="ml-2 underline"
+                  onClick={() => {
+                    setReferenceAssetId(null);
+                    setReferenceName(null);
+                  }}
+                >
+                  Clear
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+
         <button
           type="submit"
           disabled={submitting || !request.trim()}
-          className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+          className="btn btn-primary disabled:opacity-50"
         >
           {submitting ? "Starting…" : "Go"}
         </button>
       </form>
 
+      {showHomeCards && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {HOME_OUTCOME_CARDS.map((card) => (
+            <button
+              key={card.id}
+              type="button"
+              onClick={() => applyOutcome(card)}
+              className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition"
+            >
+              <p className="font-medium text-[var(--foreground)]">{card.title}</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">{card.hint}</p>
+            </button>
+          ))}
+        </div>
+      )}
+
       {progress?.plainEnglishPlan && (
-        <p className="rounded-lg bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--foreground)]">
+        <p className="rounded-xl bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--foreground)]">
           {progress.plainEnglishPlan}
         </p>
       )}
@@ -332,7 +480,7 @@ export default function AskPage() {
                 type="button"
                 disabled={submitting}
                 onClick={() => void onClarify(opt)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left text-sm hover:border-[var(--accent)]"
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left text-sm hover:border-[var(--accent)]"
               >
                 {opt}
               </button>
@@ -353,60 +501,84 @@ export default function AskPage() {
             value={editablePrompt}
             onChange={(e) => setEditablePrompt(e.target.value)}
             rows={6}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
             disabled={submitting}
           />
           {progress.pendingCostNote && (
             <p className="text-sm font-medium">{progress.pendingCostNote}</p>
           )}
+          {progress.remainingAllowanceNote && (
+            <p className="text-sm text-[var(--muted)]">{progress.remainingAllowanceNote}</p>
+          )}
           <button
             type="button"
             disabled={submitting || editablePrompt.trim().length < 8}
             onClick={() => void onConfirmPrompt()}
-            className="rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+            className="btn btn-primary disabled:opacity-50"
           >
             {submitting ? "Starting generation…" : "Confirm & generate"}
           </button>
         </div>
       )}
 
-      {/* Answer first */}
-      {(answer || imageUrl) && (
-        <section className="space-y-2">
+      {/* Answer at the top */}
+      {showAnswer && (
+        <section className="space-y-3">
           <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-            Answer
+            {isPartial ? "What I finished" : "Answer"}
           </h2>
+          {isPartial && progress?.userFacingError && (
+            <p className="rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm text-[var(--foreground)]">
+              {progress.userFacingError}
+            </p>
+          )}
           {imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={imageUrl}
               alt="Generated image"
-              className="max-h-[28rem] w-full rounded-lg object-contain"
+              className="max-h-[28rem] w-full rounded-xl object-contain"
             />
           )}
-          {answer && (
-            <div className="whitespace-pre-wrap text-lg leading-relaxed">{answer}</div>
+          {answerBody && (
+            <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
           )}
-          {progress?.userFacingError && (
+          {!isPartial && progress?.userFacingError && !answerBody && !imageUrl && (
             <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
           )}
         </section>
       )}
 
-      {!answer && !imageUrl && progress?.userFacingError && (
+      {!showAnswer && progress?.userFacingError && progress.status === "FAILED" && (
         <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
       )}
 
-      {isLive && !answer && !imageUrl && (
-        <p className="text-sm text-[var(--muted)]">
-          Working
-          {progress.currentStep
-            ? ` — ${progress.currentStep.userFacingLabel}`
-            : progress.plainEnglishPlan
-              ? ""
-              : " — figuring out the best approach"}
-          …
-        </p>
+      {isLive && (
+        <WorkingPulse label={workingLabel} />
+      )}
+
+      {sources.length > 0 && (
+        <details className="rounded-xl border border-[var(--border)] px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium">Where this came from</summary>
+          <ul className="mt-3 space-y-2 text-sm">
+            {sources.map((s, i) => (
+              <li key={`${s.label}-${i}`}>
+                {s.url ? (
+                  <a
+                    href={s.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[var(--accent)] hover:underline"
+                  >
+                    {s.label}
+                  </a>
+                ) : (
+                  s.label
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {progress && progress.stepsDetailCleared && (
@@ -417,11 +589,12 @@ export default function AskPage() {
       )}
 
       {progress && progress.steps.length > 0 && !progress.stepsDetailCleared && (
-        <details className="rounded-lg border border-[var(--border)] px-4 py-3">
+        <details className="rounded-xl border border-[var(--border)] px-4 py-3">
           <summary className="cursor-pointer text-sm font-medium">
-            Steps ({progress.stepsCompleted}/{progress.stepsTotal || progress.steps.length}) ·{" "}
-            {formatElapsed(progress.elapsedMs)}
+            Details
             {progress.costNote ? ` · ${progress.costNote}` : ""}
+            {progress.remainingAllowanceNote ? ` · ${progress.remainingAllowanceNote}` : ""}
+            {` · ${formatElapsed(progress.elapsedMs)}`}
           </summary>
           <ol className="mt-3 space-y-2">
             {progress.steps.map((step) => (
@@ -429,7 +602,7 @@ export default function AskPage() {
                 <span className="font-medium">{step.userFacingLabel}</span>
                 <span className="text-[var(--muted)]">
                   {" "}
-                  — {step.userFacingStatus || step.status.toLowerCase()}
+                  — {step.userFacingStatus || "done"}
                 </span>
               </li>
             ))}
@@ -437,47 +610,28 @@ export default function AskPage() {
         </details>
       )}
 
-      {progress && progress.steps.length > 0 && progress.stepsDetailCleared && (
-        <div className="text-sm text-[var(--muted)]">
-          <p>
-            {progress.stepsCompleted} step
-            {progress.stepsCompleted === 1 ? "" : "s"} completed ·{" "}
-            {formatElapsed(progress.elapsedMs)}
-            {progress.costNote ? ` · ${progress.costNote}` : ""}
-          </p>
-        </div>
-      )}
-
       {progress &&
         ["COMPLETED", "PARTIAL", "FAILED"].includes(progress.status) &&
         progress.nextActions.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm"
-              onClick={() => {
-                const cleaned = progress.request.replace(/\n\n\[User chose:.*$/, "");
-                setRequest(cleaned);
-                setProgress(null);
-                setRunId(null);
-                setEditablePrompt("");
-              }}
-            >
-              Ask something else
-            </button>
-            <button
-              type="button"
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm"
-              onClick={() => {
-                const cleaned = progress.request.replace(/\n\n\[User chose:.*$/, "");
-                setRequest(cleaned);
-                setProgress(null);
-                setRunId(null);
-                setEditablePrompt("");
-              }}
-            >
-              Edit &amp; run again
-            </button>
+            {progress.nextActions.map((action) => (
+              <button
+                key={action}
+                type="button"
+                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:border-[var(--accent)]"
+                onClick={() => void onNextAction(action)}
+              >
+                {action}
+              </button>
+            ))}
+            {progress.status === "COMPLETED" && (
+              <Link
+                href="/knowledge"
+                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:border-[var(--accent)]"
+              >
+                Open Knowledge
+              </Link>
+            )}
           </div>
         )}
     </div>

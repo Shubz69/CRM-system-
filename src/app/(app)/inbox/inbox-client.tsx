@@ -195,9 +195,20 @@ export default function InboxPage() {
           <div className="border-b border-[var(--border)] px-4 py-3 font-medium">Conversations</div>
           <div className="max-h-[70vh] overflow-y-auto">
             {sorted.length === 0 && (
-              <p className="p-4 text-sm text-[var(--muted)]">
-                No conversations yet. Use the Simulator to send a test DM.
-              </p>
+              <div className="p-4">
+                <p className="font-[family-name:var(--font-fraunces)] text-xl">No conversations yet</p>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  Connect Instagram, or send a test DM to see how AI handles a real chat.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <a href="/settings/go-live" className="btn btn-primary">
+                    Connect Instagram
+                  </a>
+                  <a href="/simulator" className="btn btn-secondary">
+                    Send a test DM
+                  </a>
+                </div>
+              </div>
             )}
             {sorted.map((c) => (
               <button
