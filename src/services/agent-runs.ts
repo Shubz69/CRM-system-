@@ -133,10 +133,27 @@ function pendingCostNote(cents: number | null | undefined): string | null {
 }
 
 function remainingAllowanceNote(spentCents: number, capCents: number | null): string | null {
-  if (capCents == null) return null;
+  const spent =
+    spentCents <= 0
+      ? null
+      : spentCents < 100
+        ? `About ${spentCents}¢ used on AI this month.`
+        : `About $${(spentCents / 100).toFixed(2)} used on AI this month.`;
+
+  if (capCents == null) {
+    return spent;
+  }
+
   const left = Math.max(0, capCents - spentCents);
-  if (left < 100) return `About ${left}¢ left in this month's AI allowance.`;
-  return `About $${(left / 100).toFixed(2)} left in this month's AI allowance.`;
+  const low = left <= Math.max(500, Math.floor(capCents * 0.2));
+  const leftNote =
+    left < 100
+      ? `About ${left}¢ left in this month's AI allowance.`
+      : `About $${(left / 100).toFixed(2)} left in this month's AI allowance.`;
+  const warn = low ? " AI allowance is running low." : "";
+
+  if (spent) return `${spent} ${leftNote}${warn}`.trim();
+  return `${leftNote}${warn}`.trim();
 }
 
 /**
@@ -402,10 +419,8 @@ export async function getAgentRunProgress(input: {
 
   const displayOutput = run.finalOutput ?? lastCompletedOutput;
   const budget = await getOrganisationAiBudget(input.organisationId);
-  const spentCents =
-    budget?.monthlyCapCents != null
-      ? await getOrganisationPeriodSpendCents(input.organisationId)
-      : 0;
+  // Always load period spend so Ask can show usage even when no hard cap is set.
+  const spentCents = await getOrganisationPeriodSpendCents(input.organisationId);
 
   return {
     runId: run.id,

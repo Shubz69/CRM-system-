@@ -27,19 +27,32 @@ export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
 }
 
 export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
-  const client = new IORedis(getRedisUrl(), {
-    maxRetriesPerRequest: 1,
-    connectTimeout: timeoutMs,
-    lazyConnect: true,
-  });
+  let client: IORedis | null = null;
   try {
+    const url = getRedisUrl();
+    // Reject clearly non-URL values (e.g. a pasted `redis-cli …` command).
+    if (!/^rediss?:\/\//i.test(url.trim())) {
+      logger.warn("REDIS_URL is not a redis:// or rediss:// URL — treating Redis as down");
+      return false;
+    }
+    client = new IORedis(url, {
+      maxRetriesPerRequest: 1,
+      connectTimeout: timeoutMs,
+      lazyConnect: true,
+      enableOfflineQueue: false,
+    });
     await client.connect();
     const pong = await client.ping();
     return pong === "PONG";
-  } catch {
+  } catch (error) {
+    logger.warn("Redis ping failed", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
     return false;
   } finally {
-    await client.quit().catch(() => undefined);
+    if (client) {
+      await client.quit().catch(() => undefined);
+    }
   }
 }
 

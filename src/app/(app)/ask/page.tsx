@@ -144,6 +144,7 @@ export default function AskPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const lowAllowanceToastShown = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -159,6 +160,14 @@ export default function AskPage() {
         const json = (await res.json()) as Progress & { error?: string };
         if (!res.ok) throw new Error(json.error || "Could not load progress");
         setProgress(json);
+        if (
+          !lowAllowanceToastShown.current &&
+          json.remainingAllowanceNote &&
+          /running low/i.test(json.remainingAllowanceNote)
+        ) {
+          lowAllowanceToastShown.current = true;
+          toast.message(json.remainingAllowanceNote);
+        }
         if (json.status === "AWAITING_PROMPT_CONFIRM" && json.pendingPrompt) {
           setEditablePrompt(json.pendingPrompt);
         }

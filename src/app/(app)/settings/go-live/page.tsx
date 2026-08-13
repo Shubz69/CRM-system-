@@ -20,18 +20,22 @@ export default function GoLivePage() {
   async function load() {
     setLoading(true);
     try {
-      const [settingsRes, healthRes, providersRes, autopilotRes, channelsRes] = await Promise.all([
-        fetch("/api/settings"),
-        fetch("/api/health"),
-        fetch("/api/health/providers"),
-        fetch("/api/autopilot"),
-        fetch("/api/messaging-channels"),
-      ]);
+      const [settingsRes, healthRes, providersRes, autopilotRes, channelsRes, dbRes] =
+        await Promise.all([
+          fetch("/api/settings"),
+          fetch("/api/health"),
+          fetch("/api/health/providers"),
+          fetch("/api/autopilot"),
+          fetch("/api/messaging-channels"),
+          fetch("/api/health/database"),
+        ]);
       const settings = settingsRes.ok ? await settingsRes.json() : {};
-      const health = healthRes.ok ? await healthRes.json() : {};
+      // Health may return 503 when Redis is down — still read the body.
+      const health = await healthRes.json().catch(() => ({}));
       const providers = providersRes.ok ? await providersRes.json() : {};
       const autopilot = autopilotRes.ok ? await autopilotRes.json() : {};
       const channels = channelsRes.ok ? await channelsRes.json() : {};
+      const dbHealth = await dbRes.json().catch(() => ({}));
 
       setMode(autopilot.mode || "OFF");
 
@@ -48,12 +52,19 @@ export default function GoLivePage() {
           providers.providers?.booking?.adapter,
       );
 
+      const databaseOk = Boolean(
+        dbHealth.ok ||
+          health.database?.ok ||
+          health.checks?.database === "ok",
+      );
+      const redisOk = Boolean(health.redis?.ok || health.checks?.redis === "ok");
+
       const next: Check[] = [
         {
           key: "database",
           label: "Database",
-          status: health.database?.ok || health.ok ? "ready" : "needs_attention",
-          detail: health.database?.ok || health.ok ? "Connected" : "Database unreachable",
+          status: databaseOk ? "ready" : "needs_attention",
+          detail: databaseOk ? "Connected" : "Database unreachable",
         },
         {
           key: "auth",
@@ -70,7 +81,7 @@ export default function GoLivePage() {
         {
           key: "ai",
           label: "AI Provider",
-          status: aiReady || process.env.NODE_ENV !== "production" ? "ready" : "needs_attention",
+          status: aiReady ? "ready" : "needs_attention",
           detail: `Adapter: ${providers.providers?.ai?.adapter || "unknown"}`,
         },
         {
@@ -95,7 +106,9 @@ export default function GoLivePage() {
           key: "booking",
           label: "Booking",
           status: bookingReady ? "ready" : "optional",
-          detail: bookingReady ? "Booking URL / provider ready" : "Add a booking URL before sending links",
+          detail: bookingReady
+            ? "Booking URL / provider ready"
+            : "Add a booking URL before sending links",
         },
         {
           key: "messaging",
@@ -106,8 +119,8 @@ export default function GoLivePage() {
         {
           key: "jobs",
           label: "Background processing",
-          status: health.redis?.ok ? "ready" : "optional",
-          detail: health.redis?.ok
+          status: redisOk ? "ready" : "optional",
+          detail: redisOk
             ? "Redis reachable"
             : "Cron/Vercel path used when Redis is unavailable",
         },

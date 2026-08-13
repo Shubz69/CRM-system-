@@ -77,7 +77,7 @@ export async function seedSuperAdmin(input?: {
     demoAgency ??
     (await prisma.organisation.upsert({
       where: { slug: "dm-intelligence-platform" },
-      update: { isPlatform: true },
+      update: { isPlatform: true, name: "Agent Desk Platform" },
       create: {
         name: "Agent Desk Platform",
         slug: "dm-intelligence-platform",
@@ -125,12 +125,13 @@ export async function seedSuperAdmin(input?: {
   if (demoAgency && primaryOrg.id === demoAgency.id) {
     const platformOrg = await prisma.organisation.upsert({
       where: { slug: "dm-intelligence-platform" },
-      update: {},
+      update: { name: "Agent Desk Platform", isPlatform: true },
       create: {
         name: "Agent Desk Platform",
         slug: "dm-intelligence-platform",
         timezone: "UTC",
         demoData: false,
+        isPlatform: true,
       },
     });
     await prisma.organisationMember.upsert({
