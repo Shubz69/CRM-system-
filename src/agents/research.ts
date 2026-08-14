@@ -16,6 +16,7 @@ import {
   type SourceResult,
 } from "@/adapters/sources";
 import { getEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
 export const researchInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -56,6 +57,74 @@ export type ResearchOutput = z.infer<typeof researchOutputSchema>;
 const queryExpandSchema = z.object({
   queries: z.array(z.string().min(2).max(200)).min(2).max(8),
 });
+
+/** Coerce common Claude shapes into { queries: string[] }. */
+function coerceQueryExpand(raw: unknown): { queries: string[] } | null {
+  if (!raw || typeof raw !== "object") {
+    if (Array.isArray(raw) && raw.every((q) => typeof q === "string")) {
+      return { queries: raw as string[] };
+    }
+    return null;
+  }
+  const obj = raw as Record<string, unknown>;
+  const candidates = [obj.queries, obj.search_queries, obj.searchQueries, obj.q];
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.every((q) => typeof q === "string")) {
+      return { queries: c as string[] };
+    }
+  }
+  return null;
+}
+
+async function expandResearchQueries(input: {
+  organisationId: string;
+  topic: string;
+  nicheHint?: string;
+  model: string;
+}): Promise<string[]> {
+  const system =
+    'You expand one research question into several targeted search queries. Stay domain-agnostic. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
+  const prompt = `Topic: ${input.topic}\nNiche hint (optional): ${input.nicheHint || "(none)"}\nProduce 3-6 concrete search queries as JSON.`;
+
+  try {
+    const expand = await completeStructured(queryExpandSchema, {
+      organisationId: input.organisationId,
+      tier: "cheap",
+      model: input.model,
+      system,
+      prompt,
+      temperature: 0.2,
+      repairHint: 'Required shape: {"queries":["...","..."]}. The "queries" array is required.',
+    });
+    return expand.queries.map((q) => q.trim()).filter(Boolean);
+  } catch (error) {
+    // Last resort: try a raw completion + coerce so research still reaches YouTube/web.
+    try {
+      const { getAiProvider } = await import("@/adapters/ai");
+      const text = await getAiProvider().complete({
+        model: input.model,
+        temperature: 0,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
+      });
+      const fenced = text.trim().match(/```(?:json)?\s*([\s\S]*?)```/);
+      const candidate = fenced?.[1]?.trim() || text.trim();
+      const parsed = JSON.parse(candidate) as unknown;
+      const coerced = coerceQueryExpand(parsed);
+      if (coerced && coerced.queries.length >= 1) {
+        return coerced.queries.map((q) => q.trim()).filter(Boolean).slice(0, 8);
+      }
+    } catch {
+      // fall through
+    }
+    logger.warn("Research query expand failed — continuing with the original topic only", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
 
 const findingsExtractSchema = z.object({
   findings: z
@@ -100,21 +169,15 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const model = resolveModelForTier("cheap");
     let costCents = 0;
 
-    const expand = await completeStructured(queryExpandSchema, {
+    const expanded = await expandResearchQueries({
       organisationId: ctx.organisationId,
-      tier: "cheap",
+      topic: parsed.topic,
+      nicheHint: parsed.nicheHint,
       model,
-      system:
-        "You expand one research question into several targeted search queries. Stay domain-agnostic — never assume Instagram marketing. Cover angles like comparisons, pricing, problems, specs, reviews, and alternatives when relevant. Return JSON only.",
-      prompt: `Topic: ${parsed.topic}\nNiche hint (optional): ${parsed.nicheHint || "(none)"}\nProduce 3-6 concrete search queries.`,
-      temperature: 0.3,
     });
     costCents += 2;
 
-    const queries = [...new Set([parsed.topic, ...expand.queries.map((q) => q.trim())])].slice(
-      0,
-      8,
-    );
+    const queries = [...new Set([parsed.topic, ...expanded])].slice(0, 8);
 
     const job = await prisma.researchJob.create({
       data: {

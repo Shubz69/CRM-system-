@@ -28,7 +28,21 @@ function tryParseJson(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenced?.[1]?.trim() || trimmed;
-  return JSON.parse(candidate) as unknown;
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    const objStart = candidate.indexOf("{");
+    const objEnd = candidate.lastIndexOf("}");
+    if (objStart >= 0 && objEnd > objStart) {
+      return JSON.parse(candidate.slice(objStart, objEnd + 1)) as unknown;
+    }
+    const arrStart = candidate.indexOf("[");
+    const arrEnd = candidate.lastIndexOf("]");
+    if (arrStart >= 0 && arrEnd > arrStart) {
+      return JSON.parse(candidate.slice(arrStart, arrEnd + 1)) as unknown;
+    }
+    throw new Error("Response did not contain JSON");
+  }
 }
 
 /**
@@ -46,7 +60,7 @@ export async function runWithZodRepair<T>(input: {
   }
 
   logger.warn("Structured AI output failed Zod validation; attempting one repair", {
-    issues: first.error.issues.map((i) => i.message).slice(0, 5),
+    issues: first.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).slice(0, 8),
   });
 
   let repairedRaw: unknown;
