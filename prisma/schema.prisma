@@ -196,6 +196,8 @@ model User {
   failedLoginAttempts  Int       @default(0)
   lockedUntil          DateTime?
   lastLoginAt          DateTime?
+  /// Last workspace the user explicitly used (login default / switcher).
+  activeOrganisationId String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
   deletedAt            DateTime?
@@ -209,6 +211,8 @@ model User {
   notifications         Notification[]
   agentRuns             AgentRun[]
   assetsCreated         Asset[]
+
+  @@index([activeOrganisationId])
 }
 
 model Account {

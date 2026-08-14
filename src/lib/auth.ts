@@ -4,11 +4,13 @@ import { compare } from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { getAuthSecret, isDemoModeEnabled } from "@/lib/env";
 import type { MemberRole } from "@prisma/client";
+import { resolveActiveWorkspaceForUser } from "@/services/active-workspace";
 
 export type SessionMembership = {
   organisationId: string;
   organisationName: string;
   role: MemberRole;
+  isPlatform?: boolean;
 };
 
 declare module "next-auth" {
@@ -48,12 +50,16 @@ declare module "next-auth/jwt" {
     memberships?: SessionMembership[];
     mustChangePassword?: boolean;
     isPlatformAdmin?: boolean;
+    /** Last time we re-checked the active workspace against the DB. */
+    workspaceCheckedAt?: number;
   }
 }
 
 const DEMO_EMAIL = "demo@dminelligence.local";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
+/** Re-validate JWT org against DB at most every 60s (keeps stale IDs from surviving a reseed). */
+const WORKSPACE_RECHECK_MS = 60_000;
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
@@ -124,24 +130,22 @@ export const authOptions: NextAuthOptions = {
           },
         });
 
-        const memberships: SessionMembership[] = user.memberships.map((m) => ({
-          organisationId: m.organisationId,
-          organisationName: m.organisation.name,
-          role: m.role,
-        }));
-
-        // Prefer SUPER_ADMIN membership when present
-        const preferred =
-          memberships.find((m) => m.role === "SUPER_ADMIN") ?? memberships[0];
+        // Explicit workspace selection — never "first SUPER_ADMIN" (ambiguous when
+        // the user is SUPER_ADMIN on both Demo Agency and the platform org).
+        const resolved = await resolveActiveWorkspaceForUser({
+          userId: user.id,
+          preferredOrganisationId: user.activeOrganisationId,
+          persist: true,
+        });
 
         return {
           id: user.id,
           email: user.email,
           name: user.name,
-          organisationId: preferred?.organisationId,
-          organisationName: preferred?.organisationName,
-          role: preferred?.role,
-          memberships,
+          organisationId: resolved?.membership.organisationId,
+          organisationName: resolved?.membership.organisation.name,
+          role: resolved?.membership.role,
+          memberships: resolved?.memberships ?? [],
           mustChangePassword: user.mustChangePassword,
           isPlatformAdmin: user.isPlatformAdmin,
         };
@@ -158,6 +162,7 @@ export const authOptions: NextAuthOptions = {
         token.memberships = user.memberships ?? [];
         token.mustChangePassword = user.mustChangePassword ?? false;
         token.isPlatformAdmin = user.isPlatformAdmin ?? false;
+        token.workspaceCheckedAt = Date.now();
       }
 
       if (trigger === "update" && session && typeof session === "object") {
@@ -169,44 +174,63 @@ export const authOptions: NextAuthOptions = {
           "organisationId" in session && typeof session.organisationId === "string"
             ? session.organisationId
             : undefined;
-        if (nextOrgId && token.id) {
-          const membership = await prisma.organisationMember.findUnique({
-            where: {
-              organisationId_userId: {
-                organisationId: nextOrgId,
-                userId: token.id,
-              },
-            },
-            include: { organisation: true },
+
+        if (token.id && nextOrgId) {
+          const resolved = await resolveActiveWorkspaceForUser({
+            userId: token.id,
+            preferredOrganisationId: nextOrgId,
+            persist: true,
           });
-          if (membership) {
-            token.organisationId = membership.organisationId;
-            token.organisationName = membership.organisation.name;
-            token.role = membership.role;
-            const all = await prisma.organisationMember.findMany({
-              where: { userId: token.id },
-              include: { organisation: true },
-              orderBy: { createdAt: "asc" },
-            });
-            token.memberships = all.map((m) => ({
-              organisationId: m.organisationId,
-              organisationName: m.organisation.name,
-              role: m.role,
-            }));
+          if (resolved) {
+            token.organisationId = resolved.membership.organisationId;
+            token.organisationName = resolved.membership.organisation.name;
+            token.role = resolved.membership.role;
+            token.memberships = resolved.memberships;
+            token.workspaceCheckedAt = Date.now();
           }
         }
 
-        // Always re-read security flags from DB on session update to avoid stale JWT locks.
         if (token.id) {
           const fresh = await prisma.user.findUnique({
             where: { id: token.id },
-            select: { mustChangePassword: true, isPlatformAdmin: true, isActive: true, isSuspended: true },
+            select: { mustChangePassword: true, isPlatformAdmin: true },
           });
           if (fresh) {
             token.mustChangePassword = fresh.mustChangePassword;
             token.isPlatformAdmin = fresh.isPlatformAdmin;
           }
         }
+      }
+
+      // Periodically confirm the JWT org still exists and the user is still a member.
+      // Fixes stale cookies after DB reseed / org deletion without a full sign-out loop.
+      const due =
+        !token.workspaceCheckedAt ||
+        Date.now() - token.workspaceCheckedAt > WORKSPACE_RECHECK_MS;
+      if (token.id && due) {
+        const userRow = await prisma.user.findUnique({
+          where: { id: token.id },
+          select: { activeOrganisationId: true },
+        });
+        const preferred =
+          token.organisationId || userRow?.activeOrganisationId || null;
+        const resolved = await resolveActiveWorkspaceForUser({
+          userId: token.id,
+          preferredOrganisationId: preferred,
+          persist: true,
+        });
+        if (!resolved) {
+          token.organisationId = undefined;
+          token.organisationName = undefined;
+          token.role = undefined;
+          token.memberships = [];
+        } else {
+          token.organisationId = resolved.membership.organisationId;
+          token.organisationName = resolved.membership.organisation.name;
+          token.role = resolved.membership.role;
+          token.memberships = resolved.memberships;
+        }
+        token.workspaceCheckedAt = Date.now();
       }
 
       return token;

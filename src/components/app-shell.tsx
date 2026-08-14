@@ -167,7 +167,9 @@ export function AppShell({
                 {collapsed ? "AD" : "Agent Desk"}
               </p>
               {!collapsed && (
-                <p className="mt-1 truncate text-xs text-white/50">{activeName}</p>
+                <p className="mt-1 truncate text-xs text-white/50">
+                  {activeName}
+                </p>
               )}
             </div>
             <button
@@ -181,12 +183,12 @@ export function AppShell({
           </div>
           {!collapsed && orgs.length > 1 && (
             <label className="mt-3 block text-[11px] uppercase tracking-[0.14em] text-white/40">
-              Workspace
+              Active workspace
               <select
                 className="mt-1.5 w-full rounded-xl border border-white/12 bg-white/8 px-2.5 py-2 text-sm text-white outline-none focus:border-[var(--accent)]"
                 value={session?.user?.organisationId || ""}
                 onChange={(e) => switchOrg(e.target.value)}
-                aria-label="Switch organisation"
+                aria-label="Switch active workspace"
               >
                 {orgs.map((org) => (
                   <option key={org.id} value={org.id} className="text-black">
