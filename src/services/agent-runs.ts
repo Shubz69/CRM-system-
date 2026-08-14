@@ -2,6 +2,10 @@ import { AgentDetailRetention, Prisma, type AgentRun, type AgentStep } from "@pr
 import { prisma } from "@/lib/db";
 import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { ensureAgentsRegistered } from "@/agents";
+import {
+  WorkspaceAccessError,
+  assertActiveWorkspaceAccess,
+} from "@/services/workspace-access";
 import { logger } from "@/lib/logger";
 import { STEPS_CLEARED_MESSAGE } from "@/services/agent-retention";
 import {
@@ -172,6 +176,25 @@ export async function createAndEnqueueAgentRun(input: {
     throw new Error("Request cannot be empty");
   }
 
+  // Validate org (+ membership when a user is attached) before any FK write.
+  if (input.userId) {
+    await assertActiveWorkspaceAccess({
+      userId: input.userId,
+      organisationId: input.organisationId,
+    });
+  } else {
+    const org = await prisma.organisation.findFirst({
+      where: { id: input.organisationId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!org) {
+      throw new WorkspaceAccessError(
+        "SESSION_ORG_INVALID",
+        "Your workspace is no longer available. Please sign in again.",
+      );
+    }
+  }
+
   if (input.referenceAssetId) {
     const asset = await prisma.asset.findFirst({
       where: {
@@ -228,7 +251,10 @@ export async function createAndEnqueueAgentRun(input: {
           "I couldn't start that request because the background worker isn't reachable. Please try again in a moment.",
       },
     });
-    throw error;
+    // Re-throw a plain-English error — never bubble Redis/Prisma text to API clients.
+    throw new Error(
+      "I couldn't start that request because the background worker isn't reachable. Please try again in a moment.",
+    );
   }
 }
 

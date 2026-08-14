@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { toast } from "sonner";
 import { HOME_OUTCOME_CARDS } from "@/lib/navigation";
+import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 
 type Progress = {
   runId: string;
@@ -157,8 +159,30 @@ export default function AskPage() {
     async (id: string) => {
       try {
         const res = await fetch(`/api/ask/${id}`);
-        const json = (await res.json()) as Progress & { error?: string };
-        if (!res.ok) throw new Error(json.error || "Could not load progress");
+        const json = (await res.json()) as Progress & {
+          error?: string;
+          code?: string;
+        };
+        if (res.status === 401 && json.code === "SESSION_ORG_INVALID") {
+          toast.error(json.error || "Please sign in again.");
+          await signOut({ callbackUrl: "/login" });
+          return;
+        }
+        if (res.status === 403 && json.code === "NO_WORKSPACE_MEMBERSHIP") {
+          toast.error(
+            json.error ||
+              "This account isn't linked to a workspace yet. Ask an admin to add you.",
+          );
+          return;
+        }
+        if (!res.ok) {
+          const msg = json.error || "Could not load progress";
+          throw new Error(
+            looksLikeRawDatabaseError(msg)
+              ? "Something went wrong loading progress. Please try again."
+              : msg,
+          );
+        }
         setProgress(json);
         if (
           !lowAllowanceToastShown.current &&
@@ -182,7 +206,12 @@ export default function AskPage() {
           stopPolling();
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Progress check failed");
+        const msg = err instanceof Error ? err.message : "Progress check failed";
+        toast.error(
+          looksLikeRawDatabaseError(msg)
+            ? "Something went wrong loading progress. Please try again."
+            : msg,
+        );
       }
     },
     [stopPolling],
@@ -222,6 +251,27 @@ export default function AskPage() {
     }
   }
 
+  async function handleAskApiFailure(res: Response, json: { error?: string; code?: string }, fallback: string) {
+    if (res.status === 401 && json.code === "SESSION_ORG_INVALID") {
+      toast.error(json.error || "Please sign in again.");
+      await signOut({ callbackUrl: "/login" });
+      return;
+    }
+    if (res.status === 403 && json.code === "NO_WORKSPACE_MEMBERSHIP") {
+      toast.error(
+        json.error ||
+          "This account isn't linked to a workspace yet. Ask an admin to add you.",
+      );
+      return;
+    }
+    const msg = json.error || fallback;
+    toast.error(
+      looksLikeRawDatabaseError(msg)
+        ? "Something went wrong starting that request. Please try again."
+        : msg,
+    );
+  }
+
   async function startRun(text: string) {
     setSubmitting(true);
     setProgress(null);
@@ -236,12 +286,20 @@ export default function AskPage() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not start");
+      if (!res.ok) {
+        await handleAskApiFailure(res, json, "Could not start");
+        return;
+      }
       setRunId(json.runId);
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 1200);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      const msg = err instanceof Error ? err.message : "Failed";
+      toast.error(
+        looksLikeRawDatabaseError(msg)
+          ? "Something went wrong starting that request. Please try again."
+          : msg,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -264,12 +322,20 @@ export default function AskPage() {
         body: JSON.stringify({ runId, selectedOption: option }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not continue");
+      if (!res.ok) {
+        await handleAskApiFailure(res, json, "Could not continue");
+        return;
+      }
       stopPolling();
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 1200);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      const msg = err instanceof Error ? err.message : "Failed";
+      toast.error(
+        looksLikeRawDatabaseError(msg)
+          ? "Something went wrong. Please try again."
+          : msg,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -285,12 +351,20 @@ export default function AskPage() {
         body: JSON.stringify({ runId, confirmedPrompt: editablePrompt.trim() }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not start generation");
+      if (!res.ok) {
+        await handleAskApiFailure(res, json, "Could not start generation");
+        return;
+      }
       stopPolling();
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 1200);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed");
+      const msg = err instanceof Error ? err.message : "Failed";
+      toast.error(
+        looksLikeRawDatabaseError(msg)
+          ? "Something went wrong. Please try again."
+          : msg,
+      );
     } finally {
       setSubmitting(false);
     }
