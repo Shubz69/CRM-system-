@@ -33,8 +33,7 @@ Optional:
 - `REDIS_URL`
 - `AI_PROVIDER`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 - `MANYCHAT_API_TOKEN`, `MANYCHAT_API_BASE_URL`
-- `DEFAULT_BOOKING_URL`
-- `DEMO_MODE`
+- `DEFAULT_BOOKING_URL` (optional — your real booking page)
 
 ## Database
 
@@ -75,5 +74,5 @@ Always include `organisationId` (or a mapped messaging channel id) in production
 
 ## Notes
 
-Do not deploy with `DEMO_MODE=true` or default demo secrets.
+Do not deploy with default webhook secrets.
 Do not invent undocumented ManyChat endpoints; configure the adapter with confirmed credentials.

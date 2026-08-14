@@ -20,12 +20,13 @@ cp .env.example .env
 npm install
 npx prisma generate
 npx prisma migrate deploy
-npm run db:seed          # demo data (requires DEMO_MODE=true)
-npm run seed:admin       # optional — requires ADMIN_INITIAL_PASSWORD
+npm run db:seed          # platform organisation only
+npm run seed:admin       # requires ADMIN_EMAIL + ADMIN_INITIAL_PASSWORD
+npx tsx scripts/create-organisation.ts --name "Your Agency" --slug your-agency --owner-email you@example.com
 npm run dev
 ```
 
-Open `http://localhost:3000`. Demo login (when seeded): `demo@dminelligence.local` / `demo1234`.
+Open `http://localhost:3000` and sign in with your admin email.
 
 Schema rules: **[MIGRATIONS.md](./MIGRATIONS.md)** — `migrate deploy` only; `db push` is blocked.
 
@@ -36,27 +37,11 @@ Schema rules: **[MIGRATIONS.md](./MIGRATIONS.md)** — `migrate deploy` only; `d
 | `DATABASE_URL` | Postgres connection string (Supabase pooled for Vercel; direct for `prisma migrate deploy`) |
 | `DIRECT_URL` | Optional non-pooled URL for migrations |
 | `AUTH_SECRET` / `NEXTAUTH_SECRET` | Session signing |
-| `DEMO_MODE` | `true` to allow demo seed/login |
-| `ADMIN_EMAIL` | Super admin email (default in example) |
-| `ADMIN_INITIAL_PASSWORD` | Required for `npm run seed:admin` — leave blank in `.env.example` |
-| `ADMIN_FORCE_PASSWORD_CHANGE` | Default `true` |
-| `ADMIN_BOOTSTRAP_SECRET` | Enables `POST /api/admin/bootstrap` on Vercel |
-| `MANYCHAT_WEBHOOK_SECRET` | Inbound webhook verification |
-| `ENCRYPTION_KEY` | 64 hex chars for secret-at-rest |
+| `ADMIN_EMAIL` | Super admin email |
+| `ADMIN_INITIAL_PASSWORD` | Used only by `seed:admin` / bootstrap |
+| `DEFAULT_BOOKING_URL` | Optional default when an agent has no booking URL |
+| `AI_PROVIDER` | `anthropic` (default) or `mock` in local/test |
+| `MANYCHAT_*` | Live Instagram DM delivery |
+| `APIFY_TOKEN` | Licensed social listening sources |
 
-See `.env.example` for the full list, [SUPABASE.md](./SUPABASE.md) for the database, [ADMIN.md](./ADMIN.md) for platform admin seeding, and [VERCEL.md](./VERCEL.md) for deploy.
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `npm run dev` | Next.js dev server |
-| `npm run db:migrate:deploy` / `db:setup` | Apply migrations (`migrate deploy`) + seed for setup |
-| `npm run db:seed` | Demo organisation seed |
-| `npm run seed:admin` | Idempotent super admin seed |
-| `npm run worker` | BullMQ worker process |
-| `npm run db:push` | **Blocked** — exits with error |
-
-## Integrations UI
-
-Configure ManyChat channels under `/integrations` (webhook URL, masked secret, connection status). Messaging channel CRUD uses `/api/messaging-channels`.
+See `.env.example` for the full list.

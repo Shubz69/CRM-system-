@@ -7,7 +7,6 @@ import { AutopilotPanel } from "@/components/autopilot-panel";
 import { formatPercent } from "@/lib/utils";
 
 type DashboardData = {
-  demoMode?: boolean;
   metrics: {
     totalConversations: number;
     newLeads: number;
@@ -146,7 +145,6 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {data.demoMode && <span className="badge badge-warn">Demo mode</span>}
           <Link href="/attention" className="btn btn-secondary">
             Needs Attention
           </Link>

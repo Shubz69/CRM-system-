@@ -2,16 +2,18 @@ import { test, expect } from "@playwright/test";
 
 /**
  * Super Admin navigation smoke.
- * Requires DEMO_MODE seed user with SUPER_ADMIN / platform admin access.
- * Falls back gracefully when admin nav is unavailable in the environment.
+ * Requires E2E_EMAIL / E2E_PASSWORD for a platform admin user.
  */
 async function signIn(page: import("@playwright/test").Page) {
+  const email = process.env.E2E_EMAIL;
+  const password = process.env.E2E_PASSWORD;
+  test.skip(!email || !password, "E2E_EMAIL and E2E_PASSWORD are required");
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await page.getByLabel("Email").fill("demo@dminelligence.local");
-  await page.getByLabel("Password").fill("demo1234");
+  await page.getByLabel("Email").fill(email!);
+  await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/(dashboard|account)/, { timeout: 60_000 });
+  await page.waitForURL(/\/(dashboard|ask|account|admin)/, { timeout: 60_000 });
 }
 
 const ADMIN_ROUTES = [
@@ -62,7 +64,7 @@ test.describe("Super Admin routes", () => {
     await signIn(page);
     await page.goto("/admin/workspaces");
     if (page.url().includes("/dashboard")) {
-      test.skip(true, "Demo user is not platform admin in this environment");
+      test.skip(true, "User is not platform admin in this environment");
     }
     await expect(page.locator("main").getByRole("heading", { name: "Workspaces" })).toBeVisible({
       timeout: 60_000,

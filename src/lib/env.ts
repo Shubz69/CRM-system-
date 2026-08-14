@@ -111,10 +111,6 @@ const envSchema = z.object({
     .string()
     .length(64)
     .default("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
-  DEMO_MODE: z
-    .string()
-    .optional()
-    .transform((v) => v === "true"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 
@@ -230,12 +226,6 @@ export function getAuthSecret(): string {
   if (direct && direct.length >= 16) return direct;
   if (isProductionBuild()) return "build-only-auth-secret-not-for-runtime";
   return getEnv().NEXTAUTH_SECRET || getEnv().AUTH_SECRET || "dev-only-auth-secret-change-me";
-}
-
-export function isDemoModeEnabled(): boolean {
-  const env = getEnv();
-  if (env.NODE_ENV === "production" && !env.DEMO_MODE) return false;
-  return Boolean(env.DEMO_MODE) || env.NODE_ENV === "development" || env.NODE_ENV === "test";
 }
 
 export function getMissingRuntimeConfig(): string[] {

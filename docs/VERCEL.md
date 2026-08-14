@@ -22,7 +22,6 @@ This app is a Next.js frontend + API on Vercel. **Postgres is hosted on [Supabas
 | `ENCRYPTION_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `MANYCHAT_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
 | `BOOKING_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
-| `DEMO_MODE` | `true` for demo staging; `false` for real prod |
 | `AI_PROVIDER` | `anthropic` (Claude primary). OpenAI not required |
 | `ANTHROPIC_API_KEY` | **Required for live AI** |
 | `ANTHROPIC_DEFAULT_MODEL` | Optional — default `claude-sonnet-4-20250514` |

@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
 import { BookingStatus } from "@prisma/client";
 import { getBookingProvider } from "@/adapters/booking";
-import { getEnv, isDemoModeEnabled, assertWebhookSecretsConfigured } from "@/lib/env";
+import { getEnv, assertWebhookSecretsConfigured } from "@/lib/env";
 import { prisma } from "@/lib/db";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
@@ -80,13 +80,6 @@ export async function handleBookingWebhook(
             where: { id: organisationIdFromBody, deletedAt: null },
           })
         : null;
-
-    if (!org && isDemoModeEnabled()) {
-      org = await prisma.organisation.findFirst({
-        where: { deletedAt: null, demoData: true },
-        orderBy: { createdAt: "asc" },
-      });
-    }
 
     if (!org) {
       return Response.json(

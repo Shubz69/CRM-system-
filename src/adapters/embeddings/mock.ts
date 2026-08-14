@@ -3,7 +3,7 @@ import type { EmbeddingProvider } from "@/adapters/embeddings/types";
 
 /**
  * Deterministic pseudo-embeddings for local/demo only.
- * Never used in production without DEMO_MODE / allowMockTransports.
+ * Never used in production — only via allowMockTransports() in development/test.
  */
 export class MockEmbeddingProvider implements EmbeddingProvider {
   readonly name = "mock";

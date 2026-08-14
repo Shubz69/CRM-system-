@@ -21,13 +21,10 @@ export function isProductionRuntime(): boolean {
 }
 
 /**
- * Mock transports are allowed in development/test.
- * In production they are never used silently — only when DEMO_MODE is explicitly enabled
- * (demo / preview environments that intentionally use simulators).
+ * Mock transports are allowed in development/test only.
+ * Production must use real providers or fail closed — never silent mocks.
  */
 export function allowMockTransports(): boolean {
   const mode = getRuntimeMode();
-  if (mode === "test" || mode === "development") return true;
-  if (process.env.DEMO_MODE === "true") return true;
-  return false;
+  return mode === "test" || mode === "development";
 }

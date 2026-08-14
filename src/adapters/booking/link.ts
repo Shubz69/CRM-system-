@@ -48,7 +48,10 @@ export class LinkBookingProvider implements BookingProvider {
   readonly name = "link";
 
   async createBookingLink(input: BookingLinkInput): Promise<BookingLinkResult> {
-    const base = input.bookingUrl ?? process.env.DEFAULT_BOOKING_URL ?? "https://example.com/book";
+    const base = input.bookingUrl ?? process.env.DEFAULT_BOOKING_URL;
+    if (!base) {
+      return { url: "", provider: this.name };
+    }
     try {
       const url = new URL(base);
       url.searchParams.set("contact", input.contactId);

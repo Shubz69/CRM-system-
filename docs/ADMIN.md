@@ -17,7 +17,15 @@ export ADMIN_FORCE_PASSWORD_CHANGE="true"
 npm run seed:admin
 ```
 
-The seed is idempotent: it upserts the user, hashes the password with bcrypt cost 12, sets `isPlatformAdmin`, and ensures a `SUPER_ADMIN` membership on `demo-agency` (or creates `dm-intelligence-platform`). Console output is only `Super admin ready: <email>` — the password is never logged.
+The seed is idempotent: it upserts the user, hashes the password with bcrypt cost 12, sets `isPlatformAdmin`, and ensures a `SUPER_ADMIN` membership on `dm-intelligence-platform`. Console output is only `Super admin ready: <email>` — the password is never logged.
+
+Create a real tenant workspace with:
+
+```bash
+npx tsx scripts/create-organisation.ts --name "Your Agency" --slug your-agency --owner-email "$ADMIN_EMAIL"
+```
+
+Or use **Admin → Workspaces** after signing in.
 
 ## First login
 

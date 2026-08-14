@@ -102,14 +102,12 @@ export async function POST(req: NextRequest) {
         userId: user.id,
         emailConfigured: Boolean(env.EMAIL_SMTP_URL),
       });
-      // In local/dev without SMTP, return reset URL once for testing only when DEMO_MODE.
-      if (env.DEMO_MODE || env.NODE_ENV !== "production") {
+      // In local/dev without SMTP, return reset URL once for testing only.
+      if (env.NODE_ENV !== "production") {
         return Response.json({
           ok: true,
           message: "If the account exists, a reset link was generated.",
-          ...(env.DEMO_MODE || env.NODE_ENV === "development"
-            ? { resetUrl }
-            : {}),
+          ...(env.NODE_ENV === "development" ? { resetUrl } : {}),
         });
       }
     }

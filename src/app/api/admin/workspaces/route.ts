@@ -148,6 +148,10 @@ export async function POST(req: NextRequest) {
               role: MemberRole.OWNER,
             },
           });
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { activeOrganisationId: org.id },
+          });
         }
       }
 

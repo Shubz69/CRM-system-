@@ -118,7 +118,6 @@ export async function GET(req: Request) {
     const humanTakeoverRate = totalConversations > 0 ? humanTakeovers / totalConversations : 0;
 
     return Response.json({
-      demoMode: process.env.DEMO_MODE === "true",
       metrics: {
         totalConversations,
         newLeads,

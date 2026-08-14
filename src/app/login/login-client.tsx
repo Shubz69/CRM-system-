@@ -8,8 +8,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [email, setEmail] = useState("demo@dminelligence.local");
-  const [password, setPassword] = useState("demo1234");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -26,9 +26,7 @@ export default function LoginClient() {
     });
     setLoading(false);
     if (result?.error) {
-      setError(
-        "Invalid email or password. On hosted preview, seed an admin via /api/admin/bootstrap — demo login only works when DEMO_MODE=true.",
-      );
+      setError("Invalid email or password.");
       return;
     }
     router.push(callbackUrl.startsWith("/") ? callbackUrl : "/ask");
@@ -55,11 +53,8 @@ export default function LoginClient() {
           </p>
           <h1 className="h-display mt-1 text-3xl">Sign in</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Demo (local/DEMO_MODE): demo@dminelligence.local / demo1234
-          </p>
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            Hosted preview: seed the admin via Vercel env +{" "}
-            <code>/api/admin/bootstrap</code> before signing in.
+            Use your workspace account. Platform admins can be bootstrapped via{" "}
+            <code>/api/admin/bootstrap</code> when needed.
           </p>
           <label className="mt-6 block text-sm font-medium">
             Email

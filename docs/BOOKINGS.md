@@ -23,8 +23,8 @@ Sending a booking link does **not** mark a lead as booked.
 
 Authenticate with header `x-booking-secret` matching `BOOKING_WEBHOOK_SECRET`.
 
-Always include `organisationId` (or enable `DEMO_MODE` for the demo org). Contact matching uses `contactEmail` or ManyChat `contactExternalId`.
+Always include `organisationId`. Contact matching uses `contactEmail` or ManyChat `contactExternalId`.
 
 ## Settings
 
-Set `DEFAULT_BOOKING_URL` and/or Agent Configuration booking URL. Provider: `BOOKING_PROVIDER=link|mock`.
+Set your agent booking URL and/or optional `DEFAULT_BOOKING_URL`. Provider: `BOOKING_PROVIDER=link|mock`.

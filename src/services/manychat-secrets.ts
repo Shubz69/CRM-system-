@@ -112,7 +112,7 @@ export type ManyChatOrgResolution =
       ok: true;
       organisationId: string;
       channelExternalId?: string;
-      authMethod: "channel_mapping" | "org_scoped_secret" | "demo";
+      authMethod: "channel_mapping" | "org_scoped_secret";
     }
   | { ok: false; status: number; error: string };
 
@@ -130,7 +130,6 @@ export async function resolveManyChatWebhookOrganisation(input: {
   secretHeader: string;
   payloadOrganisationId?: string | null;
   channelExternalId?: string | null;
-  allowDemoFallback?: boolean;
 }): Promise<ManyChatOrgResolution> {
   const envSecret = getEnv().MANYCHAT_WEBHOOK_SECRET;
   const secretHeader = input.secretHeader || "";
@@ -168,20 +167,6 @@ export async function resolveManyChatWebhookOrganisation(input: {
 
   // No unique channel mapping — global secret must NOT authorize arbitrary org claims.
   if (!payloadOrganisationId) {
-    if (input.allowDemoFallback) {
-      const org = await prisma.organisation.findFirst({
-        where: { deletedAt: null, demoData: true },
-        orderBy: { createdAt: "asc" },
-      });
-      if (org && secretsEqual(secretHeader, envSecret)) {
-        return {
-          ok: true,
-          organisationId: org.id,
-          channelExternalId: channelExternalId ?? "default",
-          authMethod: "demo",
-        };
-      }
-    }
     return {
       ok: false,
       status: 401,

@@ -86,11 +86,12 @@ export ADMIN_FORCE_PASSWORD_CHANGE=true
 npm run seed:admin
 ```
 
-Optional demo data:
-
 ```bash
-DEMO_MODE=true DATABASE_URL="…" npm run db:seed
+export DATABASE_URL="…"
+npm run db:seed   # platform organisation only
 ```
+
+Create a tenant workspace with `npx tsx scripts/create-organisation.ts …` or Admin → Workspaces.
 
 ## Step 5 — Redeploy Vercel
 

@@ -2,6 +2,7 @@ import { hash } from "bcryptjs";
 import { MemberRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { writeAuditLog } from "@/services/audit";
+import { getPlatformOrganisationId, PLATFORM_ORG_SLUG } from "@/lib/platform-org";
 
 const DEFAULT_ADMIN_EMAIL = "1230shobhit@gmail.com";
 
@@ -14,6 +15,8 @@ export type SeedAdminResult = {
 
 /**
  * Idempotent super-admin seed. Hashes ADMIN_INITIAL_PASSWORD; never returns it.
+ * Attaches the admin to the platform organisation only — tenant orgs are created
+ * via Admin → Workspaces or scripts/create-organisation.ts.
  */
 export async function seedSuperAdmin(input?: {
   email?: string;
@@ -71,130 +74,48 @@ export async function seedSuperAdmin(input?: {
   const superAdminRole =
     (MemberRole as Record<string, MemberRole>).SUPER_ADMIN ?? MemberRole.OWNER;
 
-  const demoAgency = await prisma.organisation.findUnique({ where: { slug: "demo-agency" } });
-
-  const primaryOrg =
-    demoAgency ??
-    (await prisma.organisation.upsert({
-      where: { slug: "dm-intelligence-platform" },
-      update: { isPlatform: true, name: "Agent Desk Platform" },
-      create: {
-        name: "Agent Desk Platform",
-        slug: "dm-intelligence-platform",
-        timezone: "UTC",
-        demoData: false,
-        isPlatform: true,
-      },
-    }));
+  const platformOrgId = await getPlatformOrganisationId();
+  await prisma.organisation.update({
+    where: { id: platformOrgId },
+    data: { name: "Agent Desk Platform", isPlatform: true, demoData: false },
+  });
 
   await prisma.organisationMember.upsert({
     where: {
       organisationId_userId: {
-        organisationId: primaryOrg.id,
+        organisationId: platformOrgId,
         userId: user.id,
       },
     },
     update: { role: superAdminRole },
     create: {
-      organisationId: primaryOrg.id,
+      organisationId: platformOrgId,
       userId: user.id,
       role: superAdminRole,
     },
   });
 
-  const organisationIds = [primaryOrg.id];
-
-  if (demoAgency && demoAgency.id !== primaryOrg.id) {
-    await prisma.organisationMember.upsert({
-      where: {
-        organisationId_userId: {
-          organisationId: demoAgency.id,
-          userId: user.id,
-        },
-      },
-      update: { role: MemberRole.OWNER },
-      create: {
-        organisationId: demoAgency.id,
-        userId: user.id,
-        role: MemberRole.OWNER,
-      },
-    });
-    organisationIds.push(demoAgency.id);
-  }
-
-  if (demoAgency && primaryOrg.id === demoAgency.id) {
-    const platformOrg = await prisma.organisation.upsert({
-      where: { slug: "dm-intelligence-platform" },
-      update: { name: "Agent Desk Platform", isPlatform: true },
-      create: {
-        name: "Agent Desk Platform",
-        slug: "dm-intelligence-platform",
-        timezone: "UTC",
-        demoData: false,
-        isPlatform: true,
-      },
-    });
-    await prisma.organisationMember.upsert({
-      where: {
-        organisationId_userId: {
-          organisationId: platformOrg.id,
-          userId: user.id,
-        },
-      },
-      update: { role: superAdminRole },
-      create: {
-        organisationId: platformOrg.id,
-        userId: user.id,
-        role: superAdminRole,
-      },
-    });
-    if (!organisationIds.includes(platformOrg.id)) organisationIds.push(platformOrg.id);
-  }
-
-  // Ensure at least one default pipeline so the app is usable after bootstrap.
-  const existingPipeline = await prisma.pipeline.findFirst({
-    where: { organisationId: primaryOrg.id, isDefault: true },
+  // Prefer an existing non-platform active workspace; otherwise stay on platform.
+  const tenantMembership = await prisma.organisationMember.findFirst({
+    where: {
+      userId: user.id,
+      organisation: { isPlatform: false, deletedAt: null, status: "ACTIVE" },
+    },
+    orderBy: { createdAt: "asc" },
   });
-  if (!existingPipeline) {
-    await prisma.pipeline.create({
-      data: {
-        organisationId: primaryOrg.id,
-        name: "Sales pipeline",
-        isDefault: true,
-        stages: {
-          create: [
-            { name: "New", slug: "new", position: 0, color: "#94a3b8" },
-            { name: "Qualified", slug: "qualified", position: 1, color: "#34d399" },
-            { name: "Booked", slug: "booked", position: 2, color: "#f59e0b" },
-            { name: "Won", slug: "won", position: 3, color: "#22c55e", isWon: true },
-            { name: "Lost", slug: "lost", position: 4, color: "#ef4444", isLost: true },
-          ],
-        },
-      },
-    });
-  }
-
-  const agent = await prisma.agentConfiguration.findFirst({
-    where: { organisationId: primaryOrg.id },
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      activeOrganisationId: tenantMembership?.organisationId ?? platformOrgId,
+    },
   });
-  if (!agent) {
-    await prisma.agentConfiguration.create({
-      data: {
-        organisationId: primaryOrg.id,
-        name: "Default agent",
-        isActive: true,
-        isDraft: false,
-        brandTone: "professional, helpful, concise",
-        aiProvider: "anthropic",
-        model: process.env.ANTHROPIC_DEFAULT_MODEL || "claude-sonnet-4-20250514",
-      },
-    });
-  }
 
   return {
     email,
     created: !existing,
     updated: Boolean(existing),
-    organisationIds,
+    organisationIds: [platformOrgId],
   };
 }
+
+export { PLATFORM_ORG_SLUG };

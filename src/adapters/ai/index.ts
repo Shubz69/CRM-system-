@@ -60,7 +60,7 @@ export function getAiProvider(override?: string): AiProvider {
   if (configured === "mock") {
     if (!allowMockTransports()) {
       if (env.ANTHROPIC_API_KEY) return new AnthropicProvider();
-      logger.warn("AI_PROVIDER=mock rejected in production without DEMO_MODE");
+        logger.warn("AI_PROVIDER=mock rejected in production");
       return new NotConfiguredAiProvider();
     }
     return new MockAiProvider();

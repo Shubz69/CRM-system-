@@ -1,13 +1,24 @@
 import { test, expect } from "@playwright/test";
 
+/**
+ * Requires a real user with a tenant workspace (not demo seed).
+ * Set E2E_EMAIL / E2E_PASSWORD before running.
+ */
+function e2eCredentials() {
+  const email = process.env.E2E_EMAIL;
+  const password = process.env.E2E_PASSWORD;
+  test.skip(!email || !password, "E2E_EMAIL and E2E_PASSWORD are required");
+  return { email: email!, password: password! };
+}
+
 async function signIn(page: import("@playwright/test").Page) {
+  const { email, password } = e2eCredentials();
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await page.getByLabel("Email").fill("demo@dminelligence.local");
-  await page.getByLabel("Password").fill("demo1234");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/dashboard/, { timeout: 60_000 });
-  await expect(page.getByRole("heading", { name: /Dashboard/i })).toBeVisible({ timeout: 60_000 });
+  await page.waitForURL(/\/(dashboard|ask|inbox)/, { timeout: 60_000 });
 }
 
 async function openSimulator(page: import("@playwright/test").Page) {
@@ -90,12 +101,4 @@ test("insights content suggestions render after traffic", async ({ page }) => {
   await page.goto("/insights");
   await expect(page.getByRole("heading", { name: "Insights" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Content ideas" })).toBeVisible();
-});
-
-test("organisation switcher appears for multi-org demo user", async ({ page }) => {
-  await signIn(page);
-  const switcher = page.getByLabel("Switch organisation");
-  await expect(switcher).toBeVisible();
-  await switcher.selectOption({ label: "Northstar Studio" });
-  await expect(page.getByLabel("Switch organisation")).toBeVisible({ timeout: 60_000 });
 });

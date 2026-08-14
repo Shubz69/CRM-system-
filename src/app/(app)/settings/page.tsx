@@ -203,7 +203,7 @@ export default function SettingsPage() {
                 className="input mt-1"
                 value={bookingUrl}
                 onChange={(e) => setBookingUrl(e.target.value)}
-                placeholder="https://calendly.com/you/intro"
+                placeholder="Your booking page URL"
               />
             </label>
             <p className="mt-2 text-xs text-[var(--muted)]">

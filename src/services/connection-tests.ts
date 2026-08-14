@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getEnv, isDemoModeEnabled } from "@/lib/env";
+import { getEnv } from "@/lib/env";
 import { getOrganisationManyChatSecret } from "@/services/manychat-secrets";
 import type { IntegrationType, Prisma } from "@prisma/client";
 import IORedis from "ioredis";
@@ -668,8 +668,7 @@ async function testBooking(): Promise<{ ok: boolean; message: string }> {
       };
     }
 
-    const isDefaultSecret =
-      env.BOOKING_WEBHOOK_SECRET === "dev-booking-webhook-secret" && !isDemoModeEnabled();
+    const isDefaultSecret = env.BOOKING_WEBHOOK_SECRET === "dev-booking-webhook-secret";
     if (isDefaultSecret && env.NODE_ENV === "production") {
       return {
         ok: false,

@@ -239,6 +239,12 @@ export async function processInboundMessage(
             phone: input.contact.phone || null,
             leadSource: input.leadSource ?? "instagram",
             campaignSource: input.campaignSource,
+            metadata:
+              provider === "simulator"
+                ? { origin: "simulator" }
+                : provider === "integration_test"
+                  ? { origin: "integration_test" }
+                  : {},
             identifiers: {
               create: {
                 organisationId: input.organisationId,
@@ -323,6 +329,7 @@ export async function processInboundMessage(
           direction: MessageDirection.INBOUND,
           senderType: MessageSenderType.CONTACT,
           body: input.message.text,
+          origin: provider,
           rawPayload: (options?.rawPayload as object) ?? undefined,
           sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
         },
@@ -876,32 +883,34 @@ export async function processInboundMessage(
           leadId: result.lead.id,
           bookingUrl: agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL,
         });
-        if (booking.url && !reply.includes(booking.url)) {
-          reply = `${reply}\n\nBook here: ${booking.url}`;
-        }
-        await prisma.booking.create({
-          data: {
+        if (booking.url) {
+          if (!reply.includes(booking.url)) {
+            reply = `${reply}\n\nBook here: ${booking.url}`;
+          }
+          await prisma.booking.create({
+            data: {
+              organisationId: input.organisationId,
+              contactId: result.contact.id,
+              conversationId: result.conversation.id,
+              leadId: result.lead.id,
+              provider: process.env.BOOKING_PROVIDER || "link",
+              status: BookingStatus.OFFERED,
+              bookingUrl: booking.url,
+              attribution: {
+                source: input.leadSource || "instagram_manychat",
+                campaign: input.campaignSource || null,
+              },
+            },
+          });
+          await runAutomations({
             organisationId: input.organisationId,
             contactId: result.contact.id,
             conversationId: result.conversation.id,
             leadId: result.lead.id,
-            provider: process.env.BOOKING_PROVIDER || "link",
-            status: BookingStatus.OFFERED,
-            bookingUrl: booking.url || agentConfig?.bookingUrl || process.env.DEFAULT_BOOKING_URL,
-            attribution: {
-              source: input.leadSource || "instagram_manychat",
-              campaign: input.campaignSource || null,
-            },
-          },
-        });
-        await runAutomations({
-          organisationId: input.organisationId,
-          contactId: result.contact.id,
-          conversationId: result.conversation.id,
-          leadId: result.lead.id,
-          triggerType: "booking_link_sent",
-          payload: { bookingUrl: booking.url },
-        });
+            triggerType: "booking_link_sent",
+            payload: { bookingUrl: booking.url },
+          });
+        }
       }
 
       const adapter = getMessagingAdapter();
@@ -922,6 +931,7 @@ export async function processInboundMessage(
             direction: MessageDirection.OUTBOUND,
             senderType: MessageSenderType.AI,
             body: reply,
+            origin: provider,
             aiMetadata: {
               provider: routed.provider,
               model: routed.model,

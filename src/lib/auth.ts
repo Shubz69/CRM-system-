@@ -2,7 +2,7 @@ import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/db";
-import { getAuthSecret, isDemoModeEnabled } from "@/lib/env";
+import { getAuthSecret } from "@/lib/env";
 import type { MemberRole } from "@prisma/client";
 import { resolveActiveWorkspaceForUser } from "@/services/active-workspace";
 
@@ -55,7 +55,6 @@ declare module "next-auth/jwt" {
   }
 }
 
-const DEMO_EMAIL = "demo@dminelligence.local";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
 /** Re-validate JWT org against DB at most every 60s (keeps stale IDs from surviving a reseed). */
@@ -80,9 +79,6 @@ export const authOptions: NextAuthOptions = {
         }
 
         const email = credentials.email.toLowerCase();
-        if (email === DEMO_EMAIL && !isDemoModeEnabled()) {
-          return null;
-        }
 
         const user = await prisma.user.findUnique({
           where: { email },
@@ -131,7 +127,7 @@ export const authOptions: NextAuthOptions = {
         });
 
         // Explicit workspace selection — never "first SUPER_ADMIN" (ambiguous when
-        // the user is SUPER_ADMIN on both Demo Agency and the platform org).
+        // a user has multiple memberships including the platform org).
         const resolved = await resolveActiveWorkspaceForUser({
           userId: user.id,
           preferredOrganisationId: user.activeOrganisationId,

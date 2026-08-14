@@ -46,14 +46,14 @@ describe("pickActiveWorkspace", () => {
         name: "Agent Desk Platform",
       }),
       membership({
-        organisationId: "demo",
+        organisationId: "tenant",
         role: "SUPER_ADMIN" as MemberRole,
-        name: "Demo Agency",
+        name: "Acme Agency",
       }),
     ];
     // Old bug: find(SUPER_ADMIN) would pick platform first.
     const picked = pickActiveWorkspace(rows, null);
-    expect(picked?.organisationId).toBe("demo");
+    expect(picked?.organisationId).toBe("tenant");
   });
 
   it("ignores deleted or non-active organisations", () => {

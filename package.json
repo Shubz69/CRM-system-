@@ -17,6 +17,8 @@
     "db:push": "node scripts/block-db-push.js",
     "db:seed": "tsx prisma/seed.ts",
     "seed:admin": "tsx prisma/seed-admin.ts",
+    "org:create": "tsx scripts/create-organisation.ts",
+    "demo:purge": "tsx scripts/purge-demo-data.ts",
     "db:studio": "prisma studio",
     "db:dev": "tsx scripts/dev-db.ts",
     "db:upgrade": "tsx scripts/apply-schema-upgrade.ts",

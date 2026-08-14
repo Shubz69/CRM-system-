@@ -22,6 +22,5 @@ jobs:
           DATABASE_URL: postgresql://dmintel:dmintel@127.0.0.1:54329/dm_intelligence_crm?schema=public
           AUTH_SECRET: ci-auth-secret-change-me-please
           NEXTAUTH_SECRET: ci-auth-secret-change-me-please
-          DEMO_MODE: "true"
           AI_PROVIDER: mock
         continue-on-error: true

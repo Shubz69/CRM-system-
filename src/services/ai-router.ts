@@ -116,7 +116,7 @@ export function resolveConversationProvider(agentProvider?: string | null): AiPr
   if (preferred === "openai" && !process.env.OPENAI_API_KEY) {
     preferred = "anthropic";
   }
-  if (preferred === "mock" && process.env.ANTHROPIC_API_KEY && process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true") {
+  if (preferred === "mock" && process.env.ANTHROPIC_API_KEY && process.env.NODE_ENV === "production") {
     preferred = "anthropic";
   }
   return getAiProvider(preferred);

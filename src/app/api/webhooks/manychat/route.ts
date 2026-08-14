@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { NextRequest } from "next/server";
-import { assertWebhookSecretsConfigured, isDemoModeEnabled } from "@/lib/env";
+import { assertWebhookSecretsConfigured } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { manychatWebhookSchema } from "@/schemas/webhook";
@@ -33,7 +33,6 @@ export async function POST(req: NextRequest) {
       secretHeader,
       payloadOrganisationId: data.organisationId,
       channelExternalId: data.channel_id,
-      allowDemoFallback: isDemoModeEnabled(),
     });
 
     if (!resolved.ok) {

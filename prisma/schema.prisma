@@ -439,6 +439,8 @@ model Message {
   direction        MessageDirection
   senderType       MessageSenderType
   body             String             @db.Text
+  /// Provenance: "simulator", "manychat", "integration_test", etc. Null for legacy rows.
+  origin           String?
   rawPayload       Json?
   aiMetadata       Json?
   deliveryStatus   String?
@@ -450,6 +452,7 @@ model Message {
   @@unique([conversationId, externalId])
   @@index([conversationId, sentAt])
   @@index([organisationId, sentAt])
+  @@index([organisationId, origin])
 }
 
 model Pipeline {

@@ -45,7 +45,8 @@ export default function SimulatorPage() {
       <div>
         <h1 className="h-display text-4xl">Conversation simulator</h1>
         <p className="mt-1 text-[var(--muted)]">
-          Simulate an Instagram DM through the full inbound pipeline without ManyChat credentials.
+          Push a real inbound message through the live pipeline for this workspace (no ManyChat
+          required). Rows are marked origin = simulator so you can tell them apart later.
         </p>
       </div>
 

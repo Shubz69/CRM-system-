@@ -43,7 +43,7 @@ export function getEmbeddingProvider(override?: string): EmbeddingProvider {
   if (configured === "mock") {
     if (!allowMockTransports()) {
       throw new EmbeddingNotConfiguredError(
-        "EMBEDDING_PROVIDER=mock is not allowed in production without DEMO_MODE",
+        "EMBEDDING_PROVIDER=mock is not allowed in production",
       );
     }
     logger.warn("Using mock embedding provider (non-production/demo only)");

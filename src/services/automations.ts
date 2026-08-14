@@ -255,6 +255,7 @@ async function executeAction(action: AutomationAction, context: AutomationContex
           bookingUrl: bookingUrl || undefined,
         });
         bookingUrl = link.url;
+        if (!bookingUrl) break;
       }
       const text =
         action.message ||

@@ -1,20 +1,35 @@
 /**
- * Integration checks against the local database.
- * Requires: DATABASE_URL + npm run db:setup
+ * Integration checks against a real Postgres database.
+ * Requires: DATABASE_URL
  * Explicitly skipped (not silently green) when DATABASE_URL is unset.
+ * Creates and tears down its own organisation — does not use seeded demo data.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
+import { resetEnvCache } from "@/lib/env";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { clearMockOutboundLog, mockOutboundLog } from "@/adapters/messaging";
 import { cancelPendingFollowUps } from "@/services/followups";
+import {
+  createTestOrganisation,
+  destroyTestOrganisation,
+  type TestOrganisationFixture,
+} from "./helpers/org-fixtures";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
 describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
+  let fixture: TestOrganisationFixture;
   let organisationId = "";
+  const previousAiProvider = process.env.AI_PROVIDER;
+  const previousManychatToken = process.env.MANYCHAT_API_TOKEN;
 
   beforeAll(async () => {
+    // Force mock transports so the test does not call live ManyChat/Anthropic.
+    process.env.AI_PROVIDER = "mock";
+    delete process.env.MANYCHAT_API_TOKEN;
+    resetEnvCache();
+
     try {
       await prisma.$queryRaw`SELECT 1`;
     } catch (error) {
@@ -23,16 +38,18 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
         `DATABASE_URL is set but Postgres is unreachable — refusing to skip. ${message}`,
       );
     }
+    fixture = await createTestOrganisation("inbound");
+    organisationId = fixture.organisationId;
   });
 
   afterAll(async () => {
+    if (fixture) await destroyTestOrganisation(fixture);
+    if (previousAiProvider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = previousAiProvider;
+    if (previousManychatToken === undefined) delete process.env.MANYCHAT_API_TOKEN;
+    else process.env.MANYCHAT_API_TOKEN = previousManychatToken;
+    resetEnvCache();
     await prisma.$disconnect();
-  });
-
-  it("loads demo organisation", async () => {
-    const org = await prisma.organisation.findUnique({ where: { slug: "demo-agency" } });
-    expect(org).toBeTruthy();
-    organisationId = org!.id;
   });
 
   it("processes a simulated DM end-to-end with idempotency", async () => {
@@ -68,6 +85,11 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
 
     const lead = await prisma.lead.findUnique({ where: { id: first.leadId! } });
     expect(lead?.score).toBeGreaterThan(0);
+
+    const inbound = await prisma.message.findFirst({
+      where: { organisationId, conversationId: first.conversationId!, direction: "INBOUND" },
+    });
+    expect(inbound?.origin).toBe("integration_test");
 
     const second = await processInboundMessage(
       {
@@ -105,11 +127,12 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
   });
 
   it("isolates organisations", async () => {
-    const other = await prisma.organisation.create({
-      data: { name: "Other Org", slug: `other-${Date.now()}` },
-    });
-    const count = await prisma.contact.count({ where: { organisationId: other.id } });
-    expect(count).toBe(0);
-    await prisma.organisation.delete({ where: { id: other.id } });
+    const other = await createTestOrganisation("other");
+    try {
+      const count = await prisma.contact.count({ where: { organisationId: other.organisationId } });
+      expect(count).toBe(0);
+    } finally {
+      await destroyTestOrganisation(other);
+    }
   });
 });
