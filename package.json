@@ -24,7 +24,7 @@
     "db:upgrade": "tsx scripts/apply-schema-upgrade.ts",
     "db:setup": "tsx scripts/db-setup-dev.ts",
     "db:setup:dev": "tsx scripts/db-setup-dev.ts",
-    "worker": "tsx src/workers/index.ts",
+    "worker": "tsx --env-file=.env src/workers/index.ts",
     "worker:prod": "NODE_ENV=production tsx src/workers/index.ts",
     "postinstall": "prisma generate"
   },
