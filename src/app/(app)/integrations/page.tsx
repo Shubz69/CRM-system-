@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Channel = {
   id: string;
@@ -79,7 +80,7 @@ function formatTestedAt(iso: string | undefined | null): string {
   try {
     return `Last tested ${new Date(iso).toLocaleString()}`;
   } catch {
-    return "Last tested â€”";
+    return "Last tested —";
   }
 }
 
@@ -229,17 +230,12 @@ export default function IntegrationsPage() {
   }
 
   if (loading && !status && !readiness) {
-    return <div className="surface p-6 text-[var(--muted)]">Loading integrationsâ€¦</div>;
+    return <div className="surface p-6 text-[var(--muted)]">Loading integrations…</div>;
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Integrations</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Paste credentials, test each connection, and see what still needs doing before going live.
-        </p>
-      </div>
+      <PageHeader description="Paste credentials, test each connection, and see what still needs doing before going live." />
 
 
       <div className="grid gap-3 md:grid-cols-3">

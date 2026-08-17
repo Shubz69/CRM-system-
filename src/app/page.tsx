@@ -39,9 +39,9 @@ export default async function HomePage() {
         </header>
 
         {missing.length > 0 && (
-          <div className="animate-rise mt-6 rounded-xl border border-amber-300/35 bg-amber-400/12 px-4 py-3 text-sm text-amber-50">
+          <div className="animate-rise mt-6 rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm text-white">
             <p className="font-semibold">Deployment needs environment variables</p>
-            <p className="mt-1 text-amber-50/85">
+            <p className="mt-1 text-white/80">
               Add these in Vercel → Settings → Environment Variables, then redeploy:{" "}
               {missing.join(", ")}.
             </p>

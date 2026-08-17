@@ -104,6 +104,28 @@ function extractSources(value: unknown): SourceItem[] {
   return out;
 }
 
+function extractFindings(value: unknown): Array<{
+  claim: string;
+  sourceUrl?: string;
+  evidenceExcerpt?: string;
+}> {
+  if (!value || typeof value !== "object") return [];
+  const obj = value as Record<string, unknown>;
+  if (!Array.isArray(obj.findings)) return [];
+  const out: Array<{ claim: string; sourceUrl?: string; evidenceExcerpt?: string }> = [];
+  for (const item of obj.findings) {
+    if (!item || typeof item !== "object") continue;
+    const f = item as { claim?: unknown; sourceUrl?: unknown; evidenceExcerpt?: unknown };
+    if (typeof f.claim !== "string") continue;
+    out.push({
+      claim: f.claim,
+      sourceUrl: typeof f.sourceUrl === "string" ? f.sourceUrl : undefined,
+      evidenceExcerpt: typeof f.evidenceExcerpt === "string" ? f.evidenceExcerpt : undefined,
+    });
+  }
+  return out;
+}
+
 function renderAnswerBody(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
@@ -449,9 +471,14 @@ export default function AskPage() {
   const answerBody = answerSource != null ? renderAnswerBody(answerSource) : "";
   const imageUrl = imageUrlFromOutput(answerSource);
   const sources = extractSources(answerSource);
+  const findings = extractFindings(answerSource);
+  const adapterErrors =
+    answerSource && typeof answerSource === "object" && Array.isArray((answerSource as { adapterErrors?: unknown }).adapterErrors)
+      ? ((answerSource as { adapterErrors: Array<{ platform?: string; message?: string }> }).adapterErrors)
+      : [];
   const isPartial = progress?.status === "PARTIAL";
   const showAnswer =
-    Boolean(answerBody || imageUrl) &&
+    Boolean(answerBody || imageUrl || findings.length) &&
     ["COMPLETED", "PARTIAL", "FAILED", "RUNNING"].includes(progress?.status || "");
 
   const isLive =
@@ -467,13 +494,10 @@ export default function AskPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-8">
       {showHomeCards && (
-        <div>
-          <h1 className="sr-only">What do you need?</h1>
-          <p className="text-[var(--muted)]">
-            Describe the outcome in plain English. You never pick an agent, model, or tier —
-            we route that for you.
-          </p>
-        </div>
+        <p className="text-[var(--muted)]">
+          Describe the outcome in plain English. You never pick an agent, model, or tier — we route
+          that for you.
+        </p>
       )}
 
       <form onSubmit={onSubmit} className="space-y-3">
@@ -619,7 +643,7 @@ export default function AskPage() {
             {isPartial ? "What I finished" : "Answer"}
           </h2>
           {isPartial && progress?.userFacingError && (
-            <p className="rounded-xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm text-[var(--foreground)]">
+            <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
               {progress.userFacingError}
             </p>
           )}
@@ -633,6 +657,38 @@ export default function AskPage() {
           )}
           {answerBody && (
             <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
+          )}
+          {findings.length > 0 && (
+            <ul className="space-y-3">
+              {findings.map((f, i) => (
+                <li key={`${f.claim}-${i}`} className="surface p-4">
+                  <p className="text-[var(--foreground)]">{f.claim}</p>
+                  {f.evidenceExcerpt ? (
+                    <p className="mt-2 text-sm text-[var(--muted)]">{f.evidenceExcerpt}</p>
+                  ) : null}
+                  {f.sourceUrl ? (
+                    <a
+                      href={f.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
+                    >
+                      Source
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {adapterErrors.length > 0 && (
+            <p className="text-sm text-[var(--muted)]">
+              Some sources were skipped:{" "}
+              {adapterErrors
+                .map((e) => e.message || e.platform)
+                .filter(Boolean)
+                .slice(0, 4)
+                .join(" · ")}
+            </p>
           )}
           {!isPartial && progress?.userFacingError && !answerBody && !imageUrl && (
             <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>

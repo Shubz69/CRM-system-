@@ -1,23 +1,26 @@
 @import "tailwindcss";
 
 :root {
-  /* Steel desk + amber copper — not cream/terracotta, not purple */
-  --background: #e8ebf0;
-  --foreground: #151821;
-  --surface: #f5f6f9;
-  --surface-2: #dce1e9;
-  --border: #c2c9d4;
-  --accent: #c46b1f;
-  --accent-soft: #f3e4d2;
-  --accent-2: #2c4060;
-  --danger: #b42318;
-  --muted: #5a6474;
-  --sidebar: #151821;
-  --sidebar-text: #e8ebf0;
-  --ring: #c46b1f;
-  --hero-ink: #0e1118;
-  --hero-mist: #d4a574;
-  --hero-steel: #3d5578;
+  /* Daylight ink + teal — one accent, used everywhere */
+  --background: #f3f5f8;
+  --foreground: #0b1220;
+  --surface: #ffffff;
+  --surface-2: #e8edf3;
+  --border: #cdd5e0;
+  --accent: #0c6b64;
+  --accent-soft: #d7f3ef;
+  --accent-2: #1e3a5f;
+  --danger: #e11d48;
+  --muted: #5b6778;
+  --sidebar: #0b1220;
+  --sidebar-text: #eef2f6;
+  --ring: #0c6b64;
+  --hero-ink: #071018;
+  --hero-mist: #5eead4;
+  --hero-steel: #1e3a5f;
+  --success: #0c6b64;
+  --warn: #b45309;
+  --warn-soft: #fef3c7;
 }
 
 @theme inline {
@@ -43,9 +46,9 @@
 
 body {
   background:
-    radial-gradient(circle at 10% 0%, rgba(196, 107, 31, 0.1), transparent 36%),
-    radial-gradient(circle at 92% 6%, rgba(44, 64, 96, 0.1), transparent 30%),
-    linear-gradient(180deg, #f0f2f6 0%, var(--background) 42%, #dfe3ea 100%);
+    radial-gradient(circle at 8% 0%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 38%),
+    radial-gradient(circle at 94% 4%, color-mix(in oklab, var(--accent-2) 10%, transparent), transparent 32%),
+    linear-gradient(180deg, #f7f8fb 0%, var(--background) 42%, #e7ebf1 100%);
   color: var(--foreground);
   font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
 }
@@ -65,8 +68,8 @@ a {
 .surface {
   background: color-mix(in oklab, var(--surface) 96%, white);
   border: 1px solid color-mix(in oklab, var(--border) 75%, white);
-  border-radius: 14px;
-  box-shadow: 0 1px 0 rgba(21, 24, 33, 0.04);
+  border-radius: 16px;
+  box-shadow: 0 1px 0 rgba(11, 18, 32, 0.04);
 }
 
 .surface-interactive {
@@ -81,9 +84,9 @@ a {
 
 .app-atmosphere {
   background:
-    radial-gradient(circle at 6% 0%, rgba(196, 107, 31, 0.09), transparent 34%),
-    radial-gradient(circle at 94% 4%, rgba(44, 64, 96, 0.08), transparent 32%),
-    radial-gradient(circle at 50% 100%, rgba(196, 107, 31, 0.05), transparent 42%);
+    radial-gradient(circle at 6% 0%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 34%),
+    radial-gradient(circle at 94% 4%, color-mix(in oklab, var(--accent-2) 8%, transparent), transparent 32%),
+    radial-gradient(circle at 50% 100%, color-mix(in oklab, var(--accent) 6%, transparent), transparent 42%);
 }
 
 .metric-value {
@@ -93,7 +96,12 @@ a {
 }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--surface-2) 25%, #eef1f5 50%, var(--surface-2) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    color-mix(in oklab, var(--surface) 80%, white) 50%,
+    var(--surface-2) 75%
+  );
   background-size: 200% 100%;
   animation: shimmer 1.2s ease-in-out infinite;
   border-radius: 10px;
@@ -125,13 +133,19 @@ a {
   transform: translateY(-1px);
 }
 
+.btn:disabled {
+  opacity: 0.55;
+  transform: none;
+  cursor: not-allowed;
+}
+
 .btn-primary {
   background: var(--accent);
   color: white;
 }
 
 .btn-primary:hover {
-  filter: brightness(1.05);
+  filter: brightness(1.06);
 }
 
 .btn-secondary {
@@ -178,17 +192,17 @@ a {
 
 .badge-success {
   background: var(--accent-soft);
-  color: color-mix(in oklab, var(--accent) 80%, #151821);
+  color: var(--accent);
 }
 
 .badge-warn {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 
 .badge-danger {
-  background: #fee4e2;
-  color: #b42318;
+  background: color-mix(in oklab, var(--danger) 12%, white);
+  color: var(--danger);
 }
 
 @keyframes rise-in {
@@ -243,9 +257,9 @@ a {
 
 .hero-plane {
   background:
-    radial-gradient(ellipse at 18% 12%, rgba(212, 165, 116, 0.28), transparent 42%),
-    radial-gradient(ellipse at 82% 70%, rgba(61, 85, 120, 0.45), transparent 48%),
-    linear-gradient(152deg, #0e1118 0%, #1a2230 46%, #2c4060 100%);
+    radial-gradient(ellipse at 18% 12%, color-mix(in oklab, var(--hero-mist) 28%, transparent), transparent 42%),
+    radial-gradient(ellipse at 82% 70%, color-mix(in oklab, var(--hero-steel) 50%, transparent), transparent 48%),
+    linear-gradient(152deg, var(--hero-ink) 0%, #122033 46%, var(--accent-2) 100%);
 }
 
 .hero-desk-grid {

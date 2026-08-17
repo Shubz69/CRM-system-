@@ -44,9 +44,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(login);
     }
     const isAdmin =
-      token.isPlatformAdmin === true ||
-      token.role === "SUPER_ADMIN" ||
-      token.role === "OWNER";
+      token.isPlatformAdmin === true || token.role === "SUPER_ADMIN";
     if (!isAdmin) {
       return NextResponse.redirect(new URL("/ask", request.url));
     }

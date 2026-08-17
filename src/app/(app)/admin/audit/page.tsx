@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -22,13 +23,7 @@ export default async function AdminAuditPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Audit logs</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Platform-wide security and change history. Scope distinguishes tenant (ORG) from
-          platform-level events.
-        </p>
-      </div>
+      <PageHeader description="Platform-wide security and change history. Scope distinguishes tenant (ORG) from platform-level events." />
       <div className="surface overflow-x-auto">
         <table className="w-full min-w-[900px] text-left text-sm">
           <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">

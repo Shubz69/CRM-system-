@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { GlobalSettingsForm } from "./settings-form";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +17,7 @@ export default async function AdminSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Global settings</h1>
-        <p className="mt-1 text-[var(--muted)]">Platform-wide configuration stored as SystemSetting records.</p>
-      </div>
+      <PageHeader description="Platform-wide configuration stored as SystemSetting records." />
       <GlobalSettingsForm initial={settings.map((s) => ({ key: s.key, value: s.value }))} />
     </div>
   );

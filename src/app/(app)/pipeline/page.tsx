@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Lead = {
   id: string;
@@ -80,23 +81,30 @@ export default function PipelinePage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="h-display text-4xl">Pipeline</h1>
-          <p className="text-[var(--muted)]">Move leads through configurable sales stages.</p>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn btn-secondary" type="button" onClick={() => setView("kanban")}>
-            Kanban
-          </button>
-          <button className="btn btn-secondary" type="button" onClick={() => setView("table")}>
-            Table
-          </button>
-          <button className="btn btn-primary" type="button" onClick={exportCsv}>
-            Export CSV
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        description="Move leads through configurable sales stages."
+        actions={
+          <>
+            <button
+              className={`btn ${view === "kanban" ? "btn-primary" : "btn-secondary"}`}
+              type="button"
+              onClick={() => setView("kanban")}
+            >
+              Kanban
+            </button>
+            <button
+              className={`btn ${view === "table" ? "btn-primary" : "btn-secondary"}`}
+              type="button"
+              onClick={() => setView("table")}
+            >
+              Table
+            </button>
+            <button className="btn btn-primary" type="button" onClick={exportCsv}>
+              Export CSV
+            </button>
+          </>
+        }
+      />
 
       {totalLeads === 0 && (
         <EmptyState
@@ -118,13 +126,13 @@ export default function PipelinePage() {
               </div>
               <div className="space-y-2">
                 {stage.leads.map((lead) => (
-                  <div key={lead.id} className="rounded-xl border border-[var(--border)] bg-white p-3">
+                  <div key={lead.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
                     <p className="font-medium">{lead.contact.fullName || "Lead"}</p>
                     <p className="text-xs text-[var(--muted)]">@{lead.contact.instagramUsername}</p>
                     <div className="mt-2 flex items-center justify-between">
                       <span className="badge badge-success">{lead.score}</span>
                       <select
-                        className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs"
+                        className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
                         value={stage.id}
                         onChange={(e) => moveLead(lead.id, e.target.value)}
                       >

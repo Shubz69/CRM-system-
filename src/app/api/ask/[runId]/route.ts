@@ -16,7 +16,7 @@ export async function GET(
   context: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requirePermission("agent:manage");
+    const session = await requirePermission("ask:use");
     await assertActiveWorkspaceAccess({
       userId: session.userId,
       organisationId: session.organisationId,

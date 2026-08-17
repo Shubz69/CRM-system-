@@ -225,7 +225,7 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
                     ) : (
                       <button
                         type="button"
-                        className="text-left text-red-600 hover:underline"
+                        className="text-left text-[var(--danger)] hover:underline"
                         disabled={busy === `suspend-${org.id}`}
                         onClick={() => void mutate(org.id, "suspend")}
                       >

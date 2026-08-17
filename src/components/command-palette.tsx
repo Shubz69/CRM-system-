@@ -19,9 +19,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
 
   const isAdmin =
-    session?.user?.isPlatformAdmin ||
-    session?.user?.role === "SUPER_ADMIN" ||
-    session?.user?.role === "OWNER";
+    session?.user?.isPlatformAdmin || session?.user?.role === "SUPER_ADMIN";
 
   const items = useMemo(() => {
     const base = [...WORKSPACE_NAV, ...(isAdmin ? ADMIN_NAV : [])].map((i) => ({
@@ -73,6 +71,7 @@ export function CommandPalette() {
           autoFocus
           className="input rounded-none border-0 border-b border-[var(--border)]"
           placeholder="Search pages and actions…"
+          aria-label="Search pages and actions"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />

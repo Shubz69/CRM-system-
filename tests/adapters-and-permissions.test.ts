@@ -66,6 +66,11 @@ describe("Permissions", () => {
     expect(roleHasPermission(MemberRole.READ_ONLY, "inbox:write")).toBe(false);
   });
 
+  it("lets sales agents use Home / Ask", () => {
+    expect(roleHasPermission(MemberRole.SALES_AGENT, "ask:use")).toBe(true);
+    expect(roleHasPermission(MemberRole.READ_ONLY, "ask:use")).toBe(false);
+  });
+
   it("gives super admin platform permissions", () => {
     expect(roleHasPermission(MemberRole.SUPER_ADMIN, "platform:manage")).toBe(true);
     expect(roleHasPermission(MemberRole.SUPER_ADMIN, "system:health")).toBe(true);

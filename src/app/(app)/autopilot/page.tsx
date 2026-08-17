@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AutopilotPanel } from "@/components/autopilot-panel";
+import { PageHeader } from "@/components/ui/page-header";
 import { DEFAULT_AUTOPILOT_CONFIG, type AutopilotCapability } from "@/lib/autopilot-config";
 
 const CAPABILITIES: { key: AutopilotCapability; label: string; hint: string }[] = [
@@ -52,12 +53,7 @@ export default function AutopilotPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Autopilot</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Configure once. Connect Instagram. Turn Autopilot on. Humans handle exceptions.
-        </p>
-      </div>
+      <PageHeader description="Configure once. Connect Instagram. Turn Autopilot on. Humans handle exceptions." />
 
       <AutopilotPanel />
 

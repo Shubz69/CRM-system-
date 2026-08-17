@@ -3,6 +3,7 @@ import Link from "next/link";
 import { BookingStatus, QualificationStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -147,18 +148,17 @@ export default async function AdminOverviewPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="h-display text-4xl">Platform overview</h1>
-          <p className="mt-1 text-[var(--muted)]">Live command centre — metrics from the database, not placeholders.</p>
-        </div>
-        <div className="surface px-4 py-2 text-sm">
-          System status:{" "}
-          <span className={dbOk ? "text-[var(--accent)]" : "text-red-600"}>
-            {dbOk ? "Operational" : "Database error"}
-          </span>
-        </div>
-      </div>
+      <PageHeader
+        description="Live command centre — metrics from the database, not placeholders."
+        actions={
+          <div className="surface px-4 py-2 text-sm">
+            System status:{" "}
+            <span className={dbOk ? "text-[var(--accent)]" : "text-[var(--danger)]"}>
+              {dbOk ? "Operational" : "Database error"}
+            </span>
+          </div>
+        }
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((card) => (

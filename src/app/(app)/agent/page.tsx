@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageError, PageLoading } from "@/components/ui/page-state";
 
 type AgentConfig = {
   id: string;
@@ -20,19 +22,25 @@ type AgentConfig = {
 
 export default function AgentPage() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [playgroundInput, setPlaygroundInput] = useState(
     "How much does it cost for a coaching business?",
   );
   const [playgroundOutput, setPlaygroundOutput] = useState<string>("");
 
-  useEffect(() => {
+  function loadConfig() {
+    setLoadError(null);
     fetch("/api/agent")
       .then(async (r) => {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || "Failed");
         setConfig(j.config);
       })
-      .catch((e) => toast.error(e.message));
+      .catch((e) => setLoadError(e instanceof Error ? e.message : "Failed to load agent"));
+  }
+
+  useEffect(() => {
+    loadConfig();
   }, []);
 
   async function save(e: FormEvent) {
@@ -85,16 +93,12 @@ export default function AgentPage() {
     setPlaygroundOutput(JSON.stringify(json.result, null, 2));
   }
 
-  if (!config) return <div className="surface p-6">Loading agent configuration…</div>;
+  if (loadError) return <PageError message={loadError} onRetry={loadConfig} />;
+  if (!config) return <PageLoading label="Loading agent configuration" />;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">AI Operator</h1>
-        <p className="text-[var(--muted)]">
-          Powered by Claude. Tune tone and goals — model routing stays under the hood.
-        </p>
-      </div>
+      <PageHeader description="Powered by Claude. Tune tone and goals — model routing stays under the hood." />
 
       <div className="surface flex flex-wrap items-center justify-between gap-3 p-4">
         <div>
@@ -213,11 +217,14 @@ export default function AgentPage() {
 
       <form onSubmit={runPlayground} className="surface space-y-3 p-5">
         <h2 className="h-display text-2xl">Testing playground</h2>
-        <textarea
-          className="input min-h-28"
-          value={playgroundInput}
-          onChange={(e) => setPlaygroundInput(e.target.value)}
-        />
+        <label className="block text-sm font-medium">
+          Lead message
+          <textarea
+            className="input mt-2 min-h-28"
+            value={playgroundInput}
+            onChange={(e) => setPlaygroundInput(e.target.value)}
+          />
+        </label>
         <button className="btn btn-secondary" type="submit">
           Simulate lead message
         </button>

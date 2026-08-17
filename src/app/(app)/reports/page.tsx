@@ -3,6 +3,24 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+
+const METRICS: Array<{ key: string; label: string }> = [
+  { key: "newConversations", label: "New conversations" },
+  { key: "qualifiedLeads", label: "Qualified leads" },
+  { key: "callsBooked", label: "Calls booked" },
+  { key: "followUpsSent", label: "Follow-ups sent" },
+  { key: "conversionRate", label: "Conversion rate" },
+];
+
+function formatMetric(value: unknown) {
+  if (value == null || value === "") return "—";
+  if (typeof value === "number") {
+    if (value > 0 && value < 1) return `${Math.round(value * 1000) / 10}%`;
+    return String(value);
+  }
+  return String(value);
+}
 
 export default function ReportsPage() {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
@@ -48,11 +66,7 @@ export default function ReportsPage() {
     if (!payload) return;
     const rows = [
       ["metric", "value"],
-      ["newConversations", String(payload.newConversations ?? "")],
-      ["qualifiedLeads", String(payload.qualifiedLeads ?? "")],
-      ["callsBooked", String(payload.callsBooked ?? "")],
-      ["followUpsSent", String(payload.followUpsSent ?? "")],
-      ["conversionRate", String(payload.conversionRate ?? "")],
+      ...METRICS.map((m) => [m.key, String(payload[m.key] ?? "")]),
     ];
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -89,34 +103,46 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Reports</h1>
-        <p className="text-[var(--muted)]">Daily and weekly performance reports from live data.</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <button className="btn btn-primary" disabled={loading} type="button" onClick={() => generate("daily")}>
-          Generate daily report
-        </button>
-        <button className="btn btn-secondary" disabled={loading} type="button" onClick={() => generate("weekly")}>
-          Generate weekly report
-        </button>
-        <button className="btn btn-secondary" disabled={!payload} type="button" onClick={exportCsv}>
-          Export CSV
-        </button>
-        <button className="btn btn-secondary" disabled={!activeReportId} type="button" onClick={exportSheets}>
-          Export to Google Sheets
-        </button>
-      </div>
+      <PageHeader
+        description="Daily and weekly performance reports from live data."
+        actions={
+          <>
+            <button className="btn btn-primary" disabled={loading} type="button" onClick={() => generate("daily")}>
+              Generate daily report
+            </button>
+            <button className="btn btn-secondary" disabled={loading} type="button" onClick={() => generate("weekly")}>
+              Generate weekly report
+            </button>
+            <button className="btn btn-secondary" disabled={!payload} type="button" onClick={exportCsv}>
+              Export CSV
+            </button>
+            <button className="btn btn-secondary" disabled={!activeReportId} type="button" onClick={exportSheets}>
+              Export to Google Sheets
+            </button>
+          </>
+        }
+      />
+
       {payload && (
-        <pre className="surface overflow-x-auto p-5 text-xs">{JSON.stringify(payload, null, 2)}</pre>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {METRICS.map((m) => (
+            <div key={m.key} className="surface p-4">
+              <p className="text-xs uppercase tracking-wide text-[var(--muted)]">{m.label}</p>
+              <p className="metric-value mt-2 text-3xl">{formatMetric(payload[m.key])}</p>
+            </div>
+          ))}
+        </div>
       )}
+
       <section className="surface p-5">
         <h2 className="h-display text-2xl">Generated reports</h2>
         <ul className="mt-3 space-y-2">
           {reports.map((report) => (
             <li key={report.id}>
               <button
-                className="text-left hover:underline"
+                className={`w-full rounded-xl px-3 py-2 text-left hover:bg-[var(--surface-2)] ${
+                  activeReportId === report.id ? "bg-[var(--accent-soft)]" : ""
+                }`}
                 type="button"
                 onClick={() => {
                   setPayload(report.payload);

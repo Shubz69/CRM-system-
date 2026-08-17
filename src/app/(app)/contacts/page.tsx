@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Contact = {
   id: string;
@@ -38,34 +39,33 @@ export default function ContactsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="h-display text-4xl">Contacts</h1>
-          <p className="text-[var(--muted)]">People who messaged your Instagram account.</p>
-        </div>
-        <div className="flex gap-2">
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            load().catch((err) => toast.error(err.message));
-          }}
-        >
-          <input
-            className="input w-64"
-            placeholder="Search name, @, email, phone"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <button className="btn btn-secondary" type="submit">
-            Search
-          </button>
-        </form>
-        <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>
-          Export CSV
-        </a>
-        </div>
-      </div>
+      <PageHeader
+        description="People who messaged your Instagram account."
+        actions={
+          <>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                load().catch((err) => toast.error(err.message));
+              }}
+            >
+              <input
+                className="input w-64"
+                placeholder="Search name, @, email, phone"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              <button className="btn btn-secondary" type="submit">
+                Search
+              </button>
+            </form>
+            <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>
+              Export CSV
+            </a>
+          </>
+        }
+      />
 
       <div className="surface overflow-x-auto">
         <table className="w-full text-left text-sm">

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { UsersClient, type UserRow } from "./users-client";
 
 export const dynamic = "force-dynamic";
@@ -44,12 +45,7 @@ export default async function AdminUsersPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Users</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Search, suspend, reset passwords, and manage roles. Mutations are audited.
-        </p>
-      </div>
+      <PageHeader description="Search, suspend, reset passwords, and manage roles. Mutations are audited." />
       <UsersClient initial={initial} />
     </div>
   );

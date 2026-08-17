@@ -44,7 +44,7 @@ function askErrorResponse(error: unknown, fallbackStatus = 503) {
 /** Submit a natural-language request. Returns a run ID immediately. */
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("agent:manage");
+    const session = await requirePermission("ask:use");
     await assertActiveWorkspaceAccess({
       userId: session.userId,
       organisationId: session.organisationId,
@@ -81,7 +81,7 @@ const patchSchema = z.union([
 /** Answer clarification OR confirm an imaging prompt. */
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await requirePermission("agent:manage");
+    const session = await requirePermission("ask:use");
     await assertActiveWorkspaceAccess({
       userId: session.userId,
       organisationId: session.organisationId,

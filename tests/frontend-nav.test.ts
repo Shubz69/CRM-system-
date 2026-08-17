@@ -1,23 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { HOME_OUTCOME_CARDS, PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
+import { HOME_OUTCOME_CARDS, PRIMARY_NAV, SECONDARY_NAV, WORKSPACE_NAV } from "@/lib/navigation";
 
 describe("frontend navigation simplification", () => {
-  it("keeps Home as the only primary nav item", () => {
-    expect(PRIMARY_NAV.map((i) => i.href)).toEqual(["/ask"]);
+  it("keeps daily work in primary nav", () => {
+    expect(PRIMARY_NAV.map((i) => i.href)).toEqual(["/ask", "/inbox", "/pipeline", "/contacts"]);
     expect(PRIMARY_NAV[0]?.label).toBe("Home");
   });
 
   it("keeps power-user routes in secondary nav (not deleted)", () => {
     const hrefs = SECONDARY_NAV.map((i) => i.href);
-    for (const required of [
-      "/inbox",
-      "/pipeline",
-      "/knowledge",
-      "/insights",
-      "/reports",
-      "/integrations",
-      "/dashboard",
-    ]) {
+    for (const required of ["/dashboard", "/attention", "/simulator"]) {
+      expect(hrefs).toContain(required);
+    }
+  });
+
+  it("still exposes inbox, knowledge, and reports somewhere in the workspace nav", () => {
+    const hrefs = WORKSPACE_NAV.map((i) => i.href);
+    for (const required of ["/inbox", "/knowledge", "/insights", "/reports", "/integrations"]) {
       expect(hrefs).toContain(required);
     }
   });

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { WebhooksClient } from "./webhooks-client";
 
 export const dynamic = "force-dynamic";
@@ -22,12 +23,7 @@ export default async function AdminWebhooksPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Webhook events</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Real processing history. Retries are idempotent and audited.
-        </p>
-      </div>
+      <PageHeader description="Real processing history. Retries are idempotent and audited." />
       <WebhooksClient
         initial={events.map((event) => ({
           id: event.id,

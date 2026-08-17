@@ -6,6 +6,7 @@ export type Permission =
   | "integrations:manage"
   | "knowledge:manage"
   | "agent:manage"
+  | "ask:use"
   | "inbox:read"
   | "inbox:write"
   | "inbox:assign"
@@ -30,6 +31,7 @@ const ALL_WORKSPACE_PERMISSIONS: Permission[] = [
   "integrations:manage",
   "knowledge:manage",
   "agent:manage",
+  "ask:use",
   "inbox:read",
   "inbox:write",
   "inbox:assign",
@@ -69,6 +71,7 @@ const ROLE_PERMISSIONS: Record<MemberRole, Permission[]> = {
     "integrations:manage",
     "knowledge:manage",
     "agent:manage",
+    "ask:use",
     "inbox:read",
     "inbox:write",
     "inbox:assign",
@@ -84,6 +87,7 @@ const ROLE_PERMISSIONS: Record<MemberRole, Permission[]> = {
   ],
   MANAGER: [
     "knowledge:manage",
+    "ask:use",
     "inbox:read",
     "inbox:write",
     "inbox:assign",
@@ -97,6 +101,7 @@ const ROLE_PERMISSIONS: Record<MemberRole, Permission[]> = {
     "settings:read",
   ],
   SALES_AGENT: [
+    "ask:use",
     "inbox:read",
     "inbox:write",
     "leads:read",
@@ -104,7 +109,14 @@ const ROLE_PERMISSIONS: Record<MemberRole, Permission[]> = {
     "insights:read",
     "reports:read",
   ],
-  ANALYST: ["inbox:read", "leads:read", "insights:read", "reports:read", "reports:export"],
+  ANALYST: [
+    "ask:use",
+    "inbox:read",
+    "leads:read",
+    "insights:read",
+    "reports:read",
+    "reports:export",
+  ],
   READ_ONLY: VIEWER_PERMISSIONS,
 };
 

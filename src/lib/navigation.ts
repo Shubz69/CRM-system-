@@ -29,9 +29,29 @@ export type NavItem = {
   match?: "exact" | "prefix";
 };
 
-/** Always visible — the product home for a business owner. */
+/** Always visible — daily work for a business owner. */
 export const PRIMARY_NAV: NavItem[] = [
   { href: "/ask", label: "Home", icon: Home, match: "exact" },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
+  { href: "/contacts", label: "Contacts", icon: Users },
+];
+
+/**
+ * Work tools — research, reports, and the agent itself.
+ */
+export const WORK_NAV: NavItem[] = [
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/insights", label: "Insights", icon: Sparkles },
+  { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/agent", label: "AI Agent", icon: Bot },
+];
+
+/** Setup and go-live. */
+export const SETUP_NAV: NavItem[] = [
+  { href: "/integrations", label: "Integrations", icon: Plug },
+  { href: "/settings", label: "Settings", icon: Settings, match: "exact" },
+  { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
 ];
 
 /**
@@ -39,27 +59,22 @@ export const PRIMARY_NAV: NavItem[] = [
  * are not drowning in setup screens on day one.
  */
 export const SECONDARY_NAV: NavItem[] = [
-  { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-  { href: "/insights", label: "Insights", icon: Sparkles },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
-  { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
-  { href: "/agent", label: "AI Agent", icon: Bot },
   { href: "/setup", label: "Setup Assistant", icon: ListChecks },
   { href: "/autopilot", label: "Autopilot", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },
   { href: "/qualification", label: "Qualification", icon: ListChecks },
   { href: "/simulator", label: "Simulator", icon: FlaskConical },
-  { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
 ];
 
-/** @deprecated Prefer PRIMARY_NAV + SECONDARY_NAV — kept for command palette. */
-export const WORKSPACE_NAV: NavItem[] = [...PRIMARY_NAV, ...SECONDARY_NAV];
+/** @deprecated Prefer PRIMARY_NAV + WORK_NAV + SETUP_NAV + SECONDARY_NAV — kept for command palette. */
+export const WORKSPACE_NAV: NavItem[] = [
+  ...PRIMARY_NAV,
+  ...WORK_NAV,
+  ...SETUP_NAV,
+  ...SECONDARY_NAV,
+];
 
 export const ADMIN_NAV: NavItem[] = [
   { href: "/admin", label: "Platform Overview", icon: Shield, match: "exact" },
@@ -128,7 +143,7 @@ export function isNavActive(pathname: string, item: NavItem): boolean {
 }
 
 export function pageTitleFromPath(pathname: string): string {
-  const all = [...PRIMARY_NAV, ...SECONDARY_NAV, ...ADMIN_NAV];
+  const all = [...PRIMARY_NAV, ...WORK_NAV, ...SETUP_NAV, ...SECONDARY_NAV, ...ADMIN_NAV];
   const exact = all.find((i) => i.href === pathname);
   if (exact) return exact.label;
   const nested = all

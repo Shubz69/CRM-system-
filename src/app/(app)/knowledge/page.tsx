@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Doc = {
   id: string;
@@ -68,12 +69,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Knowledge & SOP centre</h1>
-        <p className="text-[var(--muted)]">
-          Only relevant chunks are retrieved for the AI. Do not invent prices outside these docs.
-        </p>
-      </div>
+      <PageHeader description="Only relevant chunks are retrieved for the AI. Do not invent prices outside these docs." />
 
       <form onSubmit={onSubmit} className="surface grid gap-3 p-5 md:grid-cols-2">
         <label className="text-sm font-medium">

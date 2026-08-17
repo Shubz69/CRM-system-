@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { MemberRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { WorkspacesClient, type WorkspaceRow } from "./workspaces-client";
 
 export const dynamic = "force-dynamic";
@@ -66,12 +67,7 @@ export default async function AdminWorkspacesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Workspaces</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Create, suspend, and inspect organisations. Suspension blocks inbound AI processing.
-        </p>
-      </div>
+      <PageHeader description="Create, suspend, and inspect organisations. Suspension blocks inbound AI processing." />
       <WorkspacesClient initial={initial} />
     </div>
   );

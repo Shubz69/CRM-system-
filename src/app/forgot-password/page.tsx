@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { toast } from "sonner";
+import { AuthFrame } from "@/components/ui/auth-frame";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -31,38 +32,35 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
-      <div className="surface p-6">
-        <h1 className="h-display text-3xl">Reset password</h1>
-        <p className="mt-2 text-sm text-[var(--muted)]">
-          Enter your account email. We never display your current password.
+    <AuthFrame title="Reset password">
+      <p className="mt-2 text-sm text-[var(--muted)]">
+        Enter your account email. We never display your current password.
+      </p>
+      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        <label className="block text-sm">
+          Email
+          <input
+            className="input mt-1"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+        <button className="btn btn-primary w-full" type="submit" disabled={busy}>
+          Send reset link
+        </button>
+      </form>
+      {resetUrl && (
+        <p className="mt-4 break-all text-xs text-[var(--muted)]">
+          Dev reset link: <Link href={resetUrl}>{resetUrl}</Link>
         </p>
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
-          <label className="block text-sm">
-            Email
-            <input
-              className="input mt-1"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <button className="btn btn-primary w-full" type="submit" disabled={busy}>
-            Send reset link
-          </button>
-        </form>
-        {resetUrl && (
-          <p className="mt-4 break-all text-xs text-[var(--muted)]">
-            Dev reset link: <Link href={resetUrl}>{resetUrl}</Link>
-          </p>
-        )}
-        <p className="mt-4 text-sm">
-          <Link href="/login" className="text-[var(--accent)]">
-            Back to login
-          </Link>
-        </p>
-      </div>
-    </main>
+      )}
+      <p className="mt-4 text-sm">
+        <Link href="/login" className="text-[var(--accent)]">
+          Back to login
+        </Link>
+      </p>
+    </AuthFrame>
   );
 }

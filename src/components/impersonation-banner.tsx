@@ -45,7 +45,7 @@ export function ImpersonationBanner() {
   if (!state) return null;
 
   return (
-    <div className="relative z-30 border-b border-amber-300/40 bg-amber-50 px-4 py-2 text-sm text-amber-950">
+    <div className="relative z-30 border-b border-[var(--accent)]/30 bg-[var(--accent-soft)] px-4 py-2 text-sm text-[var(--foreground)]">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2">
         <p>
           Impersonating <strong>{state.targetName}</strong>

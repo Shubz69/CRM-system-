@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import { AuthFrame } from "@/components/ui/auth-frame";
 
 export default function ResetPasswordClient() {
   const params = useSearchParams();
@@ -38,42 +39,39 @@ export default function ResetPasswordClient() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
-      <div className="surface p-6">
-        <h1 className="h-display text-3xl">Choose a new password</h1>
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
-          <label className="block text-sm">
-            New password
-            <input
-              className="input mt-1"
-              type="password"
-              required
-              minLength={10}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          <label className="block text-sm">
-            Confirm password
-            <input
-              className="input mt-1"
-              type="password"
-              required
-              minLength={10}
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-            />
-          </label>
-          <button className="btn btn-primary w-full" type="submit" disabled={busy || !token}>
-            Update password
-          </button>
-        </form>
-        <p className="mt-4 text-sm">
-          <Link href="/login" className="text-[var(--accent)]">
-            Back to login
-          </Link>
-        </p>
-      </div>
-    </main>
+    <AuthFrame title="Choose a new password">
+      <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        <label className="block text-sm">
+          New password
+          <input
+            className="input mt-1"
+            type="password"
+            required
+            minLength={10}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+        <label className="block text-sm">
+          Confirm password
+          <input
+            className="input mt-1"
+            type="password"
+            required
+            minLength={10}
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
+        </label>
+        <button className="btn btn-primary w-full" type="submit" disabled={busy || !token}>
+          Update password
+        </button>
+      </form>
+      <p className="mt-4 text-sm">
+        <Link href="/login" className="text-[var(--accent)]">
+          Back to login
+        </Link>
+      </p>
+    </AuthFrame>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
 
 type AttentionItem = {
   id: string;
@@ -31,12 +32,7 @@ export default function NeedsAttentionPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Needs Attention</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Exception queue — everything else is handled by Autopilot.
-        </p>
-      </div>
+      <PageHeader description="Exception queue — everything else is handled by Autopilot." />
 
       {loading ? (
         <div className="surface p-6 text-sm text-[var(--muted)]">Loading queue…</div>

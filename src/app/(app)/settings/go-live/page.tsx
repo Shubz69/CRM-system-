@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Check = {
   key: string;
@@ -178,12 +179,7 @@ export default function GoLivePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Go Live</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Final readiness checklist before Autopilot operates your Instagram pipeline.
-        </p>
-      </div>
+      <PageHeader description="Final readiness checklist before Autopilot operates your Instagram pipeline." />
 
       {loading ? (
         <div className="surface p-6 text-sm text-[var(--muted)]">Checking systems…</div>

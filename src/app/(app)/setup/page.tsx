@@ -3,6 +3,26 @@
 import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
+
+function formatProposalValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
+    return value
+      .map((item) => (item !== null && typeof item === "object" ? JSON.stringify(item) : String(item)))
+      .join(", ");
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return "—";
+    return entries.map(([k, v]) => `${k}: ${formatProposalValue(v)}`).join(" · ");
+  }
+  return String(value);
+}
 
 export default function SetupAssistantPage() {
   const [description, setDescription] = useState(
@@ -52,12 +72,7 @@ export default function SetupAssistantPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">AI Setup Assistant</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Describe your business. Claude proposes qualification, scoring, tone, and knowledge — you approve.
-        </p>
-      </div>
+      <PageHeader description="Describe your business. Claude proposes qualification, scoring, tone, and knowledge — you approve." />
 
       <form onSubmit={propose} className="surface space-y-3 p-5">
         <label className="block text-sm font-medium">
@@ -81,9 +96,14 @@ export default function SetupAssistantPage() {
           <p className="mt-1 text-sm text-[var(--muted)]">
             Review the proposal. Nothing is saved until you approve.
           </p>
-          <pre className="mt-4 max-h-[420px] overflow-auto rounded-xl bg-[var(--surface-2)] p-4 text-xs">
-            {JSON.stringify(proposal, null, 2)}
-          </pre>
+          <dl className="mt-4 divide-y divide-[var(--border)]/60">
+            {Object.entries(proposal).map(([key, value]) => (
+              <div key={key} className="grid gap-1 py-3 sm:grid-cols-[12rem_1fr]">
+                <dt className="text-sm font-medium">{key}</dt>
+                <dd className="text-sm text-[var(--muted)]">{formatProposalValue(value)}</dd>
+              </div>
+            ))}
+          </dl>
           <div className="mt-4 flex flex-wrap gap-2">
             <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void approve()}>
               Approve Setup

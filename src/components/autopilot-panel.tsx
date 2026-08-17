@@ -96,10 +96,10 @@ export function AutopilotPanel({ compact = false }: { compact?: boolean }) {
         style={{
           background:
             data.mode === "LIVE"
-              ? "radial-gradient(600px 120px at 10% 0%, rgba(13,148,136,0.18), transparent)"
+              ? "radial-gradient(600px 120px at 10% 0%, color-mix(in oklab, var(--accent) 22%, transparent), transparent)"
               : data.mode === "ATTENTION_REQUIRED"
-                ? "radial-gradient(600px 120px at 10% 0%, rgba(220,38,38,0.12), transparent)"
-                : "radial-gradient(600px 120px at 10% 0%, rgba(30,58,95,0.08), transparent)",
+                ? "radial-gradient(600px 120px at 10% 0%, color-mix(in oklab, var(--danger) 16%, transparent), transparent)"
+                : "radial-gradient(600px 120px at 10% 0%, color-mix(in oklab, var(--accent-2) 12%, transparent), transparent)",
         }}
       />
       <div className="relative flex flex-wrap items-start justify-between gap-4">

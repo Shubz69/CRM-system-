@@ -173,7 +173,7 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
                     ) : (
                       <button
                         type="button"
-                        className="text-red-600 hover:underline"
+                        className="text-[var(--danger)] hover:underline"
                         disabled={busy === `suspend-${user.id}`}
                         onClick={() => void act(user.id, "suspend")}
                       >

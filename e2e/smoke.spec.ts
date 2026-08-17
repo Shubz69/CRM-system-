@@ -84,7 +84,7 @@ test("reports generate and export csv", async ({ page }) => {
   await signIn(page);
   await page.goto("/reports");
   await page.getByRole("button", { name: "Generate daily report" }).click();
-  await expect(page.locator("pre")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("New conversations")).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Export CSV" }).click();
 });
 

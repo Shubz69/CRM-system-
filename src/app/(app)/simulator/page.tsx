@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
 
 export default function SimulatorPage() {
   const [text, setText] = useState(
@@ -42,13 +43,7 @@ export default function SimulatorPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Conversation simulator</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Push a real inbound message through the live pipeline for this workspace (no ManyChat
-          required). Rows are marked origin = simulator so you can tell them apart later.
-        </p>
-      </div>
+      <PageHeader description="Push a real inbound message through the live pipeline for this workspace (no ManyChat required). Rows are marked origin = simulator so you can tell them apart later." />
 
       <form onSubmit={onSubmit} className="surface space-y-4 p-6">
         <label className="block text-sm font-medium">

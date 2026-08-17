@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -79,12 +80,7 @@ export default async function AdminUsagePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">AI Usage</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Real UsageRecord aggregates for the last 30 days. Estimated cost is indicative only.
-        </p>
-      </div>
+      <PageHeader description="Real UsageRecord aggregates for the last 30 days. Estimated cost is indicative only." />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="surface p-4">

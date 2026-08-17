@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Insight = {
   type: string;
@@ -80,34 +81,31 @@ export default function InsightsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Insights</h1>
-        <p className="text-[var(--muted)]">
-          Aggregated conversation intelligence with evidence counts and recommended actions.
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <button
-          className="btn btn-secondary"
-          type="button"
-          onClick={async () => {
-            try {
-              const res = await fetch("/api/insights/aggregate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: "{}",
-              });
-              const json = await res.json();
-              if (!res.ok) throw new Error(json.error || "Aggregate failed");
-              toast.success("Daily insights aggregated");
-            } catch (e) {
-              toast.error(e instanceof Error ? e.message : "Aggregate failed");
-            }
-          }}
-        >
-          Run daily aggregation
-        </button>
-      </div>
+      <PageHeader
+        description="Aggregated conversation intelligence with evidence counts and recommended actions."
+        actions={
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/insights/aggregate", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: "{}",
+                });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.error || "Aggregate failed");
+                toast.success("Daily insights aggregated");
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Aggregate failed");
+              }
+            }}
+          >
+            Run daily aggregation
+          </button>
+        }
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         {insights.map((insight) => (
           <article key={insight.type} className="surface p-5">

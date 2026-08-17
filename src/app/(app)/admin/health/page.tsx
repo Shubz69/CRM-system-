@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { getAiProvider } from "@/adapters/ai";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { getBookingProvider } from "@/adapters/booking";
@@ -188,12 +189,7 @@ export default async function AdminHealthPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">System health</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Safe probes only — secrets are never displayed. Status is not inferred from env alone when a check fails.
-        </p>
-      </div>
+      <PageHeader description="Safe probes only — secrets are never displayed. Status is not inferred from env alone when a check fails." />
 
       <div className="surface overflow-x-auto">
         <table className="w-full min-w-[900px] text-left text-sm">
@@ -215,10 +211,10 @@ export default async function AdminHealthPage() {
                   <span
                     className={
                       row.status === "Operational"
-                        ? "badge"
+                        ? "badge badge-success"
                         : row.status === "Not Configured"
                           ? "badge"
-                          : "badge badge-warn"
+                          : "badge badge-danger"
                     }
                   >
                     {row.status}

@@ -4,13 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
-import { Bell, ChevronsLeft, ChevronsRight, ChevronDown, LogOut, Search } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, ChevronDown, LogOut, Search } from "lucide-react";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { openCommandPalette } from "@/components/command-palette";
+import { NotificationsMenu } from "@/components/notifications-menu";
 import {
   ADMIN_NAV,
   PRIMARY_NAV,
+  SETUP_NAV,
   SECONDARY_NAV,
+  WORK_NAV,
   isNavActive,
   pageTitleFromPath,
 } from "@/lib/navigation";
@@ -76,7 +79,7 @@ export function AppShell({
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(() =>
-    SECONDARY_NAV.some((item) => isNavActive(pathname, item)),
+    [...SETUP_NAV, ...SECONDARY_NAV].some((item) => isNavActive(pathname, item)),
   );
 
   const locked =
@@ -99,7 +102,7 @@ export function AppShell({
   }, [session?.user?.organisationId, locked]);
 
   useEffect(() => {
-    if (SECONDARY_NAV.some((item) => isNavActive(pathname, item))) {
+    if ([...SETUP_NAV, ...SECONDARY_NAV].some((item) => isNavActive(pathname, item))) {
       setToolsOpen(true);
     }
   }, [pathname]);
@@ -211,6 +214,22 @@ export function AppShell({
             />
           ))}
 
+          {!collapsed && (
+            <p className="mt-5 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
+              Work
+            </p>
+          )}
+          {collapsed && <div className="my-3 border-t border-white/10" />}
+          {WORK_NAV.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              collapsed={collapsed}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          ))}
+
           {!collapsed ? (
             <button
               type="button"
@@ -218,7 +237,7 @@ export function AppShell({
               onClick={() => setToolsOpen((v) => !v)}
               aria-expanded={toolsOpen}
             >
-              <span>More tools</span>
+              <span>Setup & more</span>
               <ChevronDown
                 size={14}
                 className={cn("transition-transform", toolsOpen && "rotate-180")}
@@ -229,7 +248,7 @@ export function AppShell({
           )}
 
           {(collapsed || toolsOpen) &&
-            SECONDARY_NAV.map((item) => (
+            [...SETUP_NAV, ...SECONDARY_NAV].map((item) => (
               <NavLink
                 key={item.href}
                 item={item}
@@ -312,21 +331,20 @@ export function AppShell({
               <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
                 {activeName}
               </p>
-              {!isHome && (
+              {isHome ? (
+                <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
+                  What do you need?
+                </h1>
+              ) : (
                 <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
                   {title}
                 </h1>
               )}
-              {isHome && (
-                <p className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
-                  What do you need?
-                </p>
-              )}
             </div>
-            <div className="hidden items-center gap-2 md:flex">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="relative w-56 text-left"
+                className="relative w-full max-w-56 text-left md:w-56"
                 onClick={() => openCommandPalette()}
                 aria-label="Open search (Ctrl or Cmd+K)"
               >
@@ -337,14 +355,12 @@ export function AppShell({
                 />
                 <span className="input has-leading-icon flex w-full items-center py-2 text-sm text-[var(--muted)]">
                   Search…
-                  <kbd className="ml-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)]">
+                  <kbd className="ml-auto hidden rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)] sm:inline">
                     ⌘K
                   </kbd>
                 </span>
               </button>
-              <button type="button" className="btn btn-secondary px-2.5 py-2" aria-label="Notifications">
-                <Bell size={16} />
-              </button>
+              <NotificationsMenu />
             </div>
           </div>
         </header>

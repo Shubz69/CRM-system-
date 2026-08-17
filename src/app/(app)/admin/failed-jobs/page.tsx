@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
+import { PageHeader } from "@/components/ui/page-header";
 import { FailedJobsClient } from "./failed-jobs-client";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +20,7 @@ export default async function AdminFailedJobsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Failed jobs</h1>
-        <p className="mt-1 text-[var(--muted)]">
-          Retry is idempotent — resolved jobs will not create duplicate side effects.
-        </p>
-      </div>
+      <PageHeader description="Retry is idempotent — resolved jobs will not create duplicate side effects." />
       <FailedJobsClient
         initial={jobs.map((j) => ({
           id: j.id,

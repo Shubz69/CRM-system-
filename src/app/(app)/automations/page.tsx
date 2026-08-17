@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Rule = {
   id: string;
@@ -14,6 +15,18 @@ type Rule = {
   actions: unknown;
   executions: Array<{ id: string; status: string; createdAt: string }>;
 };
+
+function summarizeActions(actions: unknown): string {
+  if (!Array.isArray(actions) || actions.length === 0) return "none";
+  return actions
+    .map((action) => {
+      if (action && typeof action === "object" && "type" in action) {
+        return String((action as { type: unknown }).type);
+      }
+      return "unknown";
+    })
+    .join(", ");
+}
 
 export default function AutomationsPage() {
   const [rules, setRules] = useState<Rule[]>([]);
@@ -48,17 +61,43 @@ export default function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="h-display text-4xl">Automations</h1>
-        <p className="text-[var(--muted)]">
-          Rules are executed by background workers — not browser timers.
-        </p>
-      </div>
+      <PageHeader description="Rules are executed by background workers — not browser timers." />
       <form className="surface flex flex-wrap gap-3 p-4" onSubmit={createRule}>
-        <input className="input min-w-48 flex-1" placeholder="Rule name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input className="input" placeholder="Trigger type" value={triggerType} onChange={(e) => setTriggerType(e.target.value)} required />
-        <input className="input" placeholder="Action type" value={actionType} onChange={(e) => setActionType(e.target.value)} required />
-        <button className="btn btn-primary" type="submit">Create rule</button>
+        <label className="min-w-48 flex-1 text-sm">
+          Rule name
+          <input
+            className="input mt-1 w-full"
+            placeholder="Rule name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </label>
+        <label className="text-sm">
+          Trigger type
+          <input
+            className="input mt-1"
+            placeholder="Trigger type"
+            value={triggerType}
+            onChange={(e) => setTriggerType(e.target.value)}
+            required
+          />
+        </label>
+        <label className="text-sm">
+          Action type
+          <input
+            className="input mt-1"
+            placeholder="Action type"
+            value={actionType}
+            onChange={(e) => setActionType(e.target.value)}
+            required
+          />
+        </label>
+        <div className="flex items-end">
+          <button className="btn btn-primary" type="submit">
+            Create rule
+          </button>
+        </div>
       </form>
       <div className="grid gap-3">
         {rules.map((rule) => (
@@ -73,9 +112,9 @@ export default function AutomationsPage() {
                 {rule.isActive ? "Disable" : "Enable"}
               </button>
             </div>
-            <pre className="mt-3 overflow-x-auto rounded-xl bg-[var(--surface-2)] p-3 text-xs">
-              {JSON.stringify({ conditions: rule.conditions, actions: rule.actions }, null, 2)}
-            </pre>
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              Trigger: {rule.triggerType}. Actions: {summarizeActions(rule.actions)}.
+            </p>
             <p className="mt-2 text-xs text-[var(--muted)]">
               Recent executions: {rule.executions.length}
             </p>

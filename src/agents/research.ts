@@ -72,6 +72,13 @@ function coerceQueryExpand(raw: unknown): { queries: string[] } | null {
     if (Array.isArray(c) && c.every((q) => typeof q === "string")) {
       return { queries: c as string[] };
     }
+    if (typeof c === "string") {
+      const parts = c
+        .split(/\n|,/)
+        .map((q) => q.trim())
+        .filter((q) => q.length >= 2);
+      if (parts.length >= 1) return { queries: parts };
+    }
   }
   return null;
 }
@@ -101,6 +108,7 @@ async function expandResearchQueries(input: {
     // Last resort: try a raw completion + coerce so research still reaches YouTube/web.
     try {
       const { getAiProvider } = await import("@/adapters/ai");
+      const { tryParseJson } = await import("@/adapters/ai/structured");
       const text = await getAiProvider().complete({
         model: input.model,
         temperature: 0,
@@ -109,9 +117,7 @@ async function expandResearchQueries(input: {
           { role: "user", content: prompt },
         ],
       });
-      const fenced = text.trim().match(/```(?:json)?\s*([\s\S]*?)```/);
-      const candidate = fenced?.[1]?.trim() || text.trim();
-      const parsed = JSON.parse(candidate) as unknown;
+      const parsed = tryParseJson(text);
       const coerced = coerceQueryExpand(parsed);
       if (coerced && coerced.queries.length >= 1) {
         return coerced.queries.map((q) => q.trim()).filter(Boolean).slice(0, 8);

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { AutopilotPanel } from "@/components/autopilot-panel";
+import { PageHeader } from "@/components/ui/page-header";
 import { formatPercent } from "@/lib/utils";
 
 type DashboardData = {
@@ -136,22 +137,21 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-sm text-[var(--muted)]">{greeting}</p>
-          <h1 className="h-display text-4xl">What is my AI doing?</h1>
-          <p className="mt-1 text-[var(--muted)]">
-            {session?.user?.organisationName || "Workspace"} · Autopilot status, exceptions, and results
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Link href="/attention" className="btn btn-secondary">
-            Needs Attention
-          </Link>
-          <Link href="/simulator" className="btn btn-primary">
-            Test conversation
-          </Link>
-        </div>
+      <div>
+        <p className="text-sm text-[var(--muted)]">{greeting}</p>
+        <PageHeader
+          description={`${session?.user?.organisationName || "Workspace"} · Autopilot status, exceptions, and results`}
+          actions={
+            <>
+              <Link href="/attention" className="btn btn-secondary">
+                Needs Attention
+              </Link>
+              <Link href="/simulator" className="btn btn-primary">
+                Test conversation
+              </Link>
+            </>
+          }
+        />
       </div>
 
       <AutopilotPanel compact />

@@ -4,6 +4,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { evaluateMessagingWindow, formatDurationRemaining } from "@/lib/messaging-window";
+import { PageHeader } from "@/components/ui/page-header";
+import { PageLoading } from "@/components/ui/page-state";
 
 type ConversationListItem = {
   id: string;
@@ -85,7 +87,9 @@ type Member = { id: string; name: string | null; email: string; role: string };
 export default function InboxPage() {
   const searchParams = useSearchParams();
   const [items, setItems] = useState<ConversationListItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("c"));
+  const [selectedId, setSelectedId] = useState<string | null>(
+    searchParams.get("c") || searchParams.get("conversationId"),
+  );
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [reply, setReply] = useState("");
   const [stages, setStages] = useState<Stage[]>([]);
@@ -124,6 +128,11 @@ export default function InboxPage() {
     }, 8000);
     return () => clearInterval(timer);
   }, [loadList]);
+
+  useEffect(() => {
+    const fromQuery = searchParams.get("c") || searchParams.get("conversationId");
+    if (fromQuery) setSelectedId(fromQuery);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -181,14 +190,11 @@ export default function InboxPage() {
     [items],
   );
 
-  if (loading) return <div className="surface p-6">Loading inbox…</div>;
+  if (loading) return <PageLoading label="Loading inbox" />;
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="h-display text-4xl">Inbox</h1>
-        <p className="text-[var(--muted)]">Unified Instagram conversations with AI and human controls.</p>
-      </div>
+      <PageHeader description="Unified Instagram conversations with AI and human controls." />
 
       <div className="grid gap-4 xl:grid-cols-[320px_1fr_300px]" style={{ minHeight: "70vh" }}>
         <section className="surface overflow-hidden">

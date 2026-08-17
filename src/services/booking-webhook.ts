@@ -74,7 +74,7 @@ export async function handleBookingWebhook(
         ? String((rawBody as { organisationId?: unknown }).organisationId || "")
         : "";
 
-    let org =
+    const org =
       organisationIdFromBody
         ? await prisma.organisation.findFirst({
             where: { id: organisationIdFromBody, deletedAt: null },

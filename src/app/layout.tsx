@@ -30,7 +30,17 @@ export default function RootLayout({
       <body className="min-h-full bg-[var(--background)] text-[var(--foreground)] antialiased">
         <Providers>
           {children}
-          <Toaster richColors position="top-right" />
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              className: "surface",
+              style: {
+                background: "var(--surface)",
+                color: "var(--foreground)",
+                border: "1px solid var(--border)",
+              },
+            }}
+          />
         </Providers>
       </body>
     </html>

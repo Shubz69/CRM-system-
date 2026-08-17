@@ -108,7 +108,7 @@ export function FailedJobsClient({ initial }: { initial: FailedJobRow[] }) {
                         </button>
                         <button
                           type="button"
-                          className="text-left text-red-600 hover:underline"
+                          className="text-left text-[var(--danger)] hover:underline"
                           disabled={busy === `cancel-${job.id}`}
                           onClick={() => void act(job.id, "cancel")}
                         >

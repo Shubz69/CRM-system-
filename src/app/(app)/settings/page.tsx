@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/ui/page-header";
 
 type Channel = {
   id: string;
@@ -113,17 +114,14 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="h-display text-4xl">Settings</h1>
-          <p className="text-[var(--muted)]">
-            Business, AI operator, team, and connections — keep it simple.
-          </p>
-        </div>
-        <Link href="/settings/go-live" className="btn btn-primary">
-          Go Live checklist
-        </Link>
-      </div>
+      <PageHeader
+        description="Business, AI operator, team, and connections — keep it simple."
+        actions={
+          <Link href="/settings/go-live" className="btn btn-primary">
+            Go Live checklist
+          </Link>
+        }
+      />
 
       <section className="surface p-5">
         <h2 className="h-display text-2xl">Business</h2>
