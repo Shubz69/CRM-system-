@@ -185,10 +185,6 @@ export default function IntegrationsClient() {
     router.replace("/integrations");
   }, [searchParams, router]);
 
-  function connectSocial(slug: string) {
-    window.location.href = `/api/social/${slug}/connect`;
-  }
-
   async function disconnectSocial(id: string) {
     setDisconnectingId(id);
     try {
@@ -384,15 +380,20 @@ export default function IntegrationsClient() {
                     >
                       {disconnectingId === p.connection?.id ? "Disconnecting…" : "Disconnect"}
                     </button>
+                  ) : p.configured ? (
+                    // Full browser navigation on purpose — this hits a server route that
+                    // redirects to the OAuth provider, not an internal Next.js page.
+                    <a href={`/api/social/${p.slug}/connect`} className="btn btn-primary w-full text-center">
+                      {`Connect ${p.displayName}`}
+                    </a>
                   ) : (
                     <button
                       type="button"
                       className="btn btn-primary w-full"
-                      disabled={!p.configured}
-                      title={p.configured ? undefined : "App credentials not configured yet — see docs/SOCIAL_CONNECTIONS.md"}
-                      onClick={() => connectSocial(p.slug)}
+                      disabled
+                      title="App credentials not configured yet — see docs/SOCIAL_CONNECTIONS.md"
                     >
-                      {p.configured ? `Connect ${p.displayName}` : "Not set up yet"}
+                      Not set up yet
                     </button>
                   )}
                 </div>
