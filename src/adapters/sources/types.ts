@@ -4,7 +4,9 @@ export type SourcePlatform =
   | "web"
   | "instagram"
   | "linkedin"
-  | "tiktok";
+  | "tiktok"
+  | "twitter"
+  | "threads";
 
 export type SourceEngagement = {
   views?: number;

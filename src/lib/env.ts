@@ -18,8 +18,10 @@ const envSchema = z.object({
   NEXTAUTH_SECRET: z.string().min(16).optional(),
   NEXTAUTH_URL: z.string().default("http://localhost:3000"),
   APP_URL: z.string().default("http://localhost:3000"),
-  // Primary AI provider is Anthropic Claude. OpenAI is optional and never required.
-  AI_PROVIDER: z.enum(["mock", "openai", "anthropic"]).default("anthropic"),
+  // Primary AI provider is Anthropic Claude. All others below are optional and never required.
+  AI_PROVIDER: z
+    .enum(["mock", "openai", "anthropic", "groq", "mistral", "deepseek", "gemini"])
+    .default("anthropic"),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_DEFAULT_MODEL: z.string().optional(),
   ANTHROPIC_ECONOMY_MODEL: z.string().optional(),
@@ -30,6 +32,29 @@ const envSchema = z.object({
   ANTHROPIC_TEMPERATURE: z.string().optional(),
   /** OPTIONAL — not required for production. Kept only for the optional OpenAI adapter. */
   OPENAI_API_KEY: z.string().optional(),
+  /**
+   * OPTIONAL secondary/free-tier AI providers (see docs/AI_PROVIDERS.md).
+   * Reached only via an explicit getAiProvider(name) override or a global
+   * AI_PROVIDER switch — Anthropic stays primary unless one is chosen.
+   * Unset → SocialNotConfigured-style fail-closed fallback to Anthropic
+   * (or mock outside production), never a silent broken call.
+   */
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_ECONOMY_MODEL: z.string().optional(),
+  GROQ_DEFAULT_MODEL: z.string().optional(),
+  GROQ_ADVANCED_MODEL: z.string().optional(),
+  MISTRAL_API_KEY: z.string().optional(),
+  MISTRAL_ECONOMY_MODEL: z.string().optional(),
+  MISTRAL_DEFAULT_MODEL: z.string().optional(),
+  MISTRAL_ADVANCED_MODEL: z.string().optional(),
+  DEEPSEEK_API_KEY: z.string().optional(),
+  DEEPSEEK_ECONOMY_MODEL: z.string().optional(),
+  DEEPSEEK_DEFAULT_MODEL: z.string().optional(),
+  DEEPSEEK_ADVANCED_MODEL: z.string().optional(),
+  /** Chat model overrides for Gemini — shares GEMINI_API_KEY with the image adapter below. */
+  GEMINI_CHAT_ECONOMY_MODEL: z.string().optional(),
+  GEMINI_CHAT_DEFAULT_MODEL: z.string().optional(),
+  GEMINI_CHAT_ADVANCED_MODEL: z.string().optional(),
   /**
    * Embedding provider for hybrid knowledge retrieval.
    * none (default) → lexical-only with an explicit log (never silent).
@@ -63,10 +88,14 @@ const envSchema = z.object({
   APIFY_INSTAGRAM_TIMEOUT_MS: z.string().optional(),
   APIFY_LINKEDIN_TIMEOUT_MS: z.string().optional(),
   APIFY_TIKTOK_TIMEOUT_MS: z.string().optional(),
+  APIFY_TWITTER_TIMEOUT_MS: z.string().optional(),
+  APIFY_THREADS_TIMEOUT_MS: z.string().optional(),
   /** Optional actor id overrides (owner/name). Defaults are documented in apify-platforms.ts. */
   APIFY_INSTAGRAM_ACTOR_ID: z.string().optional(),
   APIFY_LINKEDIN_ACTOR_ID: z.string().optional(),
   APIFY_TIKTOK_ACTOR_ID: z.string().optional(),
+  APIFY_TWITTER_ACTOR_ID: z.string().optional(),
+  APIFY_THREADS_ACTOR_ID: z.string().optional(),
   /** Fallback USD / 1k results when Apify omits usageTotalUsd. */
   APIFY_USD_PER_1K_RESULTS: z.string().optional(),
   APIFY_RATE_LIMIT_PER_MIN: z.string().optional(),

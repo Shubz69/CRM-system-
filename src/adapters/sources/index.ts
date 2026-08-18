@@ -4,7 +4,9 @@ import { youtubeSourceAdapter } from "@/adapters/sources/youtube";
 import {
   instagramSourceAdapter,
   linkedInSourceAdapter,
+  threadsSourceAdapter,
   tiktokSourceAdapter,
+  twitterSourceAdapter,
 } from "@/adapters/sources/stubs";
 import {
   SourceNotConfiguredError,
@@ -37,6 +39,8 @@ const PLATFORM_DISPLAY: Record<SourcePlatform, string> = {
   instagram: "Instagram",
   linkedin: "LinkedIn",
   tiktok: "TikTok",
+  twitter: "Twitter/X",
+  threads: "Threads",
 };
 
 function userFacingSourceError(platform: SourcePlatform, error: unknown): {
@@ -102,7 +106,7 @@ export function listConfiguredSourcePlatforms(): SourcePlatform[] {
   if (webProvider === "tavily" && env.TAVILY_API_KEY) configured.push("web");
   if (webProvider === "exa" && env.EXA_API_KEY) configured.push("web");
   if (env.APIFY_TOKEN) {
-    configured.push("instagram", "linkedin", "tiktok");
+    configured.push("instagram", "linkedin", "tiktok", "twitter", "threads");
   }
   return configured;
 }

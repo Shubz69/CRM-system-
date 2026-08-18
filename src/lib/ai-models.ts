@@ -139,3 +139,76 @@ export function estimateAnthropicCost(
 export function usdToCents(usd: number): number {
   return Math.max(0, Math.round(usd * 100));
 }
+
+/**
+ * Optional secondary/free-tier AI providers. Anthropic remains the only
+ * provider every call site implicitly relies on (via resolveModelForTier
+ * with no provider argument, which is untouched below). These are reached
+ * only by an explicit getAiProvider(name) override or a global AI_PROVIDER
+ * switch — never a silent default.
+ */
+export type OptionalAiProviderName = "openai" | "groq" | "mistral" | "deepseek" | "gemini";
+export type AiProviderName = "anthropic" | "mock" | OptionalAiProviderName;
+
+/**
+ * Default model IDs per optional provider, per formal tier. Provider model
+ * catalogs move fast — these are reasonable defaults as of when they were
+ * added, always overridable via env (see below), and worth reviewing against
+ * the provider's current docs before production lock-in (same convention as
+ * the Apify actor defaults in apify-platforms.ts).
+ */
+const OPTIONAL_PROVIDER_DEFAULT_MODELS: Record<OptionalAiProviderName, Record<FormalAiTier, string>> = {
+  openai: {
+    cheap: "gpt-4o-mini",
+    balanced: "gpt-4o-mini",
+    heavy: "gpt-4o",
+  },
+  groq: {
+    // Groq's free tier — fast Llama/Qwen inference, generous rate limits.
+    cheap: "llama-3.1-8b-instant",
+    balanced: "llama-3.3-70b-versatile",
+    heavy: "meta-llama/llama-4-scout-17b-16e-instruct",
+  },
+  mistral: {
+    // "-latest" aliases per Mistral's own API docs — track the current release automatically.
+    cheap: "mistral-small-latest",
+    balanced: "mistral-small-latest",
+    heavy: "mistral-large-latest",
+  },
+  deepseek: {
+    cheap: "deepseek-v4-flash",
+    balanced: "deepseek-v4-flash",
+    heavy: "deepseek-v4-pro",
+  },
+  gemini: {
+    // Google AI Studio free tier (generous per-day quota on Flash/Flash-Lite).
+    cheap: "gemini-3.1-flash-lite",
+    balanced: "gemini-3.5-flash",
+    heavy: "gemini-3.7-flash",
+  },
+};
+
+const OPTIONAL_PROVIDER_ENV_PREFIX: Record<OptionalAiProviderName, string> = {
+  openai: "OPENAI",
+  groq: "GROQ",
+  mistral: "MISTRAL",
+  deepseek: "DEEPSEEK",
+  gemini: "GEMINI_CHAT",
+};
+
+/**
+ * Resolve the model for an explicitly-chosen optional provider + formal tier,
+ * honouring env overrides (e.g. GROQ_ADVANCED_MODEL). Anthropic is not
+ * handled here — use resolveModelForTier for the default/primary path.
+ */
+export function resolveModelForOptionalProvider(
+  provider: OptionalAiProviderName,
+  tier: FormalAiTier | AiModelTier,
+): string {
+  const formal = toFormalTier(tier);
+  const prefix = OPTIONAL_PROVIDER_ENV_PREFIX[provider];
+  const envKey = `${prefix}_${formal === "cheap" ? "ECONOMY" : formal === "heavy" ? "ADVANCED" : "DEFAULT"}_MODEL`;
+  const override = process.env[envKey];
+  if (override && override.trim()) return override.trim();
+  return OPTIONAL_PROVIDER_DEFAULT_MODELS[provider][formal];
+}

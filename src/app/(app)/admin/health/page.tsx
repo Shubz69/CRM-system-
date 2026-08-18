@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { requirePlatformAccess } from "@/lib/session";
-import { PageHeader } from "@/components/ui/page-header";
 import { getAiProvider } from "@/adapters/ai";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { getBookingProvider } from "@/adapters/booking";
@@ -140,6 +139,37 @@ export default async function AdminHealthPage() {
       summary: "Optional adapter only — not required for Agent Desk",
     },
     {
+      name: "Groq (optional)",
+      status: env.GROQ_API_KEY ? "Operational" : "Not Configured",
+      summary: "Optional free-tier adapter only — not required. See docs/AI_PROVIDERS.md",
+    },
+    {
+      name: "Mistral (optional)",
+      status: env.MISTRAL_API_KEY ? "Operational" : "Not Configured",
+      summary: "Optional adapter only — not required. See docs/AI_PROVIDERS.md",
+    },
+    {
+      name: "DeepSeek (optional)",
+      status: env.DEEPSEEK_API_KEY ? "Operational" : "Not Configured",
+      summary: "Optional adapter only — not required. See docs/AI_PROVIDERS.md",
+    },
+    {
+      name: "Gemini (optional, chat)",
+      status: env.GEMINI_API_KEY ? "Operational" : "Not Configured",
+      summary: env.GEMINI_API_KEY
+        ? "Optional adapter — shares GEMINI_API_KEY with image generation"
+        : "Optional adapter only — not required. See docs/AI_PROVIDERS.md",
+    },
+    {
+      name: "Apify (social listening)",
+      status: !env.APIFY_TOKEN
+        ? "Not Configured"
+        : "Operational",
+      summary: env.APIFY_TOKEN
+        ? "Instagram/LinkedIn/TikTok/Twitter-X/Threads keyword search via licensed Apify actors"
+        : "APIFY_TOKEN missing — those research sources throw a clear not-configured error, never fake data",
+    },
+    {
       name: "ManyChat",
       status: !env.MANYCHAT_API_TOKEN
         ? "Not Configured"
@@ -189,7 +219,12 @@ export default async function AdminHealthPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Safe probes only — secrets are never displayed. Status is not inferred from env alone when a check fails." />
+      <div>
+        <h1 className="h-display text-4xl">System health</h1>
+        <p className="mt-1 text-[var(--muted)]">
+          Safe probes only — secrets are never displayed. Status is not inferred from env alone when a check fails.
+        </p>
+      </div>
 
       <div className="surface overflow-x-auto">
         <table className="w-full min-w-[900px] text-left text-sm">
@@ -211,10 +246,10 @@ export default async function AdminHealthPage() {
                   <span
                     className={
                       row.status === "Operational"
-                        ? "badge badge-success"
+                        ? "badge"
                         : row.status === "Not Configured"
                           ? "badge"
-                          : "badge badge-danger"
+                          : "badge badge-warn"
                     }
                   >
                     {row.status}

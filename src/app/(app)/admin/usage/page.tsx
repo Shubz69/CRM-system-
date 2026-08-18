@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requirePlatformAccess } from "@/lib/session";
-import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +9,11 @@ function estimateCost(feature: string, quantity: number, provider: string | null
   let perUnit = 0.001;
   if (p.includes("openai") || feature.includes("openai")) perUnit = 0.002;
   if (p.includes("anthropic") || feature.includes("anthropic")) perUnit = 0.003;
+  // Optional free/low-cost secondary providers — rough indicative rates only.
+  if (p.includes("groq")) perUnit = 0.0002;
+  if (p.includes("mistral")) perUnit = 0.0008;
+  if (p.includes("deepseek")) perUnit = 0.0003;
+  if (p.includes("gemini")) perUnit = 0.0005;
   if (feature.includes("token")) perUnit = 0.00002;
   return Math.round(quantity * perUnit * 100) / 100;
 }
@@ -80,7 +84,12 @@ export default async function AdminUsagePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Real UsageRecord aggregates for the last 30 days. Estimated cost is indicative only." />
+      <div>
+        <h1 className="h-display text-4xl">AI Usage</h1>
+        <p className="mt-1 text-[var(--muted)]">
+          Real UsageRecord aggregates for the last 30 days. Estimated cost is indicative only.
+        </p>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="surface p-4">

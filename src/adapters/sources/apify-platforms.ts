@@ -415,6 +415,105 @@ export const TIKTOK_APIFY_CONFIG: ApifyPlatformConfig = {
   },
 };
 
+export const TWITTER_APIFY_CONFIG: ApifyPlatformConfig = {
+  platform: "twitter",
+  displayName: "Twitter/X",
+  // Tweet Scraper V2 — widely used, keyword search via searchTerms; PPE ~$0.30-1.00/1k tweets typical.
+  defaultActorId: "apidojo/tweet-scraper",
+  actorIdEnv: "APIFY_TWITTER_ACTOR_ID",
+  timeoutEnv: "APIFY_TWITTER_TIMEOUT_MS",
+  defaultTimeoutMs: 60_000,
+  defaultUsdPer1k: 1.0,
+  buildInput(query, options, limit) {
+    const q = options.nicheHint ? `${query} ${options.nicheHint}` : query;
+    return {
+      searchTerms: [q.trim()],
+      maxItems: limit,
+      sort: options.recent === false ? "Top" : "Latest",
+    };
+  },
+  mapItem(item) {
+    const url = asString(item.url) || asString(item.twitterUrl);
+    if (!url) return null;
+    const authorObj =
+      item.author && typeof item.author === "object" ? (item.author as Record<string, unknown>) : null;
+    const author: string | null =
+      (authorObj ? asString(authorObj.userName) || asString(authorObj.name) : null) ||
+      asString(item.userName);
+    const text = asString(item.text) || asString(item.fullText) || "";
+    const likes = asNumber(item.likeCount);
+    const comments = asNumber(item.replyCount);
+    const shares = asNumber(item.retweetCount);
+    const views = asNumber(item.viewCount);
+    return {
+      url,
+      title: text.slice(0, 120) || `Tweet by ${author || "unknown"}`,
+      content: text.slice(0, 8000),
+      author,
+      publishedAt: asDate(item.createdAt),
+      platform: "twitter" as const,
+      engagement: {
+        likes,
+        comments,
+        shares,
+        views,
+        score: (views ?? 0) + (likes ?? 0) * 10 + (comments ?? 0) * 20 + (shares ?? 0) * 15,
+        raw: { likeCount: likes, replyCount: comments, retweetCount: shares, viewCount: views },
+      },
+      rawMetadata: {
+        id: item.id ?? null,
+      },
+    };
+  },
+};
+
+export const THREADS_APIFY_CONFIG: ApifyPlatformConfig = {
+  platform: "threads",
+  displayName: "Threads",
+  // Keyword/search-mode Threads actor — review before production lock-in (community actor, no official Meta API).
+  defaultActorId: "automation-lab/threads-scraper",
+  actorIdEnv: "APIFY_THREADS_ACTOR_ID",
+  timeoutEnv: "APIFY_THREADS_TIMEOUT_MS",
+  defaultTimeoutMs: 60_000,
+  defaultUsdPer1k: 1.5,
+  buildInput(query, options, limit) {
+    const q = options.nicheHint ? `${query} ${options.nicheHint}` : query;
+    return {
+      mode: "search",
+      searchQueries: [q.trim()],
+      maxPosts: limit,
+    };
+  },
+  mapItem(item) {
+    const url = asString(item.url) || asString(item.postUrl);
+    if (!url) return null;
+    const author: string | null = asString(item.username) || asString(item.authorUsername);
+    const text = asString(item.text) || asString(item.caption) || "";
+    const likes = asNumber(item.likeCount) ?? asNumber(item.likes);
+    const comments = asNumber(item.replyCount) ?? asNumber(item.comments);
+    const shares = asNumber(item.repostCount) ?? asNumber(item.reposts);
+    return {
+      url,
+      title: text.slice(0, 120) || `Threads post by ${author || "unknown"}`,
+      content: text.slice(0, 8000),
+      author,
+      publishedAt: asDate(item.timestamp) || asDate(item.createdAt) || asDate(item.publishedAt),
+      platform: "threads" as const,
+      engagement: {
+        likes,
+        comments,
+        shares,
+        score: (likes ?? 0) * 10 + (comments ?? 0) * 20 + (shares ?? 0) * 15,
+        raw: { likeCount: likes, replyCount: comments, repostCount: shares },
+      },
+      rawMetadata: {
+        id: item.id ?? null,
+        hashtags: item.hashtags ?? null,
+      },
+    };
+  },
+};
+
 export const LINKEDIN_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "linkedin",
   displayName: "LinkedIn",

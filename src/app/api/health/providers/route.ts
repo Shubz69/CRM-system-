@@ -2,6 +2,7 @@ import { getEnv } from "@/lib/env";
 import { getAiProvider } from "@/adapters/ai";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { getBookingProvider } from "@/adapters/booking";
+import { listConfiguredSourcePlatforms } from "@/adapters/sources";
 
 export async function GET() {
   const env = getEnv();
@@ -21,6 +22,17 @@ export async function GET() {
         hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
         openaiRequired: false,
         ready: Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock",
+        // Optional secondary/free-tier providers — never required, see docs/AI_PROVIDERS.md.
+        optionalProviders: {
+          groq: Boolean(env.GROQ_API_KEY),
+          mistral: Boolean(env.MISTRAL_API_KEY),
+          deepseek: Boolean(env.DEEPSEEK_API_KEY),
+          gemini: Boolean(env.GEMINI_API_KEY),
+        },
+      },
+      research: {
+        apifyConfigured: Boolean(env.APIFY_TOKEN),
+        configuredPlatforms: listConfiguredSourcePlatforms(),
       },
       manychat: {
         webhookSecretConfigured: Boolean(env.MANYCHAT_WEBHOOK_SECRET),
