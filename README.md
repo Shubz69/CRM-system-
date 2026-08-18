@@ -21,7 +21,7 @@ Product name: **Agent Desk**.
 2. Deploy on Vercel — [docs/VERCEL.md](docs/VERCEL.md)
 3. Set `DATABASE_URL` to the Supabase pooled URI, seed the super admin, then sign in
 
-Docs: [SETUP](docs/SETUP.md) · [MIGRATIONS](docs/MIGRATIONS.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
+Docs: [SETUP](docs/SETUP.md) · [MIGRATIONS](docs/MIGRATIONS.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
 
 ## Quick start (Windows / local without Docker)
 
@@ -65,7 +65,7 @@ npx tsx scripts/create-organisation.ts --name "Acme Agency" --slug acme-agency -
 
 Or use **Admin → Workspaces** after signing in as a platform admin.
 
-Docs: [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
+Docs: [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
 
 Then open **Simulator**, send a DM, and confirm the conversation appears in **Inbox** (rows are marked `origin=simulator`).
 

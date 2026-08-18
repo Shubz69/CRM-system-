@@ -87,6 +87,23 @@ enum IntegrationType {
   WEBHOOK
 }
 
+/// Platforms a tenant can OAuth-connect their own account to (Settings → Integrations).
+/// Distinct from SocialPost.platform (a free-text string used by the research/listening
+/// pipeline, which reads public content and is not tied to a connected account).
+enum SocialPlatform {
+  INSTAGRAM
+  LINKEDIN
+  TIKTOK
+}
+
+enum SocialConnectionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+}
+
 enum NotificationType {
   HANDOVER
   HIGH_SCORE
@@ -140,6 +157,7 @@ model Organisation {
   members              OrganisationMember[]
   integrations         Integration[]
   messagingChannels    MessagingChannel[]
+  socialConnections    SocialConnection[]
   contacts             Contact[]
   conversations        Conversation[]
   leads                Lead[]
@@ -315,6 +333,46 @@ model MessagingChannel {
 
   @@unique([organisationId, provider, externalId])
   @@index([organisationId])
+}
+
+/// A tenant's own OAuth-connected social account (Instagram/LinkedIn/TikTok).
+/// Separate from MessagingChannel (the ManyChat-mediated Instagram DM channel) —
+/// this powers "Connect Instagram/LinkedIn/TikTok" in Settings → Integrations for
+/// listening/publishing capabilities. See docs/SOCIAL_CONNECTIONS.md.
+model SocialConnection {
+  id                String                 @id @default(cuid())
+  organisationId    String
+  platform          SocialPlatform
+  externalAccountId String
+  displayName       String?
+  status            SocialConnectionStatus @default(PENDING)
+  scopes            String[]               @default([])
+  capabilities      Json                   @default("{}")
+  connectedByUserId String?
+  expiresAt         DateTime?
+  lastSyncedAt      DateTime?
+  metadata          Json                   @default("{}")
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  organisation Organisation                 @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  credentials  SocialConnectionCredential[]
+
+  @@unique([organisationId, platform, externalAccountId])
+  @@index([organisationId])
+}
+
+model SocialConnectionCredential {
+  id                 String   @id @default(cuid())
+  socialConnectionId String
+  keyName            String
+  encryptedValue     String   @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([socialConnectionId, keyName])
 }
 
 model Contact {

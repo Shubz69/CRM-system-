@@ -93,6 +93,22 @@ const envSchema = z.object({
   MANYCHAT_API_BASE_URL: z.string().default("https://api.manychat.com"),
   MANYCHAT_API_TOKEN: z.string().optional(),
   MANYCHAT_WEBHOOK_SECRET: z.string().default("dev-manychat-webhook-secret"),
+  /**
+   * Social Connections (Settings → Integrations → Social Connections).
+   * Per-platform OAuth app credentials for tenants to connect their own
+   * Instagram / LinkedIn / TikTok accounts (listen + publish). Unset →
+   * SocialNotConfiguredError, never a fake connection. See docs/SOCIAL_CONNECTIONS.md.
+   */
+  INSTAGRAM_APP_ID: z.string().optional(),
+  INSTAGRAM_APP_SECRET: z.string().optional(),
+  INSTAGRAM_REDIRECT_URI: z.string().optional(),
+  INSTAGRAM_GRAPH_API_VERSION: z.string().default("v21.0"),
+  LINKEDIN_CLIENT_ID: z.string().optional(),
+  LINKEDIN_CLIENT_SECRET: z.string().optional(),
+  LINKEDIN_REDIRECT_URI: z.string().optional(),
+  TIKTOK_CLIENT_KEY: z.string().optional(),
+  TIKTOK_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_REDIRECT_URI: z.string().optional(),
   BOOKING_PROVIDER: z.string().default("link"),
   BOOKING_WEBHOOK_SECRET: z.string().default("dev-booking-webhook-secret"),
   DEFAULT_BOOKING_URL: z.string().optional(),
