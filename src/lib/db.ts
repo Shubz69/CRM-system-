@@ -5,7 +5,9 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 /**
  * Normalize DATABASE_URL for serverless + Supabase poolers.
  * Session mode (port 5432 pooler) exhausts quickly under Vercel concurrency.
- * Prefer transaction pooler (6543) with pgbouncer=true&connection_limit=1.
+ * Prefer transaction pooler (6543) with pgbouncer=true.
+ * connection_limit=1 is too tight when Ask polls + JWT revalidation share an isolate —
+ * use a small pool (default 5) under PgBouncer transaction mode.
  */
 function resolveDatasourceUrl(): string | undefined {
   const raw = process.env.DATABASE_URL;
@@ -17,23 +19,29 @@ function resolveDatasourceUrl(): string | undefined {
     const isSessionPort = url.port === "5432" || url.port === "";
     const hasPgBouncer = url.searchParams.get("pgbouncer") === "true";
 
-    // Soft-correct common misconfiguration: session pooler without connection_limit.
     if (isSupabasePooler) {
       if (url.port === "6543" || hasPgBouncer) {
         url.searchParams.set("pgbouncer", "true");
-        if (!url.searchParams.has("connection_limit")) {
-          url.searchParams.set("connection_limit", "1");
+        const rawLimit = Number(url.searchParams.get("connection_limit") || "5");
+        // Bump legacy connection_limit=1 — it caused JWT pool timeouts under Ask polling.
+        const limit =
+          Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 5), 10) : 5;
+        url.searchParams.set("connection_limit", String(limit));
+        if (!url.searchParams.has("pool_timeout")) {
+          url.searchParams.set("pool_timeout", "20");
         }
       } else if (isSessionPort && process.env.NODE_ENV === "production") {
-        // Warn via stderr — do not rewrite port automatically (credentials/path differ).
         console.warn(
           "[db] DATABASE_URL uses Supabase session pooler (port 5432). " +
             "On Vercel this often hits EMAXCONNSESSION (pool_size: 15). " +
-            "Switch to Transaction pooler port 6543 with ?pgbouncer=true&connection_limit=1. " +
+            "Switch to Transaction pooler port 6543 with ?pgbouncer=true&connection_limit=5. " +
             "See docs/SUPABASE.md",
         );
         if (!url.searchParams.has("connection_limit")) {
-          url.searchParams.set("connection_limit", "1");
+          url.searchParams.set("connection_limit", "5");
+        }
+        if (!url.searchParams.has("pool_timeout")) {
+          url.searchParams.set("pool_timeout", "20");
         }
       }
     }

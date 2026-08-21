@@ -57,8 +57,8 @@ declare module "next-auth/jwt" {
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
-/** Re-validate JWT org against DB at most every 60s (keeps stale IDs from surviving a reseed). */
-const WORKSPACE_RECHECK_MS = 60_000;
+/** Re-validate JWT org against DB at most every 5 minutes (Ask polls often; avoid pool storms). */
+const WORKSPACE_RECHECK_MS = 5 * 60_000;
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
@@ -199,34 +199,46 @@ export const authOptions: NextAuthOptions = {
       }
 
       // Periodically confirm the JWT org still exists and the user is still a member.
-      // Fixes stale cookies after DB reseed / org deletion without a full sign-out loop.
+      // Soft-fail on DB errors — never turn a pool timeout into JWT_SESSION_ERROR / 401 spam.
       const due =
         !token.workspaceCheckedAt ||
         Date.now() - token.workspaceCheckedAt > WORKSPACE_RECHECK_MS;
       if (token.id && due) {
-        const userRow = await prisma.user.findUnique({
-          where: { id: token.id },
-          select: { activeOrganisationId: true },
-        });
-        const preferred =
-          token.organisationId || userRow?.activeOrganisationId || null;
-        const resolved = await resolveActiveWorkspaceForUser({
-          userId: token.id,
-          preferredOrganisationId: preferred,
-          persist: true,
-        });
-        if (!resolved) {
-          token.organisationId = undefined;
-          token.organisationName = undefined;
-          token.role = undefined;
-          token.memberships = [];
-        } else {
-          token.organisationId = resolved.membership.organisationId;
-          token.organisationName = resolved.membership.organisation.name;
-          token.role = resolved.membership.role;
-          token.memberships = resolved.memberships;
+        try {
+          const userRow = await prisma.user.findUnique({
+            where: { id: token.id },
+            select: { activeOrganisationId: true },
+          });
+          const preferred =
+            token.organisationId || userRow?.activeOrganisationId || null;
+          const orgChanged =
+            Boolean(preferred) && preferred !== token.organisationId;
+          const resolved = await resolveActiveWorkspaceForUser({
+            userId: token.id,
+            preferredOrganisationId: preferred,
+            // Only write when the resolved org differs — avoids extra writes under Ask polling.
+            persist: orgChanged || !token.organisationId,
+          });
+          if (!resolved) {
+            token.organisationId = undefined;
+            token.organisationName = undefined;
+            token.role = undefined;
+            token.memberships = [];
+          } else {
+            token.organisationId = resolved.membership.organisationId;
+            token.organisationName = resolved.membership.organisation.name;
+            token.role = resolved.membership.role;
+            token.memberships = resolved.memberships;
+          }
+          token.workspaceCheckedAt = Date.now();
+        } catch (error) {
+          // Keep the existing JWT claims; retry on a later request.
+          console.warn(
+            "[auth] workspace recheck skipped",
+            error instanceof Error ? error.message : "unknown",
+          );
+          token.workspaceCheckedAt = Date.now();
         }
-        token.workspaceCheckedAt = Date.now();
       }
 
       return token;

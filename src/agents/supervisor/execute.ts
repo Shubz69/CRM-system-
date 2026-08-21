@@ -378,7 +378,35 @@ export async function executeAgentRun(input: {
         data: { totalCostCents },
       });
 
+      const priorForMerge = previousOutput;
       previousOutput = result.output;
+      // Critic is a verification step — never let its short status wipe the analyst brief.
+      if (
+        agent.name === "critic" &&
+        priorForMerge &&
+        typeof priorForMerge === "object" &&
+        priorForMerge !== null
+      ) {
+        const prior = priorForMerge as Record<string, unknown>;
+        const criticOut = result.output as Record<string, unknown>;
+        const priorSummary =
+          typeof prior.summary === "string" && prior.summary.trim() ? prior.summary.trim() : null;
+        const criticSummary =
+          typeof criticOut.summary === "string" ? criticOut.summary : null;
+        previousOutput = {
+          researchJobId:
+            (typeof criticOut.researchJobId === "string" && criticOut.researchJobId) ||
+            (typeof prior.researchJobId === "string" && prior.researchJobId) ||
+            undefined,
+          summary: priorSummary || criticSummary || "",
+          claims: Array.isArray(prior.claims) ? prior.claims : [],
+          contradictions: Array.isArray(prior.contradictions) ? prior.contradictions : [],
+          gaps: Array.isArray(prior.gaps) ? prior.gaps : [],
+          findings: Array.isArray(prior.findings) ? prior.findings : undefined,
+          sources: Array.isArray(prior.sources) ? prior.sources : undefined,
+          verification: criticOut,
+        };
+      }
       stepOutputs.push({
         agentName: agent.name,
         userFacingLabel: label.trim(),

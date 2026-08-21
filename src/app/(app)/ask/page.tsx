@@ -131,9 +131,45 @@ function renderAnswerBody(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    if (typeof obj.summary === "string") return obj.summary;
-    if (typeof obj.echo === "string") return obj.echo;
-    return "";
+    const parts: string[] = [];
+    if (typeof obj.summary === "string" && obj.summary.trim()) {
+      parts.push(obj.summary.trim());
+    } else if (typeof obj.echo === "string" && obj.echo.trim()) {
+      parts.push(obj.echo.trim());
+    }
+    if (Array.isArray(obj.claims) && obj.claims.length > 0) {
+      const lines = obj.claims
+        .map((c) => {
+          if (!c || typeof c !== "object") return null;
+          const claim = (c as { claim?: unknown }).claim;
+          const url = (c as { sourceUrl?: unknown }).sourceUrl;
+          if (typeof claim !== "string" || !claim.trim()) return null;
+          return typeof url === "string" && url
+            ? `- ${claim.trim()} (${url})`
+            : `- ${claim.trim()}`;
+        })
+        .filter((line): line is string => Boolean(line));
+      if (lines.length) {
+        parts.push(["Key claims:", ...lines].join("\n"));
+      }
+    }
+    if (Array.isArray(obj.gaps) && obj.gaps.length > 0) {
+      const gaps = obj.gaps.filter((g): g is string => typeof g === "string" && g.trim().length > 0);
+      if (gaps.length) {
+        parts.push(["Gaps:", ...gaps.map((g) => `- ${g}`)].join("\n"));
+      }
+    }
+    if (
+      obj.verification &&
+      typeof obj.verification === "object" &&
+      typeof (obj.verification as { summary?: unknown }).summary === "string"
+    ) {
+      const v = ((obj.verification as { summary: string }).summary || "").trim();
+      if (v && !parts.includes(v)) {
+        parts.push(`Verification: ${v}`);
+      }
+    }
+    return parts.join("\n\n");
   }
   return String(value);
 }
@@ -188,6 +224,10 @@ export default function AskPage() {
         if (res.status === 401 && json.code === "SESSION_ORG_INVALID") {
           toast.error(json.error || "Please sign in again.");
           await signOut({ callbackUrl: "/login" });
+          return;
+        }
+        if (res.status === 401) {
+          // Transient next-auth/JWT pool blips — skip this tick instead of toast-spamming.
           return;
         }
         if (res.status === 403 && json.code === "NO_WORKSPACE_MEMBERSHIP") {
@@ -314,7 +354,7 @@ export default function AskPage() {
       }
       setRunId(json.runId);
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 1200);
+      pollRef.current = setInterval(() => void poll(json.runId), 2500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
@@ -350,7 +390,7 @@ export default function AskPage() {
       }
       stopPolling();
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 1200);
+      pollRef.current = setInterval(() => void poll(json.runId), 2500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
@@ -379,7 +419,7 @@ export default function AskPage() {
       }
       stopPolling();
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 1200);
+      pollRef.current = setInterval(() => void poll(json.runId), 2500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(

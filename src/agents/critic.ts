@@ -156,11 +156,13 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
         unsupportedClaims.length === 0
           ? claims.length
             ? `All ${claims.length} claims cite sources we actually collected.`
-            : "No claims to verify yet."
+            : parsed.summary?.trim()
+              ? `${parsed.summary.trim()}\n\n(No citeable claims were available to verify against collected URLs.)`
+              : "Research finished, but no citeable claims were produced from the sources."
           : `${unsupportedClaims.length} claim${unsupportedClaims.length === 1 ? "" : "s"} lacked a collected source URL.`,
       verifiedClaims,
       unsupportedClaims,
-      allCitationsValid: unsupportedClaims.length === 0,
+      allCitationsValid: unsupportedClaims.length === 0 || claims.length === 0,
     };
 
     await prisma.researchJob.updateMany({
