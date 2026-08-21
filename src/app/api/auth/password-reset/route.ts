@@ -62,8 +62,14 @@ function humanizeDbError(error: unknown): string {
   ) {
     return "Cannot reach the database. Check DATABASE_URL (Supabase Transaction pooler :6543) and that the project is not paused.";
   }
-  if (lower.includes("authentication failed") || lower.includes("password authentication")) {
-    return "Database password rejected. Reset the DB password in Supabase and update DATABASE_URL / DIRECT_URL on Vercel.";
+  if (
+    lower.includes("authentication failed") ||
+    lower.includes("password authentication") ||
+    (lower.includes("credentials") && lower.includes("not valid")) ||
+    lower.includes("eauthquery") ||
+    lower.includes("user not found in the database")
+  ) {
+    return "Database login rejected. In DATABASE_URL the user must be postgres.<project-ref> (not pos0tgres…) and the password must match Supabase → Settings → Database. URL-encode special characters, then redeploy.";
   }
   // Avoid dumping raw Prisma stacks to the client.
   return "Password reset failed while talking to the database. Check Vercel DATABASE_URL and Supabase status.";
