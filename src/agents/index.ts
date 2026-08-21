@@ -8,6 +8,7 @@ import { criticAgent } from "@/agents/critic";
 import { imagingAnalyzeAgent } from "@/agents/imaging-analyze";
 import { imagingGenerateAgent } from "@/agents/imaging-generate";
 import type { AnyAgent } from "@/agents/types";
+import { ensureBuiltinToolsRegistered } from "@/kernel";
 
 let bootstrapped = false;
 
@@ -29,6 +30,7 @@ export function ensureAgentsRegistered(): void {
   for (const agent of BUILTIN) {
     if (!hasAgent(agent.name)) registerAgent(agent);
   }
+  ensureBuiltinToolsRegistered();
   bootstrapped = true;
 }
 

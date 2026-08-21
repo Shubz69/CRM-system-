@@ -360,4 +360,4 @@ As operated for Shubz69 / Agent Desk:
 
 ---
 
-*Last updated to reflect the social-ready Ask pack, JWT/pool hardenings, Setup Assistant behaviour, and the Vercel + Supabase + Upstash + worker split.*
+*Last updated to reflect the social-ready Ask pack, JWT/pool hardenings, Setup Assistant behaviour, the Vercel + Supabase + Upstash + worker split, and the V2 OS audit / Agent Kernel foundation (`docs/PLATFORM-AUDIT-V2.md`, `docs/TARGET-ARCHITECTURE-V2.md`, `src/kernel`).*

@@ -21,7 +21,7 @@ Product name: **Agent Desk**.
 2. Deploy on Vercel — [docs/VERCEL.md](docs/VERCEL.md)
 3. Set `DATABASE_URL` to the Supabase pooled URI, seed the super admin, then sign in
 
-Docs: [SYSTEM OVERVIEW](docs/SYSTEM-OVERVIEW.md) · [SETUP](docs/SETUP.md) · [MIGRATIONS](docs/MIGRATIONS.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_PROVIDERS](docs/AI_PROVIDERS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
+Docs: [SYSTEM OVERVIEW](docs/SYSTEM-OVERVIEW.md) · [PLATFORM AUDIT V2](docs/PLATFORM-AUDIT-V2.md) · [TARGET ARCHITECTURE V2](docs/TARGET-ARCHITECTURE-V2.md) · [ROADMAP V2](docs/ROADMAP-V2.md) · [SETUP](docs/SETUP.md) · [MIGRATIONS](docs/MIGRATIONS.md) · [SUPABASE](docs/SUPABASE.md) · [VERCEL](docs/VERCEL.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_PROVIDERS](docs/AI_PROVIDERS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
 
 ## Quick start (Windows / local without Docker)
 
