@@ -131,47 +131,80 @@ function renderAnswerBody(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    const parts: string[] = [];
+    // Prefer shortAnswer for the lead block; full brief is rendered separately in the UI.
+    if (typeof obj.shortAnswer === "string" && obj.shortAnswer.trim()) {
+      return obj.shortAnswer.trim();
+    }
     if (typeof obj.summary === "string" && obj.summary.trim()) {
-      parts.push(obj.summary.trim());
-    } else if (typeof obj.echo === "string" && obj.echo.trim()) {
-      parts.push(obj.echo.trim());
+      return obj.summary.trim();
     }
-    if (Array.isArray(obj.claims) && obj.claims.length > 0) {
-      const lines = obj.claims
-        .map((c) => {
-          if (!c || typeof c !== "object") return null;
-          const claim = (c as { claim?: unknown }).claim;
-          const url = (c as { sourceUrl?: unknown }).sourceUrl;
-          if (typeof claim !== "string" || !claim.trim()) return null;
-          return typeof url === "string" && url
-            ? `- ${claim.trim()} (${url})`
-            : `- ${claim.trim()}`;
-        })
-        .filter((line): line is string => Boolean(line));
-      if (lines.length) {
-        parts.push(["Key claims:", ...lines].join("\n"));
-      }
+    if (typeof obj.echo === "string" && obj.echo.trim()) {
+      return obj.echo.trim();
     }
-    if (Array.isArray(obj.gaps) && obj.gaps.length > 0) {
-      const gaps = obj.gaps.filter((g): g is string => typeof g === "string" && g.trim().length > 0);
-      if (gaps.length) {
-        parts.push(["Gaps:", ...gaps.map((g) => `- ${g}`)].join("\n"));
-      }
-    }
-    if (
-      obj.verification &&
-      typeof obj.verification === "object" &&
-      typeof (obj.verification as { summary?: unknown }).summary === "string"
-    ) {
-      const v = ((obj.verification as { summary: string }).summary || "").trim();
-      if (v && !parts.includes(v)) {
-        parts.push(`Verification: ${v}`);
-      }
-    }
-    return parts.join("\n\n");
+    return "";
   }
   return String(value);
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+}
+
+type ViralExample = {
+  title: string;
+  whyItWorked: string;
+  platform: string;
+  sourceUrl: string;
+  formatHint?: string;
+};
+
+function extractViralExamples(value: unknown): ViralExample[] {
+  if (!value || typeof value !== "object") return [];
+  const raw = (value as { viralExamples?: unknown }).viralExamples;
+  if (!Array.isArray(raw)) return [];
+  const out: ViralExample[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const v = item as Record<string, unknown>;
+    if (typeof v.title !== "string" || typeof v.sourceUrl !== "string") continue;
+    if (typeof v.whyItWorked !== "string" || typeof v.platform !== "string") continue;
+    out.push({
+      title: v.title,
+      whyItWorked: v.whyItWorked,
+      platform: v.platform,
+      sourceUrl: v.sourceUrl,
+      formatHint: typeof v.formatHint === "string" ? v.formatHint : undefined,
+    });
+  }
+  return out;
+}
+
+type NextBigThing = {
+  prediction: string;
+  whyNow: string;
+  howToRideIt: string;
+  confidence?: string;
+};
+
+function extractNextBigThings(value: unknown): NextBigThing[] {
+  if (!value || typeof value !== "object") return [];
+  const raw = (value as { nextBigThings?: unknown }).nextBigThings;
+  if (!Array.isArray(raw)) return [];
+  const out: NextBigThing[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const v = item as Record<string, unknown>;
+    if (typeof v.prediction !== "string" || typeof v.whyNow !== "string") continue;
+    if (typeof v.howToRideIt !== "string") continue;
+    out.push({
+      prediction: v.prediction,
+      whyNow: v.whyNow,
+      howToRideIt: v.howToRideIt,
+      confidence: typeof v.confidence === "string" ? v.confidence : undefined,
+    });
+  }
+  return out;
 }
 
 function WorkingPulse({ label }: { label: string }) {
@@ -509,6 +542,28 @@ export default function AskPage() {
   const answerSource =
     progress?.finalOutput != null ? progress.finalOutput : progress?.outputSoFar;
   const answerBody = answerSource != null ? renderAnswerBody(answerSource) : "";
+  const fullBrief =
+    answerSource &&
+    typeof answerSource === "object" &&
+    typeof (answerSource as { brief?: unknown }).brief === "string"
+      ? ((answerSource as { brief: string }).brief || "").trim()
+      : "";
+  const execSummary =
+    answerSource &&
+    typeof answerSource === "object" &&
+    typeof (answerSource as { summary?: unknown }).summary === "string"
+      ? ((answerSource as { summary: string }).summary || "").trim()
+      : "";
+  const viralExamples = extractViralExamples(answerSource);
+  const nextBigThings = extractNextBigThings(answerSource);
+  const contentHooks =
+    answerSource && typeof answerSource === "object"
+      ? asStringArray((answerSource as { contentHooks?: unknown }).contentHooks)
+      : [];
+  const algorithmNotes =
+    answerSource && typeof answerSource === "object"
+      ? asStringArray((answerSource as { algorithmNotes?: unknown }).algorithmNotes)
+      : [];
   const imageUrl = imageUrlFromOutput(answerSource);
   const sources = extractSources(answerSource);
   const findings = extractFindings(answerSource);
@@ -518,8 +573,15 @@ export default function AskPage() {
       : [];
   const isPartial = progress?.status === "PARTIAL";
   const showAnswer =
-    Boolean(answerBody || imageUrl || findings.length) &&
-    ["COMPLETED", "PARTIAL", "FAILED", "RUNNING"].includes(progress?.status || "");
+    Boolean(
+      answerBody ||
+        fullBrief ||
+        imageUrl ||
+        findings.length ||
+        viralExamples.length ||
+        nextBigThings.length ||
+        contentHooks.length,
+    ) && ["COMPLETED", "PARTIAL", "FAILED", "RUNNING"].includes(progress?.status || "");
 
   const isLive =
     progress && ["PENDING", "PLANNING", "RUNNING"].includes(progress.status);
@@ -678,26 +740,124 @@ export default function AskPage() {
 
       {/* Answer at the top */}
       {showAnswer && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-            {isPartial ? "What I finished" : "Answer"}
-          </h2>
-          {isPartial && progress?.userFacingError && (
-            <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
-              {progress.userFacingError}
-            </p>
+        <section className="space-y-6">
+          <div className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+              {isPartial ? "What I finished" : "Short answer"}
+            </h2>
+            {isPartial && progress?.userFacingError && (
+              <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
+                {progress.userFacingError}
+              </p>
+            )}
+            {imageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imageUrl}
+                alt="Generated image"
+                className="max-h-[28rem] w-full rounded-xl object-contain"
+              />
+            )}
+            {answerBody && (
+              <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
+            )}
+            {execSummary && execSummary !== answerBody && (
+              <p className="text-sm leading-relaxed text-[var(--muted)]">{execSummary}</p>
+            )}
+          </div>
+
+          {viralExamples.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                Recent viral examples
+              </h3>
+              <ul className="space-y-3">
+                {viralExamples.map((v, i) => (
+                  <li key={`${v.sourceUrl}-${i}`} className="surface p-4">
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <p className="font-medium text-[var(--foreground)]">{v.title}</p>
+                      <span className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                        {v.platform}
+                        {v.formatHint ? ` · ${v.formatHint}` : ""}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-[var(--muted)]">{v.whyItWorked}</p>
+                    <a
+                      href={v.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
+                    >
+                      Open video / post
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-          {imageUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imageUrl}
-              alt="Generated image"
-              className="max-h-[28rem] w-full rounded-xl object-contain"
-            />
+
+          {nextBigThings.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                What looks next on the algorithm
+              </h3>
+              <ul className="space-y-3">
+                {nextBigThings.map((n, i) => (
+                  <li key={`${n.prediction}-${i}`} className="surface p-4">
+                    <p className="font-medium text-[var(--foreground)]">{n.prediction}</p>
+                    {n.confidence ? (
+                      <p className="mt-1 text-xs uppercase tracking-wide text-[var(--muted)]">
+                        Confidence: {n.confidence}
+                      </p>
+                    ) : null}
+                    <p className="mt-2 text-sm text-[var(--muted)]">
+                      <span className="font-medium text-[var(--foreground)]">Why now:</span> {n.whyNow}
+                    </p>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      <span className="font-medium text-[var(--foreground)]">How to ride it:</span>{" "}
+                      {n.howToRideIt}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-          {answerBody && (
-            <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
+
+          {contentHooks.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                Content hooks
+              </h3>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
+                {contentHooks.map((hook, i) => (
+                  <li key={`${hook}-${i}`}>{hook}</li>
+                ))}
+              </ul>
+            </div>
           )}
+
+          {algorithmNotes.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                Algorithm notes
+              </h3>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
+                {algorithmNotes.map((note, i) => (
+                  <li key={`${note}-${i}`}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {fullBrief && (
+            <details className="rounded-xl border border-[var(--border)] px-4 py-3" open>
+              <summary className="cursor-pointer text-sm font-medium">Full brief</summary>
+              <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-[var(--foreground)]">
+                {fullBrief}
+              </div>
+            </details>
+          )}
+
           {findings.length > 0 && (
             <ul className="space-y-3">
               {findings.map((f, i) => (

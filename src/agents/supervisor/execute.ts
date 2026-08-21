@@ -398,8 +398,14 @@ export async function executeAgentRun(input: {
             (typeof criticOut.researchJobId === "string" && criticOut.researchJobId) ||
             (typeof prior.researchJobId === "string" && prior.researchJobId) ||
             undefined,
+          shortAnswer: typeof prior.shortAnswer === "string" ? prior.shortAnswer : undefined,
           summary: priorSummary || criticSummary || "",
+          brief: typeof prior.brief === "string" ? prior.brief : undefined,
           claims: Array.isArray(prior.claims) ? prior.claims : [],
+          viralExamples: Array.isArray(prior.viralExamples) ? prior.viralExamples : [],
+          nextBigThings: Array.isArray(prior.nextBigThings) ? prior.nextBigThings : [],
+          contentHooks: Array.isArray(prior.contentHooks) ? prior.contentHooks : [],
+          algorithmNotes: Array.isArray(prior.algorithmNotes) ? prior.algorithmNotes : [],
           contradictions: Array.isArray(prior.contradictions) ? prior.contradictions : [],
           gaps: Array.isArray(prior.gaps) ? prior.gaps : [],
           findings: Array.isArray(prior.findings) ? prior.findings : undefined,

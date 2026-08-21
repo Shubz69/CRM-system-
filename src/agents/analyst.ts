@@ -16,10 +16,33 @@ const claimSchema = z.object({
   sourceUrl: z.string().url(),
 });
 
+const viralExampleSchema = z.object({
+  title: z.string().min(1).max(200),
+  whyItWorked: z.string().min(1).max(500),
+  platform: z.string().min(1).max(40),
+  sourceUrl: z.string().url(),
+  formatHint: z.string().max(120).optional(),
+});
+
+const nextBigThingSchema = z.object({
+  prediction: z.string().min(1).max(400),
+  whyNow: z.string().min(1).max(500),
+  howToRideIt: z.string().min(1).max(500),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+});
+
 export const analystOutputSchema = z.object({
   researchJobId: z.string(),
+  /** Ultra-short takeaways for a busy creator (bullet-style text). */
+  shortAnswer: z.string(),
+  /** Longer narrative brief. */
   summary: z.string(),
+  brief: z.string().optional(),
   claims: z.array(claimSchema),
+  viralExamples: z.array(viralExampleSchema).optional(),
+  nextBigThings: z.array(nextBigThingSchema).optional(),
+  contentHooks: z.array(z.string()).optional(),
+  algorithmNotes: z.array(z.string()).optional(),
   contradictions: z.array(
     z.object({
       description: z.string(),
@@ -33,8 +56,14 @@ export type AnalystInput = z.infer<typeof analystInputSchema>;
 export type AnalystOutput = z.infer<typeof analystOutputSchema>;
 
 const briefSchema = z.object({
-  summary: z.string().min(1).max(4000),
+  shortAnswer: z.string().min(1).max(1200),
+  summary: z.string().min(1).max(2500),
+  brief: z.string().min(1).max(8000),
   claims: z.array(claimSchema).max(40),
+  viralExamples: z.array(viralExampleSchema).max(12),
+  nextBigThings: z.array(nextBigThingSchema).max(6),
+  contentHooks: z.array(z.string().min(1).max(280)).max(12),
+  algorithmNotes: z.array(z.string().min(1).max(400)).max(10),
   contradictions: z
     .array(
       z.object({
@@ -46,22 +75,27 @@ const briefSchema = z.object({
   gaps: z.array(z.string().max(400)).max(20),
 });
 
+function looksLikeVideoUrl(url: string): boolean {
+  return /youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/(reel|p|tv)|shorts/i.test(url);
+}
+
 /**
- * Analyst — synthesises a brief. Every claim maps to a source URL.
- * Contradictions and gaps are named explicitly.
+ * Analyst — synthesises a creator-ready pack: short answer, full brief,
+ * viral examples with real links, and algorithm “what’s next” takes.
+ * Every claim / viral example URL must come from collected sources.
  */
 export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
   name: "analyst",
   description:
-    "Turns collected research sources into a brief where every claim cites a real source URL, and names contradictions and gaps.",
+    "Turns collected research into a social-ready pack: short answer, full brief, viral examples with links, content hooks, and algorithm next-big-thing takes — every citation from real sources.",
   inputSchema: analystInputSchema,
   outputSchema: analystOutputSchema,
   tier: "balanced",
-  estimateCostCents: () => 4,
+  estimateCostCents: () => 6,
   userFacingLabel: (input) =>
     input.topic?.trim()
-      ? `Writing a sourced brief on “${input.topic.trim().slice(0, 70)}”`
-      : "Writing a sourced research brief",
+      ? `Packaging viral intel on “${input.topic.trim().slice(0, 70)}”`
+      : "Packaging a sourced social brief",
   async execute(input, ctx) {
     const parsed = analystInputSchema.parse(input);
     await assertWithinSpendCap(ctx.organisationId, analystAgent.estimateCostCents(parsed));
@@ -72,11 +106,11 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
         sources: {
           where: { organisationId: ctx.organisationId },
           orderBy: { createdAt: "asc" },
-          take: 40,
+          take: 50,
         },
         findings: {
           where: { organisationId: ctx.organisationId },
-          take: 40,
+          take: 50,
         },
       },
     });
@@ -88,8 +122,14 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
     if (!allowedUrls.size) {
       const empty: AnalystOutput = {
         researchJobId: job.id,
+        shortAnswer: "No sources came back yet — check research integrations and try again.",
         summary: "There are no collected sources to analyse yet.",
+        brief: "There are no collected sources to analyse yet.",
         claims: [],
+        viralExamples: [],
+        nextBigThings: [],
+        contentHooks: [],
+        algorithmNotes: [],
         contradictions: [],
         gaps: ["No sources were collected for this job."],
       };
@@ -104,10 +144,10 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
     }
 
     const catalog = job.sources
-      .map(
-        (s) =>
-          `URL: ${s.url}\nTitle: ${s.title || ""}\nPlatform: ${s.platform}\nExcerpt:\n${(s.content || "").slice(0, 1500)}`,
-      )
+      .map((s) => {
+        const video = looksLikeVideoUrl(s.url) ? " VIDEO" : "";
+        return `URL: ${s.url}\nTitle: ${s.title || ""}\nPlatform: ${s.platform}${video}\nExcerpt:\n${(s.content || "").slice(0, 1500)}`;
+      })
       .join("\n\n----\n\n");
 
     const priorFindings = job.findings
@@ -122,24 +162,37 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
       organisationId: ctx.organisationId,
       tier: "balanced",
       model,
-      system: `You are an analyst writing a short business research brief.
-Rules:
-- Every claim MUST include a sourceUrl that exactly matches one provided URL.
+      system: `You are a social-media intelligence analyst for creators and agencies.
+Your job is NOT a thin one-paragraph brief. Produce a full pack creators can act on today.
+
+Required output:
+1) shortAnswer — 4–8 punchy bullet lines (use "- " prefixes) with the most recent themes, complaints, and opportunities.
+2) summary — 1 short paragraph executive take.
+3) brief — a longer structured write-up (themes, what people are saying, what’s working on-feed, what to post next). Aim for substance (multiple short sections).
+4) claims — factual claims, each with a sourceUrl that EXACTLY matches a provided URL.
+5) viralExamples — the most recent / high-signal posts or videos from the sources (prefer YouTube/TikTok/Instagram/Reel/Shorts URLs). Each needs title, whyItWorked, platform, sourceUrl from the list, optional formatHint.
+6) nextBigThings — 2–5 predictions of what the algorithm is likely to reward next in this niche. Label confidence. Base reasoning on patterns in the sources; do NOT invent URLs.
+7) contentHooks — 5–10 ready-to-post hook lines.
+8) algorithmNotes — practical notes on formats, hooks, length, posting patterns that appear to be winning.
+9) contradictions + gaps — be honest about what sources disagree on or don’t cover.
+
+Hard rules:
 - Never invent statistics, quotes, or URLs.
-- Name contradictions between sources explicitly — do not smooth them over.
-- Name gaps (what the sources do not cover) explicitly.
-- Stay domain-agnostic; do not assume Instagram marketing.`,
+- Every claim.sourceUrl and viralExamples.sourceUrl MUST exactly match a provided URL.
+- Prefer the freshest / most engagement-looking items when ranking viralExamples.
+- If few video URLs exist, still fill viralExamples from the best available posts and say so in gaps.`,
       prompt: `Topic: ${parsed.topic || job.topic}
 
 Prior findings:
 ${priorFindings || "(none)"}
 
-Sources:
+Sources (use only these URLs):
 ${catalog.slice(0, 70_000)}`,
-      temperature: 0.2,
+      temperature: 0.35,
     });
 
     const claims = brief.claims.filter((c) => allowedUrls.has(c.sourceUrl));
+    const viralExamples = brief.viralExamples.filter((v) => allowedUrls.has(v.sourceUrl));
     const contradictions = brief.contradictions
       .map((c) => ({
         description: c.description,
@@ -149,8 +202,14 @@ ${catalog.slice(0, 70_000)}`,
 
     const output: AnalystOutput = {
       researchJobId: job.id,
+      shortAnswer: brief.shortAnswer,
       summary: brief.summary,
+      brief: brief.brief,
       claims,
+      viralExamples,
+      nextBigThings: brief.nextBigThings,
+      contentHooks: brief.contentHooks,
+      algorithmNotes: brief.algorithmNotes,
       contradictions,
       gaps: brief.gaps,
     };
@@ -161,10 +220,10 @@ ${catalog.slice(0, 70_000)}`,
         brief: output as unknown as Prisma.InputJsonValue,
         contradictions: contradictions as unknown as Prisma.InputJsonValue,
         gaps: brief.gaps as unknown as Prisma.InputJsonValue,
-        totalCostCents: { increment: 4 },
+        totalCostCents: { increment: 6 },
       },
     });
 
-    return { output, model, costCents: 4 };
+    return { output, model, costCents: 6 };
   },
 };

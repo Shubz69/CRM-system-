@@ -90,8 +90,11 @@ async function expandResearchQueries(input: {
   model: string;
 }): Promise<string[]> {
   const system =
-    'You expand one research question into several targeted search queries. Stay domain-agnostic. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
-  const prompt = `Topic: ${input.topic}\nNiche hint (optional): ${input.nicheHint || "(none)"}\nProduce 3-6 concrete search queries as JSON.`;
+    'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
+  const prompt = `Topic: ${input.topic}
+Niche hint (optional): ${input.nicheHint || "(none)"}
+Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
+Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`;
 
   try {
     const expand = await completeStructured(queryExpandSchema, {
@@ -160,7 +163,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   outputSchema: researchOutputSchema,
   tier: "cheap",
   estimateCostCents: (input) => {
-    const maxSources = input.maxSources ?? 20;
+    const maxSources = input.maxSources ?? 28;
     return Math.max(3, Math.ceil(maxSources / 5) + 2);
   },
   userFacingLabel: (input) => {
@@ -169,7 +172,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   },
   async execute(input, ctx) {
     const parsed = researchInputSchema.parse(input);
-    const maxSources = parsed.maxSources ?? 20;
+    const maxSources = parsed.maxSources ?? 28;
     await assertWithinSpendCap(ctx.organisationId, researchAgent.estimateCostCents(parsed));
 
     const model = resolveModelForTier("cheap");

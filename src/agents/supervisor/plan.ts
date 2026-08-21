@@ -143,7 +143,7 @@ function planResearchPipeline(topic: string): PlanResult {
         { agentName: "analyst", input: { topic: clean } },
         { agentName: "critic", input: {} },
       ],
-      plainEnglishPlan: `I'll research “${clean.slice(0, 80)}”, write a sourced brief, then check every claim against the collected links.`,
+      plainEnglishPlan: `I'll research recent viral talk about “${clean.slice(0, 80)}”, pull example video/post links, write a short take + full brief, then flag what looks next on the algorithm.`,
     },
   };
 }
@@ -158,7 +158,7 @@ function planSocialListeningPipeline(topic: string): PlanResult {
         { agentName: "analyst", input: { topic: clean } },
         { agentName: "critic", input: {} },
       ],
-      plainEnglishPlan: `I'll look for recent high-engagement posts about “${clean.slice(0, 80)}”, draft a brief from what people are saying, then verify every citation.`,
+      plainEnglishPlan: `I'll scan recent high-engagement posts about “${clean.slice(0, 80)}”, surface viral examples with links, draft a creator brief + next-algorithm takes, then verify citations.`,
     },
   };
 }
