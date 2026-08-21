@@ -170,6 +170,39 @@ export default async function AdminHealthPage() {
         : "APIFY_TOKEN missing — those research sources throw a clear not-configured error, never fake data",
     },
     {
+      name: "Instagram (connect/publish)",
+      status:
+        env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
+          ? "Operational"
+          : "Not Configured",
+      summary:
+        env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
+          ? "Meta App credentials set — org OAuth connect + publish available"
+          : "INSTAGRAM_APP_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above.",
+    },
+    {
+      name: "LinkedIn (connect/publish)",
+      status:
+        env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
+          ? "Operational"
+          : "Not Configured",
+      summary:
+        env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
+          ? "LinkedIn app credentials set — personal-profile OAuth connect + publish available. Messaging is not supported on any platform (no compliant API)."
+          : "LINKEDIN_CLIENT_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported on any platform (no compliant API).",
+    },
+    {
+      name: "TikTok (connect/publish)",
+      status:
+        env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
+          ? "Operational"
+          : "Not Configured",
+      summary:
+        env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
+          ? "TikTok for Developers credentials set — Content Posting API connect + publish available. Messaging is not supported (no official API)."
+          : "TIKTOK_CLIENT_KEY/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported (no official API).",
+    },
+    {
       name: "ManyChat",
       status: !env.MANYCHAT_API_TOKEN
         ? "Not Configured"
