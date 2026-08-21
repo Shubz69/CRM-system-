@@ -7,6 +7,7 @@ import { jsonError, requirePermission } from "@/lib/session";
 import { recordAiExecution } from "@/services/ai-execution";
 import { writeAuditLog } from "@/services/audit";
 import { prisma } from "@/lib/db";
+import { getEnv } from "@/lib/env";
 
 const proposeSchema = z.object({
   action: z.literal("propose"),
@@ -34,13 +35,37 @@ const proposalShape = z.object({
   pipelineStages: z.array(z.object({ name: z.string(), slug: z.string() })).optional(),
 });
 
+function humanizeSetupAiError(message: string): string {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("api key is invalid") ||
+    lower.includes("authentication_error") ||
+    lower.includes("invalid x-api-key") ||
+    (lower.includes("401") && lower.includes("anthropic"))
+  ) {
+    return "Claude isn’t configured correctly on the server (invalid Anthropic API key). An admin needs to update ANTHROPIC_API_KEY in Vercel and redeploy.";
+  }
+  if (lower.includes("anthropic") && (lower.includes("not configured") || lower.includes("missing"))) {
+    return "Claude isn’t configured yet. Add ANTHROPIC_API_KEY in Vercel (or switch AI_PROVIDER), then redeploy.";
+  }
+  return message;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("agent:manage");
     const body = z.union([proposeSchema, approveSchema]).parse(await req.json());
 
     if (body.action === "propose") {
-      const provider = getAiProvider("anthropic");
+      const env = getEnv();
+      if (!env.ANTHROPIC_API_KEY && (env.AI_PROVIDER || "anthropic") === "anthropic") {
+        return jsonError(
+          "Claude isn’t configured yet. Add ANTHROPIC_API_KEY in Vercel, then redeploy.",
+          503,
+        );
+      }
+
+      const provider = getAiProvider();
       const model = resolveModelForTier("default");
       const started = Date.now();
       const systemPrompt = `You are Claude, the Agent Desk Setup Assistant.
@@ -58,20 +83,34 @@ pipelineStages (array of {name,slug}),
 reply (short summary for the user).
 Return ONLY JSON. Do not invent fake customer data.`;
 
-      const raw = await provider.analyseConversation({
-        model,
-        systemPrompt,
-        conversationTranscript: "",
-        knowledgeContext: "",
-        leadMessage: body.businessDescription,
-      });
+      let raw: unknown;
+      try {
+        raw = await provider.analyseConversation({
+          model,
+          systemPrompt,
+          conversationTranscript: "",
+          knowledgeContext: "",
+          leadMessage: body.businessDescription,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "AI request failed";
+        await recordAiExecution({
+          organisationId: session.organisationId,
+          provider: provider.name,
+          model,
+          taskType: "setup_assistant",
+          feature: "setup_assistant",
+          latencyMs: Date.now() - started,
+          success: false,
+          metadata: { mode: "propose", error: message.slice(0, 500) },
+        });
+        return jsonError(humanizeSetupAiError(message), 502);
+      }
 
-      // Setup assistant may return flat JSON — wrap for parser if needed
       let proposal: Record<string, unknown>;
       if (raw && typeof raw === "object" && "qualificationQuestions" in (raw as object)) {
         proposal = raw as Record<string, unknown>;
       } else if (raw && typeof raw === "object" && "reply" in (raw as object)) {
-        // Might be conversation schema — extract what we can
         proposal = {
           reply: (raw as { reply?: string }).reply,
           ...(raw as object),
@@ -95,12 +134,11 @@ Return ONLY JSON. Do not invent fake customer data.`;
         ok: true,
         message: "Here's what I've configured.",
         proposal,
-        provider: "anthropic",
+        provider: provider.name,
         model,
       });
     }
 
-    // Approve — persist proposal into agent + knowledge + qualification fields
     const parsed = proposalShape.safeParse(body.proposal);
     const proposal = parsed.success ? parsed.data : (body.proposal as z.infer<typeof proposalShape>);
 
@@ -183,6 +221,6 @@ Return ONLY JSON. Do not invent fake customer data.`;
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
     if (error instanceof z.ZodError) return jsonError(error.errors[0]?.message || "Invalid", 400);
-    return jsonError(message, 500);
+    return jsonError(humanizeSetupAiError(message), 500);
   }
 }

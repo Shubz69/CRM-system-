@@ -72,7 +72,23 @@ export default function SetupAssistantPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Describe your business. Claude proposes qualification, scoring, tone, and knowledge — you approve." />
+      <PageHeader description="One-time onboarding helper: describe your business, review Claude’s proposed agent tone, qualification questions, and starter knowledge, then approve to save." />
+
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/50 px-4 py-3 text-sm text-[var(--muted)]">
+        <p className="font-medium text-[var(--foreground)]">What this is for</p>
+        <p className="mt-1">
+          Speeds up first-time setup of the AI Operator (tone, how leads are scored, and a few Knowledge
+          docs). You can skip it and configure those manually under{" "}
+          <Link href="/agent" className="text-[var(--accent)] underline-offset-2 hover:underline">
+            AI Agent
+          </Link>{" "}
+          and{" "}
+          <Link href="/knowledge" className="text-[var(--accent)] underline-offset-2 hover:underline">
+            Knowledge
+          </Link>
+          .
+        </p>
+      </div>
 
       <form onSubmit={propose} className="surface space-y-3 p-5">
         <label className="block text-sm font-medium">
@@ -83,10 +99,11 @@ export default function SetupAssistantPage() {
             onChange={(e) => setDescription(e.target.value)}
             required
             minLength={20}
+            placeholder="What you sell, who it’s for, and what a good lead looks like…"
           />
         </label>
         <button type="submit" className="btn btn-primary" disabled={busy}>
-          Ask Claude to configure
+          {busy ? "Asking Claude…" : "Ask Claude to configure"}
         </button>
       </form>
 
