@@ -65,7 +65,7 @@ npx tsx scripts/create-organisation.ts --name "Acme Agency" --slug acme-agency -
 
 Or use **Admin → Workspaces** after signing in as a platform admin.
 
-Docs: [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_PROVIDERS](docs/AI_PROVIDERS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
+Docs: [SYSTEM OVERVIEW](docs/SYSTEM-OVERVIEW.md) · [SETUP](docs/SETUP.md) · [ADMIN](docs/ADMIN.md) · [MANYCHAT](docs/MANYCHAT.md) · [SOCIAL_CONNECTIONS](docs/SOCIAL_CONNECTIONS.md) · [AI_PROVIDERS](docs/AI_PROVIDERS.md) · [AI_AGENT](docs/AI_AGENT.md) · [KNOWLEDGE](docs/KNOWLEDGE.md) · [BOOKINGS](docs/BOOKINGS.md) · [SECURITY](docs/SECURITY.md) · [TESTING](docs/TESTING.md) · [DEPLOYMENT](docs/DEPLOYMENT.md) · [WORKER](docs/WORKER.md)
 
 Then open **Simulator**, send a DM, and confirm the conversation appears in **Inbox** (rows are marked `origin=simulator`).
 
