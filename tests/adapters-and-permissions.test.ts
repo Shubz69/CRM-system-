@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MockAiProvider } from "@/adapters/ai/mock";
 import { analyseWithValidation, buildAgentSystemPrompt } from "@/adapters/ai";
 import { MockManyChatAdapter, clearMockOutboundLog, mockOutboundLog } from "@/adapters/messaging";
-import { roleHasPermission } from "@/lib/permissions";
+import { canViewAiSpend, roleHasPermission } from "@/lib/permissions";
 import { MemberRole } from "@prisma/client";
 
 describe("Mock AI provider", () => {
@@ -75,5 +75,15 @@ describe("Permissions", () => {
     expect(roleHasPermission(MemberRole.SUPER_ADMIN, "platform:manage")).toBe(true);
     expect(roleHasPermission(MemberRole.SUPER_ADMIN, "system:health")).toBe(true);
     expect(roleHasPermission(MemberRole.OWNER, "platform:manage")).toBe(false);
+  });
+
+  it("limits AI spend visibility to admin accounts", () => {
+    expect(canViewAiSpend({ role: MemberRole.OWNER })).toBe(true);
+    expect(canViewAiSpend({ role: MemberRole.ADMINISTRATOR })).toBe(true);
+    expect(canViewAiSpend({ role: MemberRole.SUPER_ADMIN })).toBe(true);
+    expect(canViewAiSpend({ role: MemberRole.SALES_AGENT, isPlatformAdmin: true })).toBe(true);
+    expect(canViewAiSpend({ role: MemberRole.SALES_AGENT })).toBe(false);
+    expect(canViewAiSpend({ role: MemberRole.MANAGER })).toBe(false);
+    expect(canViewAiSpend({ role: MemberRole.READ_ONLY })).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { jsonError, requirePermission } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { getAgentRunProgress } from "@/services/agent-runs";
+import { canViewAiSpend } from "@/lib/permissions";
 import {
   WorkspaceAccessError,
   assertActiveWorkspaceAccess,
@@ -10,6 +11,7 @@ import {
 
 /**
  * Progress poll for a run. Org-scoped — cross-org IDs return 404.
+ * AI cost / allowance fields are only returned for admin accounts.
  */
 export async function GET(
   _req: NextRequest,
@@ -29,6 +31,23 @@ export async function GET(
       runId,
     });
     if (!progress) return jsonError("Not found", 404);
+
+    if (
+      !canViewAiSpend({
+        isPlatformAdmin: session.isPlatformAdmin,
+        role: session.role,
+      })
+    ) {
+      return Response.json({
+        ...progress,
+        totalCostCents: 0,
+        costNote: null,
+        pendingCostNote: null,
+        pendingCostEstimateCents: null,
+        remainingAllowanceNote: null,
+        steps: progress.steps.map((s) => ({ ...s, costCents: 0 })),
+      });
+    }
 
     return Response.json(progress);
   } catch (error) {

@@ -133,3 +133,16 @@ export function assertPermission(role: MemberRole, permission: Permission): void
 export function getRolePermissions(role: MemberRole): Permission[] {
   return ROLE_PERMISSIONS[role] ?? [];
 }
+
+/** Platform / workspace admins may see AI spend & allowance notes. Agents/viewers may not. */
+export function canViewAiSpend(input: {
+  isPlatformAdmin?: boolean;
+  role: MemberRole;
+}): boolean {
+  if (input.isPlatformAdmin) return true;
+  return (
+    input.role === "SUPER_ADMIN" ||
+    input.role === "OWNER" ||
+    input.role === "ADMINISTRATOR"
+  );
+}
