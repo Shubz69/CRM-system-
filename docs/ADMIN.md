@@ -56,6 +56,9 @@ Or use **Admin → Workspaces** after signing in.
 - Request: `POST /api/auth/password-reset` with `{ email }`
 - Complete: `POST /api/auth/password-reset` with `{ token, password }`
 - UI: `/forgot-password` and `/reset-password?token=…`
+- Production email: set `EMAIL_SMTP_URL` + `EMAIL_FROM` (nodemailer SMTP). Without SMTP, no inbox mail is sent.
+- Ops recovery (no SMTP): on `/forgot-password`, open **No email yet? Use recovery secret**, paste `ADMIN_BOOTSTRAP_SECRET`, submit — the page shows a one-time reset link. Same secret via header `x-admin-bootstrap-secret`.
+- Ensure `APP_URL` / `NEXTAUTH_URL` are the public site URL so the link points at production.
 
 ## Account lockout
 

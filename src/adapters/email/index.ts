@@ -1,3 +1,4 @@
+import nodemailer from "nodemailer";
 import type { EmailAdapter, EmailDeliveryInput, EmailDeliveryResult } from "./types";
 import { mockEmailLog } from "./types";
 import { getEnv } from "@/lib/env";
@@ -15,8 +16,8 @@ export class MockEmailAdapter implements EmailAdapter {
 }
 
 /**
- * SMTP skeleton — only activates when EMAIL_SMTP_URL is set.
- * Without a verified nodemailer/SMTP stack we fail closed rather than invent transport.
+ * Real SMTP via nodemailer when EMAIL_SMTP_URL is set.
+ * URL shapes: smtp://user:pass@host:587 or smtps://user:pass@host:465
  */
 export class SmtpEmailAdapter implements EmailAdapter {
   readonly name = "smtp";
@@ -26,12 +27,48 @@ export class SmtpEmailAdapter implements EmailAdapter {
     if (!env.EMAIL_SMTP_URL) {
       return new MockEmailAdapter().send(input);
     }
-    return {
-      ok: false,
-      provider: this.name,
-      error:
-        "Live SMTP delivery requires a mail transport dependency. Credentials/URL are present but live send is not enabled in this build — use mock email or wire nodemailer.",
-    };
+
+    let parsed: URL;
+    try {
+      parsed = new URL(env.EMAIL_SMTP_URL);
+    } catch {
+      return { ok: false, provider: this.name, error: "EMAIL_SMTP_URL is not a valid URL" };
+    }
+
+    const port = parsed.port
+      ? Number(parsed.port)
+      : parsed.protocol === "smtps:"
+        ? 465
+        : 587;
+    const secure = parsed.protocol === "smtps:" || port === 465;
+    const user = parsed.username ? decodeURIComponent(parsed.username) : undefined;
+    const pass = parsed.password ? decodeURIComponent(parsed.password) : undefined;
+
+    const transporter = nodemailer.createTransport({
+      host: parsed.hostname,
+      port,
+      secure,
+      auth: user ? { user, pass: pass || "" } : undefined,
+    });
+
+    const from = env.EMAIL_FROM || user || "noreply@localhost";
+    try {
+      const info = await transporter.sendMail({
+        from,
+        to: input.to.join(", "),
+        subject: input.subject,
+        text: input.bodyText,
+      });
+      return {
+        ok: true,
+        provider: this.name,
+        messageId: typeof info.messageId === "string" ? info.messageId : undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "SMTP send failed";
+      logger.error("SMTP email send failed", { message, to: input.to });
+      return { ok: false, provider: this.name, error: message };
+    }
   }
 }
 
