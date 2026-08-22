@@ -53,9 +53,10 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 4 — Social Intelligence
 
-- Canonical SocialContent + MetricSnapshot (time series)  
-- Ingestion jobs on worker  
-- Relationships (creator/topic/format) in Postgres + pgvector where useful  
+- [x] Canonical SocialContent + MetricSnapshot (time series)
+- [x] Ingestion from research / social-listening (worker path via agent execute)
+- [x] Relationships (creator / format / topics) in Postgres
+- [ ] Dedicated recurring re-scrape jobs + pgvector topic clusters 
 
 ---
 

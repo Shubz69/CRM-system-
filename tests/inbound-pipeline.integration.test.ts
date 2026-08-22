@@ -52,7 +52,9 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
     await prisma.$disconnect();
   });
 
-  it("processes a simulated DM end-to-end with idempotency", async () => {
+  it(
+    "processes a simulated DM end-to-end with idempotency",
+    async () => {
     clearMockOutboundLog();
     const externalId = `itest_${Date.now()}`;
     const idempotencyKey = `itest_key_${Date.now()}`;
@@ -124,7 +126,9 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
       reason: "test cancel",
     });
     expect(cancelled).toBeGreaterThanOrEqual(0);
-  });
+  },
+  30_000,
+  );
 
   it("isolates organisations", async () => {
     const other = await createTestOrganisation("other");

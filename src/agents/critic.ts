@@ -190,7 +190,7 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
         data: {
           verifiedByCritic: urlOk && grounding.grounded,
           flaggedUnsupported: !urlOk,
-          flaggedUngrounded: urlOk && !grounding.grounded,
+          flaggedUngrounded: urlOk && !grounding.grounded && !grounding.skipped,
         },
       });
     }

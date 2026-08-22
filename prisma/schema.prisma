@@ -198,6 +198,9 @@ model Organisation {
   researchSourceSnapshots ResearchSourceSnapshot[]
   socialPosts          SocialPost[]
   trendSignals         TrendSignal[]
+  socialCreators       SocialCreator[]
+  socialContents       SocialContent[]
+  socialMetricSnapshots SocialMetricSnapshot[]
   assets               Asset[]
   memoryEpisodes       MemoryEpisode[]
   memoryEntityFacts    MemoryEntityFact[]
@@ -1544,6 +1547,82 @@ model TrendSignal {
 
   @@index([organisationId, researchJobId])
   @@index([organisationId, signalType, frequency])
+}
+
+/// Canonical creator identity across research / social listening (Phase 4).
+model SocialCreator {
+  id             String   @id @default(cuid())
+  organisationId String
+  platform       String
+  /// Normalised handle / channel id (lowercase, no leading @).
+  handle         String
+  displayName    String?
+  profileUrl     String?
+  externalId     String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation    @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contents     SocialContent[]
+
+  @@unique([organisationId, platform, handle])
+  @@index([organisationId, platform])
+}
+
+/// Canonical social post/video — one row per org+platform+url. Metrics live in snapshots.
+model SocialContent {
+  id               String    @id @default(cuid())
+  organisationId   String
+  platform         String
+  url              String
+  externalId       String?
+  creatorId        String?
+  title            String?
+  body             String?   @db.Text
+  publishedAt      DateTime?
+  /// short | reel | video | post | thread | carousel | other
+  format           String?
+  topics           String[]  @default([])
+  researchSourceId String?
+  socialPostId     String?
+  rawMetadata      Json      @default("{}")
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organisation Organisation           @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  creator      SocialCreator?         @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  metrics      SocialMetricSnapshot[]
+
+  @@unique([organisationId, platform, url])
+  @@index([organisationId, platform, publishedAt])
+  @@index([organisationId, creatorId])
+  @@index([organisationId, lastSeenAt])
+  @@index([organisationId, format])
+}
+
+/// Time-series engagement — never overwrite; append snapshots.
+model SocialMetricSnapshot {
+  id              String   @id @default(cuid())
+  organisationId  String
+  socialContentId String
+  capturedAt      DateTime @default(now())
+  views           Int?
+  likes           Int?
+  comments        Int?
+  shares          Int?
+  score           Float?
+  raw             Json     @default("{}")
+  createdAt       DateTime @default(now())
+
+  organisation  Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  socialContent SocialContent @relation(fields: [socialContentId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, socialContentId, capturedAt])
+  @@index([organisationId, capturedAt])
+  @@index([socialContentId, capturedAt])
 }
 
 

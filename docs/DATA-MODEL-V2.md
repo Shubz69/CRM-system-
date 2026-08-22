@@ -42,7 +42,8 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 4–5
 
-- `SocialContent` (canonical) + `SocialMetricSnapshot`  
+- `SocialContent` (canonical) + `SocialMetricSnapshot` ✅  
+- `SocialCreator` ✅  
 - `AlgorithmChange`  
 - `TrendForecast` + `TrendForecastOutcome` (backtest)  
 

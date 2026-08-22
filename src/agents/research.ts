@@ -10,6 +10,7 @@ import {
   parseClaimKind,
   persistResearchSourceWithSnapshot,
 } from "@/services/research-evidence";
+import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
   dedupeSourceResults,
   formatUnavailableSourceNotes,
@@ -370,6 +371,20 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         error: ranked.length ? null : "no_sources",
       },
     });
+
+    if (ranked.length) {
+      try {
+        await ingestResearchJobSocialContent({
+          organisationId: ctx.organisationId,
+          researchJobId: job.id,
+        });
+      } catch (error) {
+        logger.warn("Social intelligence ingest skipped after research", {
+          researchJobId: job.id,
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      }
+    }
 
     return { output, model, costCents };
   },

@@ -82,6 +82,8 @@ const ALL_ADAPTERS: SourceAdapter[] = [
   instagramSourceAdapter,
   linkedInSourceAdapter,
   tiktokSourceAdapter,
+  twitterSourceAdapter,
+  threadsSourceAdapter,
 ];
 
 export function getSourceAdapter(platform: SourcePlatform): SourceAdapter {

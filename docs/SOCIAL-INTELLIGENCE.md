@@ -1,15 +1,25 @@
 # Social Intelligence
 
-**Status:** Spec (Phase 4). Foundation: SocialPost, TrendSignal, Apify adapters, SocialConnection.
+**Status:** Phase 4 started. Models + ingest from research/social-listening.
 
-## Canonical model (target)
+## Canonical model
 
-SocialProfile, SocialContent, SocialMetricSnapshot (time series), SocialComment, Topic, Creator, AudienceCluster, Format, TrendCluster…
+| Model | Role |
+|-------|------|
+| `SocialCreator` | Org+platform+handle identity |
+| `SocialContent` | One row per org+platform+url (canonical post/video) |
+| `SocialMetricSnapshot` | Append-only engagement time series |
 
-Keep platform raw metadata. Compute velocity/acceleration from snapshots — never overwrite-only totals.
+Legacy `SocialPost` / `TrendSignal` remain for listening job extracts; ingest also writes canonical `SocialContent`.
+
+## Ingestion
+
+`ingestResearchJobSocialContent` runs after research / social-listening complete (best-effort; never fails the Ask run).
+
+Metrics: each sighting with engagement inserts a **new** `SocialMetricSnapshot` — totals are never overwritten in place.
 
 ## Relationships
 
-creator→content→topic/format; campaign→content; content→lead when attributable.
+creator → content → format/topics; content links optional `researchSourceId` / `socialPostId`.
 
-Use Postgres + pgvector; no separate graph DB unless proven necessary.
+Postgres only for now; pgvector later for topic clustering if needed.

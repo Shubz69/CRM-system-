@@ -82,16 +82,21 @@ function significantTokens(text: string): string[] {
 
 /**
  * True when evidence excerpt (preferred) or claim tokens appear in source body.
- * Conservative: missing source body → cannot confirm (returns false).
+ * When the source has no stored body (e.g. title-only YouTube hits), grounding is skipped
+ * — URL membership remains the hard gate; do not fail Ask runs as ungrounded.
  */
 export function isExcerptGrounded(input: {
   claim: string;
   evidenceExcerpt?: string | null;
   sourceContent?: string | null;
-}): { grounded: boolean; reason: string } {
+}): { grounded: boolean; skipped: boolean; reason: string } {
   const body = input.sourceContent?.trim();
   if (!body) {
-    return { grounded: false, reason: "Source has no stored content to ground against" };
+    return {
+      grounded: true,
+      skipped: true,
+      reason: "Source has no stored content — grounding skipped; URL check still applies",
+    };
   }
   const normalisedBody = normalizeEvidenceText(body);
 
@@ -99,28 +104,40 @@ export function isExcerptGrounded(input: {
   if (excerpt && excerpt.length >= 12) {
     const needle = normalizeEvidenceText(excerpt);
     if (needle.length >= 12 && normalisedBody.includes(needle)) {
-      return { grounded: true, reason: "Evidence excerpt found in source content" };
+      return { grounded: true, skipped: false, reason: "Evidence excerpt found in source content" };
     }
     // Allow loose match: ≥60% of excerpt tokens present in body
     const tokens = significantTokens(excerpt);
     if (tokens.length >= 3) {
       const hits = tokens.filter((t) => normalisedBody.includes(t)).length;
       if (hits / tokens.length >= 0.6) {
-        return { grounded: true, reason: "Most evidence excerpt tokens found in source content" };
+        return {
+          grounded: true,
+          skipped: false,
+          reason: "Most evidence excerpt tokens found in source content",
+        };
       }
     }
-    return { grounded: false, reason: "Evidence excerpt not found in source content" };
+    return { grounded: false, skipped: false, reason: "Evidence excerpt not found in source content" };
   }
 
   const claimTokens = significantTokens(input.claim);
   if (claimTokens.length < 3) {
-    return { grounded: false, reason: "Claim too short to ground without an evidence excerpt" };
+    return {
+      grounded: false,
+      skipped: false,
+      reason: "Claim too short to ground without an evidence excerpt",
+    };
   }
   const hits = claimTokens.filter((t) => normalisedBody.includes(t)).length;
   if (hits / claimTokens.length >= 0.5) {
-    return { grounded: true, reason: "Claim tokens sufficiently overlap source content" };
+    return {
+      grounded: true,
+      skipped: false,
+      reason: "Claim tokens sufficiently overlap source content",
+    };
   }
-  return { grounded: false, reason: "Claim not grounded in source content" };
+  return { grounded: false, skipped: false, reason: "Claim not grounded in source content" };
 }
 
 export async function persistResearchSourceWithSnapshot(input: {

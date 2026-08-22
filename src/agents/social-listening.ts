@@ -7,6 +7,7 @@ import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import { persistResearchSourceWithSnapshot } from "@/services/research-evidence";
+import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
   dedupeSourceResults,
   formatUnavailableSourceNotes,
@@ -17,6 +18,7 @@ import {
   type SourceResult,
 } from "@/adapters/sources";
 import { getEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
 export const socialListeningInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -273,6 +275,20 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
           : "I couldn't find recent posts. Check that research source API keys are configured.",
       },
     });
+
+    if (ranked.length) {
+      try {
+        await ingestResearchJobSocialContent({
+          organisationId: ctx.organisationId,
+          researchJobId: job.id,
+        });
+      } catch (error) {
+        logger.warn("Social intelligence ingest skipped after social listening", {
+          researchJobId: job.id,
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      }
+    }
 
     return { output, model, costCents };
   },
