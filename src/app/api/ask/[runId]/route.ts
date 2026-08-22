@@ -46,6 +46,7 @@ export async function GET(
         pendingCostEstimateCents: null,
         remainingAllowanceNote: null,
         steps: progress.steps.map((s) => ({ ...s, costCents: 0 })),
+        kernel: undefined,
       });
     }
 

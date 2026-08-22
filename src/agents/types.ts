@@ -8,6 +8,13 @@ export type AgentContext = {
   organisationId: string;
   agentRunId: string;
   agentStepId: string;
+  /**
+   * Optional org knowledge packet for grounding (Phase 2 Memory).
+   * Provenance titles are separate — never treat as verified external citations.
+   */
+  knowledgeContext?: string | null;
+  knowledgeDocumentTitles?: string[];
+  knowledgeRetrievalMode?: "hybrid" | "lexical" | "none";
 };
 
 export type AgentExecuteResult<TOut> = {

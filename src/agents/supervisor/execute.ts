@@ -5,6 +5,9 @@ import { planAgentRun } from "@/agents/supervisor/plan";
 import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
 import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 import { logger } from "@/lib/logger";
+import { retrieveRelevantKnowledge } from "@/services/knowledge";
+import { recordResearchToolCall } from "@/services/research-tool-calls";
+import { evaluateToolPolicy } from "@/kernel";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -183,6 +186,52 @@ export async function executeAgentRun(input: {
   let totalCostCents = run.totalCostCents || 0;
   let previousOutput: unknown = null;
 
+  // Phase 2: organisational knowledge as working memory for this mission (never invents facts).
+  let knowledgeContext: string | null = null;
+  let knowledgeDocumentTitles: string[] = [];
+  let knowledgeRetrievalMode: "hybrid" | "lexical" | "none" = "none";
+  let pendingKnowledgeTool: {
+    durationMs: number;
+    documentTitles: string[];
+    mode: string;
+    chunkCount: number;
+  } | null = null;
+  const knowledgePolicy = evaluateToolPolicy("knowledge.retrieve", {
+    organisationId: input.organisationId,
+  });
+  if (knowledgePolicy.effect !== "deny") {
+    try {
+      const startedKnowledge = Date.now();
+      const retrieved = await retrieveRelevantKnowledge({
+        organisationId: input.organisationId,
+        query: run.request,
+        limit: 6,
+      });
+      knowledgeDocumentTitles = retrieved.documentTitles;
+      knowledgeRetrievalMode = retrieved.mode;
+      if (retrieved.chunks.length > 0) {
+        knowledgeContext = [
+          "Organisation knowledge (approved internal docs — not external citations):",
+          ...retrieved.chunks.map((c) => c.slice(0, 2000)),
+        ]
+          .join("\n\n")
+          .slice(0, 12_000);
+      }
+      pendingKnowledgeTool = {
+        durationMs: Date.now() - startedKnowledge,
+        documentTitles: knowledgeDocumentTitles,
+        mode: knowledgeRetrievalMode,
+        chunkCount: retrieved.chunks.length,
+      };
+    } catch (error) {
+      logger.warn("Knowledge retrieval skipped for agent run", {
+        runId: run.id,
+        organisationId: input.organisationId,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+
   for (let i = 0; i < stepsToRun.length; i++) {
     const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
     if (elapsedSec > maxWallClockSeconds) {
@@ -345,10 +394,29 @@ export async function executeAgentRun(input: {
 
     const stepStarted = Date.now();
     try {
+      if (i === 0 && pendingKnowledgeTool) {
+        await recordResearchToolCall({
+          organisationId: input.organisationId,
+          agentStepId: stepRow.id,
+          toolName: "knowledge.retrieve",
+          args: { query: run.request.slice(0, 500), limit: 6 },
+          result: {
+            documentTitles: pendingKnowledgeTool.documentTitles,
+            mode: pendingKnowledgeTool.mode,
+            chunkCount: pendingKnowledgeTool.chunkCount,
+          },
+          durationMs: pendingKnowledgeTool.durationMs,
+        });
+        pendingKnowledgeTool = null;
+      }
+
       const result = await agent.execute(parsedInput.data as never, {
         organisationId: input.organisationId,
         agentRunId: run.id,
         agentStepId: stepRow.id,
+        knowledgeContext,
+        knowledgeDocumentTitles,
+        knowledgeRetrievalMode,
       });
 
       const durationMs = Date.now() - stepStarted;

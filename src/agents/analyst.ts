@@ -180,10 +180,11 @@ Hard rules:
 - Never invent statistics, quotes, or URLs.
 - Every claim.sourceUrl and viralExamples.sourceUrl MUST exactly match a provided URL.
 - Prefer the freshest / most engagement-looking items when ranking viralExamples.
-- If few video URLs exist, still fill viralExamples from the best available posts and say so in gaps.`,
+- If few video URLs exist, still fill viralExamples from the best available posts and say so in gaps.
+- If organisation knowledge is provided, use it only to tailor relevance to this business — never invent URLs or treat internal docs as public citations.`,
       prompt: `Topic: ${parsed.topic || job.topic}
 
-Prior findings:
+${ctx.knowledgeContext?.trim() ? `Organisation knowledge:\n${ctx.knowledgeContext.slice(0, 4000)}\n\n` : ""}Prior findings:
 ${priorFindings || "(none)"}
 
 Sources (use only these URLs):

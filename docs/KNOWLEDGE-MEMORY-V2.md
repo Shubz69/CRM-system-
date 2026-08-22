@@ -15,6 +15,8 @@
 
 ## Near-term work
 
-1. Inject knowledge retrieval into Ask supervisor context.  
-2. Add provenance (source id, retrievedAt, score) to context packets.  
-3. Never silent-promote research findings into KnowledgeDocument.
+1. [x] Inject knowledge retrieval into Ask supervisor context.
+2. [x] Add provenance (document titles, retrieval mode) via `knowledge.retrieve` ToolCall.
+3. [x] Never invent URLs from internal docs — analyst/research treat knowledge as focus only.
+4. [ ] Episodic / entity / performance / preference memory models.
+5. [ ] Never silent-promote research findings into KnowledgeDocument.

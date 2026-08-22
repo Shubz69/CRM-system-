@@ -88,12 +88,16 @@ async function expandResearchQueries(input: {
   topic: string;
   nicheHint?: string;
   model: string;
+  knowledgeContext?: string | null;
 }): Promise<string[]> {
   const system =
     'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
+  const knowledgeBlock = input.knowledgeContext?.trim()
+    ? `\nInternal company context (use only to focus queries — do not invent sources from it):\n${input.knowledgeContext.slice(0, 3000)}\n`
+    : "";
   const prompt = `Topic: ${input.topic}
 Niche hint (optional): ${input.nicheHint || "(none)"}
-Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
+${knowledgeBlock}Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
 Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`;
 
   try {
@@ -183,6 +187,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       topic: parsed.topic,
       nicheHint: parsed.nicheHint,
       model,
+      knowledgeContext: ctx.knowledgeContext,
     });
     costCents += 2;
 

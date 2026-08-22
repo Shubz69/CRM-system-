@@ -46,6 +46,11 @@ type Progress = {
     detailRetention?: string;
   }>;
   nextActions: string[];
+  kernel?: {
+    toolsInvoked: Array<{ toolName: string; durationMs: number | null; error: string | null }>;
+    registeredTools: Array<{ name: string; risk: string; description: string }>;
+    knowledgeUsed: { documentTitles: string[]; mode: string } | null;
+  };
 };
 
 function formatElapsed(ms: number): string {
@@ -954,6 +959,36 @@ export default function AskPage() {
               </li>
             ))}
           </ol>
+        </details>
+      )}
+
+      {progress?.kernel && (
+        <details className="rounded-xl border border-[var(--border)] px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium">Agent tools (admin)</summary>
+          <div className="mt-3 space-y-3 text-sm text-[var(--muted)]">
+            {progress.kernel.knowledgeUsed &&
+            progress.kernel.knowledgeUsed.documentTitles.length > 0 ? (
+              <p>
+                Knowledge used ({progress.kernel.knowledgeUsed.mode}):{" "}
+                {progress.kernel.knowledgeUsed.documentTitles.join(" · ")}
+              </p>
+            ) : (
+              <p>No organisation knowledge chunks matched this request.</p>
+            )}
+            {progress.kernel.toolsInvoked.length > 0 ? (
+              <ul className="list-disc space-y-1 pl-5">
+                {progress.kernel.toolsInvoked.map((t, i) => (
+                  <li key={`${t.toolName}-${i}`}>
+                    {t.toolName}
+                    {t.durationMs != null ? ` · ${t.durationMs}ms` : ""}
+                    {t.error ? ` · error: ${t.error}` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No tool calls recorded on this run yet.</p>
+            )}
+          </div>
         </details>
       )}
 

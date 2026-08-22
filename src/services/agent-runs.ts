@@ -12,6 +12,7 @@ import {
   getOrganisationAiBudget,
   getOrganisationPeriodSpendCents,
 } from "@/services/ai-spend-gate";
+import { ensureBuiltinToolsRegistered, listTools } from "@/kernel";
 
 export type AgentRunProgress = {
   runId: string;
@@ -59,6 +60,22 @@ export type AgentRunProgress = {
     detailRetention: AgentStep["detailRetention"];
   }>;
   nextActions: string[];
+  /**
+   * Agent Kernel observability — real tool invocations + registry summary.
+   * API strips this for non-admin callers.
+   */
+  kernel?: {
+    toolsInvoked: Array<{
+      toolName: string;
+      durationMs: number | null;
+      error: string | null;
+    }>;
+    registeredTools: Array<{ name: string; risk: string; description: string }>;
+    knowledgeUsed: {
+      documentTitles: string[];
+      mode: string;
+    } | null;
+  };
 };
 
 function parseOptions(value: unknown): string[] | null {
@@ -413,6 +430,13 @@ export async function getAgentRunProgress(input: {
       steps: {
         where: { organisationId: input.organisationId },
         orderBy: { position: "asc" },
+        include: {
+          toolCalls: {
+            where: { organisationId: input.organisationId },
+            orderBy: { createdAt: "asc" },
+            select: { toolName: true, durationMs: true, error: true, result: true },
+          },
+        },
       },
     },
   });
@@ -447,6 +471,30 @@ export async function getAgentRunProgress(input: {
   const budget = await getOrganisationAiBudget(input.organisationId);
   // Always load period spend so Ask can show usage even when no hard cap is set.
   const spentCents = await getOrganisationPeriodSpendCents(input.organisationId);
+
+  ensureBuiltinToolsRegistered();
+  const toolsInvoked = run.steps.flatMap((s) =>
+    s.toolCalls.map((t) => ({
+      toolName: t.toolName,
+      durationMs: t.durationMs,
+      error: t.error,
+    })),
+  );
+  const knowledgeTool = run.steps
+    .flatMap((s) => s.toolCalls)
+    .find((t) => t.toolName === "knowledge.retrieve" && t.result && typeof t.result === "object");
+  const knowledgeResult = knowledgeTool?.result as
+    | { documentTitles?: unknown; mode?: unknown }
+    | undefined;
+  const knowledgeUsed =
+    knowledgeResult && Array.isArray(knowledgeResult.documentTitles)
+      ? {
+          documentTitles: knowledgeResult.documentTitles.filter(
+            (t): t is string => typeof t === "string",
+          ),
+          mode: typeof knowledgeResult.mode === "string" ? knowledgeResult.mode : "unknown",
+        }
+      : null;
 
   return {
     runId: run.id,
@@ -491,5 +539,14 @@ export async function getAgentRunProgress(input: {
       detailRetention: s.detailRetention,
     })),
     nextActions: nextActionsFor(run.status, displayOutput),
+    kernel: {
+      toolsInvoked,
+      registeredTools: listTools().map((t) => ({
+        name: t.name,
+        risk: t.risk,
+        description: t.description,
+      })),
+      knowledgeUsed,
+    },
   };
 }

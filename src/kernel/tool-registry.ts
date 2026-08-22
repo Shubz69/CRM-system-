@@ -49,7 +49,7 @@ export function ensureBuiltinToolsRegistered(): void {
     description: "Retrieve organisation knowledge chunks for grounding (lexical + embeddings).",
     risk: "read",
     costClass: "cheap",
-    requiredPermission: "knowledge:manage",
+    requiredPermission: "ask:use",
     timeoutMs: 15_000,
   });
 

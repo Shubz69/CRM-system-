@@ -19,12 +19,12 @@ Incremental vertical slices. Keep `main` buildable. Prefer migrations over `db p
 
 Deliverables:
 
-- `src/kernel` types: Mission, Task, ToolDefinition, RiskLevel, PolicyDecision  
-- Tool registry wrapping existing adapters  
-- Policy checks aligned with Autopilot  
-- Mission/task persistence **or** thin wrapper over AgentRun (decide in implementation PR)  
-- Admin-visible run metadata (tools, cost) from real data only  
-- Unit tests for registry + policy  
+- [x] `src/kernel` types: Mission, Task, ToolDefinition, RiskLevel, PolicyDecision
+- [x] Tool registry wrapping existing adapters
+- [x] Policy checks aligned with Autopilot
+- [x] Unit tests for registry + policy
+- [x] Admin Ask progress includes real `kernel.toolsInvoked` + registry summary
+- [ ] Mission persistence table (only if AgentRun metadata proves insufficient)
 
 Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
@@ -32,10 +32,11 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 2 — Knowledge & Memory V2
 
-- Wire knowledge retrieval into supervisor context  
-- Memory kinds: knowledge, episodic, entity, working, performance, preference  
-- Provenance on retrieved chunks  
-- Agents must not promote uncertain findings to Knowledge without approval  
+- [x] Wire knowledge retrieval into supervisor context (working memory for runs)
+- [x] Provenance via `knowledge.retrieve` ToolCall (titles + mode)
+- [x] Research query expand + analyst prompts use knowledge without inventing citations
+- [ ] Episodic / entity / performance / preference memory models
+- [ ] Agents must not promote uncertain findings to Knowledge without approval (still manual Save)
 
 ---
 
