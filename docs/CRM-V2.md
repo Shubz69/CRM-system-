@@ -1,13 +1,28 @@
 # CRM V2
 
-**Status:** Spec (Phase 7). Foundation: Contact, Lead, Pipeline, Inbox.
+**Status:** Phase 7 — Company / Deal / Activity / Customer 360 / templates.
 
 ## Additions
 
-- Company/Account  
-- Opportunity/Deal (coexist with Lead during migration)  
-- Activity/Task/Meeting  
-- Custom fields / templates (Agency, B2B, Creator, …)  
-- Customer 360 (evidence-based; no sensitive inference)  
+- **Company** (Account) — contacts optional `companyId`
+- **Deal** — coexists with **Lead** via optional `leadId`
+- **CrmActivity** — task / meeting / call / email timeline
+- **Attribution** — `confidence`, `limitations`, `method` (honest defaults)
+- **Industry templates** — config on Organisation (`industryTemplateKey` + snapshot), not product forks
 
-Do not force every industry into Instagram-setter workflows.
+## APIs
+
+| Endpoint | Permission |
+|----------|------------|
+| `GET\|POST /api/companies` | leads:read / leads:write |
+| `GET\|POST\|PATCH /api/deals` | leads:read / leads:write |
+| `GET /api/contacts/[id]/360` | leads:read |
+| `GET\|POST /api/crm/templates` | leads:read / integrations:manage |
+
+## Customer 360
+
+Evidence from stored CRM rows only. Response includes explicit `limitations[]`. No sensitive inference.
+
+## Templates
+
+`generic` · `agency` · `b2b_saas` · `creator` · `coaching` — pipeline stage hints + qualification hints. Do not force Instagram-setter workflows.

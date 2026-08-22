@@ -81,10 +81,11 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 7 — Universal CRM + Revenue
 
-- Account/Company, Opportunity/Deal (coexist with Lead)  
-- Customer 360 view  
-- Attribution with explicit confidence/limitations  
-- Industry workspace templates (config, not forks)  
+- [x] Account/Company, Opportunity/Deal (coexist with Lead)
+- [x] Customer 360 view (`/api/contacts/[id]/360`)
+- [x] Attribution with explicit confidence/limitations
+- [x] Industry workspace templates (config, not forks)
+- [ ] Richer CRM UI surfaces for deals/companies/360 
 
 ---
 

@@ -149,6 +149,10 @@ model Organisation {
   autopilotMode  AutopilotMode @default(LIVE)
   /// Capability modes: automatic | approval_required | disabled
   autopilotConfig Json    @default("{}")
+  /// Industry workspace template key (agency | b2b_saas | creator | coaching | generic).
+  industryTemplateKey  String?
+  /// Applied template config snapshot — config, not a product fork.
+  industryTemplateConfig Json @default("{}")
   lastActivityAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -161,6 +165,9 @@ model Organisation {
   contacts             Contact[]
   conversations        Conversation[]
   leads                Lead[]
+  companies            Company[]
+  deals                Deal[]
+  crmActivities        CrmActivity[]
   pipelines            Pipeline[]
   tags                 Tag[]
   knowledgeDocuments   KnowledgeDocument[]
@@ -397,9 +404,109 @@ model SocialConnectionCredential {
   @@unique([socialConnectionId, keyName])
 }
 
+// ─── Phase 7 — Universal CRM + Revenue ──────────────────────────────────────
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+  ABANDONED
+}
+
+/// Account / company — coexists with Contact + Lead.
+model Company {
+  id             String    @id @default(cuid())
+  organisationId String
+  name           String
+  domain         String?
+  website        String?
+  industry       String?
+  sizeBand       String?
+  metadata       Json      @default("{}")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contacts     Contact[]
+  deals        Deal[]
+  activities   CrmActivity[]
+
+  @@unique([organisationId, name])
+  @@index([organisationId, domain])
+  @@index([organisationId, updatedAt])
+}
+
+/// Revenue opportunity / deal — coexists with Lead (optional leadId link).
+model Deal {
+  id             String     @id @default(cuid())
+  organisationId String
+  companyId      String?
+  contactId      String?
+  leadId         String?
+  name           String
+  amountCents    Int?
+  currency       String     @default("USD")
+  status         DealStatus @default(OPEN)
+  /// 0–1 win probability (explicit; null = unknown).
+  probability    Float?
+  stageLabel     String?
+  expectedCloseAt DateTime?
+  closedAt       DateTime?
+  summary        String?    @db.Text
+  metadata       Json       @default("{}")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deletedAt      DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  activities   CrmActivity[]
+  attributions Attribution[]
+
+  @@index([organisationId, status, updatedAt])
+  @@index([organisationId, companyId])
+  @@index([organisationId, contactId])
+  @@index([organisationId, leadId])
+}
+
+/// Task / meeting / call / email activity — evidence-based CRM timeline.
+model CrmActivity {
+  id              String    @id @default(cuid())
+  organisationId  String
+  contactId       String?
+  companyId       String?
+  dealId          String?
+  leadId          String?
+  /// note | task | meeting | call | email | other
+  kind            String
+  title           String
+  body            String?   @db.Text
+  dueAt           DateTime?
+  completedAt     DateTime?
+  createdByUserId String?
+  metadata        Json      @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, contactId, createdAt])
+  @@index([organisationId, dealId, createdAt])
+  @@index([organisationId, dueAt])
+}
+
 model Contact {
   id               String    @id @default(cuid())
   organisationId   String
+  companyId        String?
   messagingChannelId String?
   fullName         String?
   instagramUsername String?
@@ -420,10 +527,13 @@ model Contact {
   deletedAt        DateTime?
 
   organisation     Organisation       @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  company          Company?           @relation(fields: [companyId], references: [id], onDelete: SetNull)
   messagingChannel MessagingChannel?  @relation(fields: [messagingChannelId], references: [id])
   identifiers      ContactIdentifier[]
   conversations    Conversation[]
   leads            Lead[]
+  deals            Deal[]
+  crmActivities    CrmActivity[]
   tags             ContactTag[]
   notes            Note[]
   bookings         Booking[]
@@ -434,6 +544,7 @@ model Contact {
   @@index([organisationId, email])
   @@index([organisationId, phone])
   @@index([organisationId, instagramUsername])
+  @@index([organisationId, companyId])
 }
 
 model ContactIdentifier {
@@ -600,6 +711,8 @@ model Lead {
   bookings       Booking[]
   followUps      FollowUp[]
   attributions   Attribution[]
+  deals          Deal[]
+  crmActivities  CrmActivity[]
 
   @@index([organisationId, qualificationStatus])
   @@index([organisationId, score])
@@ -1003,21 +1116,30 @@ model Attribution {
   organisationId String
   contactId      String
   leadId         String?
+  dealId         String?
   campaignId     String?
   source         String?
   medium         String?
   content        String?
+  /// 0–1 confidence in this attribution link.
+  confidence     Float?
+  /// Explicit limitations (e.g. "last-touch only; no multi-touch graph").
+  limitations    String?  @db.Text
+  /// first_touch | last_touch | linear | manual | unknown
+  method         String?
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
   lead         Lead?        @relation(fields: [leadId], references: [id])
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
   campaign     Campaign?    @relation(fields: [campaignId], references: [id])
 
   @@index([organisationId, createdAt])
   @@index([contactId])
   @@index([campaignId])
+  @@index([organisationId, dealId])
 }
 
 model Report {

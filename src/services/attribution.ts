@@ -47,9 +47,13 @@ export async function upsertCampaignAttribution(input: {
       contactId: input.contactId,
       leadId: input.leadId,
       campaignId: campaignId ?? undefined,
-      source: input.leadSource ?? "instagram",
-      medium: input.medium ?? "social",
+      source: input.leadSource ?? input.campaignSource ?? "unknown",
+      medium: input.medium ?? "unknown",
       content: input.content ?? input.campaignSource ?? undefined,
+      method: "first_touch",
+      confidence: 0.4,
+      limitations:
+        "First-touch campaign/source mapping only; multi-touch journeys are not modelled. Confidence is directional.",
       metadata: {
         firstTouch: true,
         lastTouch: true,

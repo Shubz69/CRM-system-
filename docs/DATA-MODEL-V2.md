@@ -53,10 +53,11 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 7
 
-- `Company` / Account  
-- `Opportunity` (Deal)  
-- `Activity` / `Task`  
-- CustomField definitions  
+- `Company` / Account ✅  
+- `Deal` (Opportunity) ✅ — coexists with `Lead`  
+- `CrmActivity` ✅  
+- Attribution `confidence` / `limitations` / `method` ✅  
+- Organisation industry template fields ✅ 
 
 ### Phase 8–9
 
