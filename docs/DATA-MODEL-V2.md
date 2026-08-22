@@ -49,7 +49,7 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 6
 
-- `ContentOpportunity`, `ContentIdea`, `CreativeBrief`, `ContentPiece`, `ContentVersion`, `ContentVariant`, `PublishingJob`, `PostPerformance`  
+- `ContentOpportunity`, `ContentIdea`, `CreativeBrief`, `ContentPiece`, `ContentVersion`, `ContentVariant`, `ContentApproval`, `PublishingJob`, `PostPerformance` ✅  
 
 ### Phase 7
 

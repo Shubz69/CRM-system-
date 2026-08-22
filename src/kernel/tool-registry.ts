@@ -75,6 +75,17 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "content.propose",
+    version: "1.0.0",
+    description:
+      "Create a content opportunity from research evidence (whyEvidence required). Does not publish.",
+    risk: "write_internal",
+    costClass: "cheap",
+    requiredPermission: "ask:use",
+    timeoutMs: 15_000,
+  });
+
+  registerTool({
     name: "crm.read_conversation",
     version: "1.0.0",
     description: "Read conversation and messages within the active organisation.",

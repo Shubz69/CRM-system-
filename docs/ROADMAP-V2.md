@@ -72,9 +72,10 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 6 — Content Operating System
 
-- ContentOpportunity → Idea → Brief → Piece → Variant → Approval → Publish → Measure  
-- Connect to research evidence (“Why recommend this?”)  
-- Publishing only via approved APIs  
+- [x] ContentOpportunity → Idea → Brief → Piece → Variant → Approval → Publish → Measure
+- [x] Connect to research evidence (“Why recommend this?” via `whyEvidence`)
+- [x] Publishing only via approved APIs (Kernel policy; no fake publish success)
+- [ ] Content workspace UI + live OAuth publish adapters end-to-end 
 
 ---
 

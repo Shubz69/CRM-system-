@@ -523,7 +523,32 @@ export default function AskPage() {
       return;
     }
     if (action === "Turn this into content") {
-      const summary = renderAnswerBody(progress?.finalOutput ?? progress?.outputSoFar);
+      const source = progress?.finalOutput ?? progress?.outputSoFar;
+      const researchJobId =
+        source &&
+        typeof source === "object" &&
+        typeof (source as { researchJobId?: unknown }).researchJobId === "string"
+          ? (source as { researchJobId: string }).researchJobId
+          : null;
+      if (researchJobId) {
+        try {
+          const res = await fetch("/api/content", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_opportunity_from_research",
+              researchJobId,
+              agentRunId: progress?.runId,
+            }),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || "Could not create content opportunity");
+          toast.success("Content opportunity created from this research.");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not create opportunity");
+        }
+      }
+      const summary = renderAnswerBody(source);
       const seeded = `Write content based on this brief:\n\n${summary.slice(0, 3500)}`;
       setRequest(seeded);
       setProgress(null);

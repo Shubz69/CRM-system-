@@ -206,6 +206,15 @@ model Organisation {
   algorithmChanges     AlgorithmChange[]
   trendForecasts       TrendForecast[]
   trendForecastOutcomes TrendForecastOutcome[]
+  contentOpportunities ContentOpportunity[]
+  contentIdeas         ContentIdea[]
+  creativeBriefs       CreativeBrief[]
+  contentPieces        ContentPiece[]
+  contentVersions      ContentVersion[]
+  contentVariants      ContentVariant[]
+  contentApprovals     ContentApproval[]
+  publishingJobs       PublishingJob[]
+  postPerformances     PostPerformance[]
   assets               Asset[]
   memoryEpisodes       MemoryEpisode[]
   memoryEntityFacts    MemoryEntityFact[]
@@ -1779,6 +1788,233 @@ model TrendForecastOutcome {
   trendForecast TrendForecast @relation(fields: [trendForecastId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, evaluatedAt])
+}
+
+// ─── Phase 6 — Content Operating System ─────────────────────────────────────
+
+enum ContentOpportunityStatus {
+  OPEN
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+enum ContentPieceStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  ARCHIVED
+}
+
+enum PublishingJobStatus {
+  PENDING_APPROVAL
+  APPROVED
+  QUEUED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+/// Research/trend-backed opportunity — must carry “why” evidence.
+model ContentOpportunity {
+  id               String                   @id @default(cuid())
+  organisationId   String
+  title            String
+  summary          String?                  @db.Text
+  status           ContentOpportunityStatus @default(OPEN)
+  /// Platforms this opportunity targets.
+  platforms        String[]                 @default([])
+  /// Structured why: { researchJobId?, trendClusterId?, sourceUrls[], claimIds[], rationale }
+  whyEvidence      Json                     @default("{}")
+  researchJobId    String?
+  trendClusterId   String?
+  agentRunId       String?
+  score            Float?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  expiresAt        DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  ideas        ContentIdea[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, trendClusterId])
+}
+
+model ContentIdea {
+  id             String   @id @default(cuid())
+  organisationId String
+  opportunityId  String?
+  title          String
+  angle          String?  @db.Text
+  hook           String?  @db.Text
+  formatHint     String?
+  /// Copy of opportunity whyEvidence + extra links
+  whyEvidence    Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  opportunity  ContentOpportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  briefs       CreativeBrief[]
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, opportunityId])
+}
+
+model CreativeBrief {
+  id             String   @id @default(cuid())
+  organisationId String
+  ideaId         String
+  objective      String?  @db.Text
+  audience       String?  @db.Text
+  keyMessage     String?  @db.Text
+  cta            String?
+  constraints    String?  @db.Text
+  whyEvidence    Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  idea         ContentIdea   @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  pieces       ContentPiece[]
+
+  @@index([organisationId, ideaId])
+}
+
+model ContentPiece {
+  id             String            @id @default(cuid())
+  organisationId String
+  briefId        String?
+  title          String
+  body           String            @db.Text
+  status         ContentPieceStatus @default(DRAFT)
+  platform       String?
+  whyEvidence    Json              @default("{}")
+  assetId        String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organisation Organisation     @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  brief        CreativeBrief?   @relation(fields: [briefId], references: [id], onDelete: SetNull)
+  versions     ContentVersion[]
+  variants     ContentVariant[]
+  approvals    ContentApproval[]
+  publishingJobs PublishingJob[]
+  performances PostPerformance[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, briefId])
+}
+
+model ContentVersion {
+  id             String   @id @default(cuid())
+  organisationId String
+  pieceId        String
+  version        Int
+  title          String?
+  body           String   @db.Text
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  piece        ContentPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@unique([pieceId, version])
+  @@index([organisationId, pieceId])
+}
+
+model ContentVariant {
+  id             String   @id @default(cuid())
+  organisationId String
+  pieceId        String
+  platform       String
+  label          String?
+  body           String   @db.Text
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  piece        ContentPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, pieceId, platform])
+}
+
+model ContentApproval {
+  id             String   @id @default(cuid())
+  organisationId String
+  pieceId        String
+  /// PENDING | APPROVED | REJECTED
+  decision       String   @default("PENDING")
+  decidedByUserId String?
+  note           String?  @db.Text
+  createdAt      DateTime @default(now())
+  decidedAt      DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  piece        ContentPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, pieceId, createdAt])
+  @@index([organisationId, decision])
+}
+
+/// Publish only via approved connected APIs — never invent a successful publish.
+model PublishingJob {
+  id                 String              @id @default(cuid())
+  organisationId     String
+  pieceId            String
+  variantId          String?
+  platform           String
+  status             PublishingJobStatus @default(PENDING_APPROVAL)
+  /// SocialConnection id when publishing via OAuth.
+  socialConnectionId String?
+  scheduledAt        DateTime?
+  publishedAt        DateTime?
+  externalPostId     String?
+  externalUrl        String?
+  error              String?             @db.Text
+  /// Policy decision snapshot { effect, reason, toolName }
+  policySnapshot     Json                @default("{}")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  piece        ContentPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+  performances PostPerformance[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, pieceId])
+  @@index([organisationId, platform, status])
+}
+
+model PostPerformance {
+  id               String   @id @default(cuid())
+  organisationId   String
+  pieceId          String?
+  publishingJobId  String?
+  socialContentId  String?
+  capturedAt       DateTime @default(now())
+  views            Int?
+  likes            Int?
+  comments         Int?
+  shares           Int?
+  clicks           Int?
+  leadsAttributed  Int?
+  raw              Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  piece         ContentPiece? @relation(fields: [pieceId], references: [id], onDelete: SetNull)
+  publishingJob PublishingJob? @relation(fields: [publishingJobId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, pieceId, capturedAt])
+  @@index([organisationId, publishingJobId])
+  @@index([organisationId, capturedAt])
 }
 
 
