@@ -6,6 +6,11 @@ import { getBookingProvider } from "@/adapters/booking";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { MessageDirection, MessageSenderType, NotificationType } from "@prisma/client";
 import { writeAuditLog } from "@/services/audit";
+import {
+  buildWorkflowSteps,
+  createApprovalRequest,
+  isOutboundAction,
+} from "@/services/automation-os";
 
 export type AutomationContext = {
   organisationId: string;
@@ -29,6 +34,7 @@ type AutomationAction = {
 /**
  * Evaluates active automation rules for a trigger and executes actions in order.
  * Prevents recursive loops by refusing to re-enter the same rule execution stack.
+ * Outbound actions respect requiresApproval → ApprovalRequest.
  */
 const executing = new Set<string>();
 
@@ -58,16 +64,52 @@ export async function runAutomations(context: AutomationContext): Promise<number
       }
 
       const actions = Array.isArray(rule.actions) ? (rule.actions as AutomationAction[]) : [];
+      const immediate = actions.filter((a) => !isOutboundAction(a.type));
+      const gated = actions.filter((a) => isOutboundAction(a.type));
+      const workflowSteps = buildWorkflowSteps({
+        triggerType: rule.triggerType,
+        conditions,
+        actions: actions as Array<Record<string, unknown>>,
+        requiresApproval: Boolean(rule.requiresApproval) && gated.length > 0,
+      });
+
       try {
-        for (const action of actions) {
+        for (const action of immediate) {
           await executeAction(action, context);
         }
+
+        let approvalRequestId: string | null = null;
+        if (gated.length && rule.requiresApproval !== false) {
+          approvalRequestId = await createApprovalRequest({
+            organisationId: context.organisationId,
+            kind: "outbound_message",
+            title: `Approve automation: ${rule.name}`,
+            summary: `Rule wants to run: ${gated.map((g) => g.type).join(", ")}`,
+            automationRuleId: rule.id,
+            payload: {
+              context,
+              actions: gated,
+            },
+          });
+        } else if (gated.length) {
+          for (const action of gated) {
+            await executeAction(action, context);
+          }
+        }
+
         await prisma.automationExecution.create({
           data: {
+            organisationId: context.organisationId,
             ruleId: rule.id,
-            status: "success",
+            status: approvalRequestId ? "awaiting_approval" : "success",
             context: JSON.parse(JSON.stringify(context)),
-            result: { actions: actions.length },
+            result: {
+              immediateActions: immediate.length,
+              gatedActions: gated.length,
+              approvalRequestId,
+            },
+            workflowSnapshot: { steps: workflowSteps } as object,
+            approvalRequestId,
           },
         });
         executed += 1;
@@ -75,10 +117,12 @@ export async function runAutomations(context: AutomationContext): Promise<number
         const message = error instanceof Error ? error.message : "Automation failed";
         await prisma.automationExecution.create({
           data: {
+            organisationId: context.organisationId,
             ruleId: rule.id,
             status: "failed",
             context: JSON.parse(JSON.stringify(context)),
             error: message,
+            workflowSnapshot: { steps: workflowSteps } as object,
           },
         });
         await notifyOrganisationOwners({
@@ -113,7 +157,10 @@ export function matchesConditions(
   return true;
 }
 
-async function executeAction(action: AutomationAction, context: AutomationContext): Promise<void> {
+export async function executeAction(
+  action: AutomationAction,
+  context: AutomationContext,
+): Promise<void> {
   switch (action.type) {
     case "notify":
     case "notify_team":

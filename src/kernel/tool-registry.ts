@@ -86,6 +86,16 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "automation.compile",
+    version: "1.0.0",
+    description: "Compile natural language into a visible automation workflow (does not enable).",
+    risk: "write_internal",
+    costClass: "cheap",
+    requiredPermission: "automations:manage",
+    timeoutMs: 10_000,
+  });
+
+  registerTool({
     name: "crm.read_conversation",
     version: "1.0.0",
     description: "Read conversation and messages within the active organisation.",

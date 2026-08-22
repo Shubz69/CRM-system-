@@ -21,6 +21,7 @@ No production database existed, so migration history was deleted and rebuilt:
 | `20260822170000_trend_algorithm_intelligence` | TrendCluster / features / forecasts / AlgorithmChange |
 | `20260822180000_content_operating_system` | Content pipeline Opportunity → Publish → Measure |
 | `20260822190000_crm_v2_revenue` | Company / Deal / CrmActivity / attribution confidence / templates |
+| `20260822200000_automation_os` | ApprovalRequest + AutomationRule workflow / NL fields |
 | `20260813200000_imaging_assets` | Asset model + AgentRun prompt-confirm fields (`AWAITING_PROMPT_CONFIRM`) |
 
 Intent preserved from prior branches: AuditLog `ORG`/`PLATFORM` scope, ledger `organisationId` NOT NULL (except AuditLog), `ON DELETE RESTRICT` on AuditLog / UsageRecord / AiExecution / WebhookEvent / FailedJob, `Organisation.isPlatform`, OrganisationAiBudget, AgentRun / AgentStep / ToolCall, Lead `(organisationId, stageId, updatedAt)` and AgentStep `(organisationId, createdAt)` indexes. Redundant `ContactIdentifier(organisationId)` and `OrganisationAiBudget(organisationId)` indexes dropped (covered by unique constraints).

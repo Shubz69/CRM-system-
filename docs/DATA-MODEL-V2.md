@@ -61,7 +61,8 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 8–9
 
-- `ApprovalRequest`  
+- `ApprovalRequest` ✅  
+- AutomationRule `workflow` / `naturalLanguageSource` / `requiresApproval` ✅  
 - `Experiment`  
 - `Goal`, `Kpi`, `Initiative`  
 - `RecommendationFeedback`  

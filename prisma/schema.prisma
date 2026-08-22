@@ -173,6 +173,7 @@ model Organisation {
   knowledgeDocuments   KnowledgeDocument[]
   agentConfigurations  AgentConfiguration[]
   automationRules      AutomationRule[]
+  approvalRequests     ApprovalRequest[]
   bookings             Booking[]
   followUps            FollowUp[]
   campaigns            Campaign[]
@@ -840,28 +841,75 @@ model AutomationRule {
   triggerType    String
   conditions     Json     @default("{}")
   actions        Json     @default("[]")
+  /// Visible compiled workflow (trigger → conditions → steps → actions → approval).
+  workflow       Json     @default("{}")
+  /// Original NL used to compile the visible workflow (if any).
+  naturalLanguageSource String? @db.Text
+  /// When true, outbound/publish actions create ApprovalRequest instead of running immediately.
+  requiresApproval Boolean @default(true)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organisation Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   executions   AutomationExecution[]
+  approvals    ApprovalRequest[]
 
   @@index([organisationId, isActive])
 }
 
 model AutomationExecution {
-  id        String   @id @default(cuid())
-  ruleId    String
-  status    String
-  context   Json     @default("{}")
-  result    Json?
-  error     String?
-  createdAt DateTime @default(now())
+  id               String   @id @default(cuid())
+  organisationId   String?
+  ruleId           String
+  status           String
+  context          Json     @default("{}")
+  result           Json?
+  error            String?
+  /// Snapshot of visible workflow at run time.
+  workflowSnapshot Json?
+  approvalRequestId String?
+  createdAt        DateTime @default(now())
 
   rule AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
   @@index([ruleId, createdAt])
+  @@index([organisationId, createdAt])
+}
+
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+/// Human gate for automation / publish / outbound actions.
+model ApprovalRequest {
+  id             String                @id @default(cuid())
+  organisationId String
+  /// automation | publish | outbound_message | other
+  kind           String
+  title          String
+  summary        String?               @db.Text
+  status         ApprovalRequestStatus @default(PENDING)
+  automationRuleId String?
+  /// Payload needed to resume the action after approval.
+  payload        Json                  @default("{}")
+  decidedByUserId String?
+  decidedAt      DateTime?
+  decisionNote   String?               @db.Text
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  expiresAt      DateTime?
+
+  organisation   Organisation    @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  automationRule AutomationRule? @relation(fields: [automationRuleId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, kind, status])
+  @@index([automationRuleId])
 }
 
 model Tag {

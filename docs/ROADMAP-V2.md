@@ -91,9 +91,9 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 8 — Automation OS
 
-- Trigger → conditions → agent/logic → actions → approval → outcome  
-- NL → visible workflow  
-- Visual builder (after NL path is solid)  
+- [x] Trigger → conditions → agent/logic → actions → approval → outcome
+- [x] NL → visible workflow (compile before enable)
+- [ ] Visual builder (after NL path is solid) 
 
 ---
 
