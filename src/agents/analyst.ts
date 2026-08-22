@@ -14,6 +14,11 @@ export const analystInputSchema = z.object({
 const claimSchema = z.object({
   claim: z.string().min(1),
   sourceUrl: z.string().url(),
+  evidenceExcerpt: z.string().max(800).optional(),
+  claimKind: z
+    .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
+    .optional(),
+  confidence: z.number().min(0).max(1).optional(),
 });
 
 const viralExampleSchema = z.object({
@@ -169,7 +174,7 @@ Required output:
 1) shortAnswer — 4–8 punchy bullet lines (use "- " prefixes) with the most recent themes, complaints, and opportunities.
 2) summary — 1 short paragraph executive take.
 3) brief — a longer structured write-up (themes, what people are saying, what’s working on-feed, what to post next). Aim for substance (multiple short sections).
-4) claims — factual claims, each with a sourceUrl that EXACTLY matches a provided URL.
+4) claims — factual claims, each with a sourceUrl that EXACTLY matches a provided URL, plus evidenceExcerpt copied from that source when possible, optional claimKind (OFFICIAL|OBSERVATION|INFERENCE|SECONDARY).
 5) viralExamples — the most recent / high-signal posts or videos from the sources (prefer YouTube/TikTok/Instagram/Reel/Shorts URLs). Each needs title, whyItWorked, platform, sourceUrl from the list, optional formatHint.
 6) nextBigThings — 2–5 predictions of what the algorithm is likely to reward next in this niche. Label confidence. Base reasoning on patterns in the sources; do NOT invent URLs.
 7) contentHooks — 5–10 ready-to-post hook lines.

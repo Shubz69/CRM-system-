@@ -1,9 +1,25 @@
 # Integration Capability Matrix
 
-**Status:** Spec (Phase 3+). See also `docs/INTEGRATIONS.md`, `docs/SOCIAL_CONNECTIONS.md`.
+**Status:** Phase 3 — live API.
 
-For each platform × capability show: Connected | Available | Requires credentials | Restricted | Unsupported | Degraded.
+## Endpoint
 
-Capabilities examples: read profile, read owned content, read public content, comments, analytics, search, publish, schedule, reply, DM, webhooks, ads.
+```http
+GET /api/integrations/capability-matrix
+Permission: integrations:manage
+```
 
-Never assume one token grants every capability. Research official docs before claiming support; record source URL + retrieval date in implementation PRs.
+Returns platform × capability status from **real** env/adapter configuration:
+
+| Status | Meaning |
+|--------|---------|
+| `configured` | Credentials present / adapter usable |
+| `requires_credentials` | Supported but not configured |
+| `unsupported` | Not implemented for this platform |
+| `degraded` | Reserved for partial outages |
+
+Capabilities: `search_public`, `read_owned_content`, `publish`, `schedule`, `analytics`, `webhooks`.
+
+Social OAuth publish rows are connection-specific (see Settings → Social); the matrix marks them as requiring a per-org connection rather than inventing “connected”.
+
+See also `docs/INTEGRATIONS.md`, `docs/SOCIAL_CONNECTIONS.md`, `docs/RESEARCH-INTELLIGENCE.md`.

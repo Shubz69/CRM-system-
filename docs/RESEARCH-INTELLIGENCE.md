@@ -1,19 +1,27 @@
 # Research Intelligence Fabric
 
-**Status:** Spec (Phase 3). Foundation: `src/adapters/sources/**`, ResearchJob/Source/Finding.
+**Status:** Phase 3 in progress. Foundation: `src/adapters/sources/**`, ResearchJob/Source/Finding/Snapshot.
 
 ## Source Registry
 
-Per provider: capabilities, auth, rate limits, availability, freshness, cost, compliance notes, last success/error.
+Runtime matrix: `GET /api/integrations/capability-matrix` (`buildIntegrationCapabilityMatrix`).
 
-Distinguish: **no data** vs **no permission**.
+Per provider: capabilities, auth hints, configured vs requires credentials vs unsupported. Distinguishes **no data** vs **no permission/credentials**.
 
-## Evidence
+## Evidence path
 
-Query → Source → Snapshot → Finding/Claim → Citation → Confidence → Freshness → Contradiction.
+Query → Source (+ `retrievedAt`, `contentHash`, `freshnessScore`) → **SourceSnapshot** → Finding/Claim (`claimKind`, `confidence`, `freshnessScore`) → Critic (URL + **excerpt grounding**) → Report.
 
-Critic today: URL membership. Next: excerpt grounding + claim kinds.
+## Critic
+
+1. Citation URL must appear in collected sources for the job.  
+2. Evidence excerpt (preferred) or claim tokens must be grounded in stored source content.  
+3. Sets `flaggedUnsupported` / `flaggedUngrounded` on `ResearchFinding`.
+
+## Parallel search
+
+`searchConfiguredSources` already fans out adapters via `mapPool` (Kernel tool `sources.search`).
 
 ## Honesty
 
-Never invent citations. Prefer primary over secondary. Dedupe syndicated copies.
+Never invent citations. Prefer primary (`OFFICIAL`) over secondary. Dedupe via content hash where useful.

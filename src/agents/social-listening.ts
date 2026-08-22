@@ -6,6 +6,7 @@ import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
+import { persistResearchSourceWithSnapshot } from "@/services/research-evidence";
 import {
   dedupeSourceResults,
   formatUnavailableSourceNotes,
@@ -165,27 +166,25 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
       });
       costCents += 1;
 
-      const source = await prisma.researchSource.create({
-        data: {
-          organisationId: ctx.organisationId,
-          researchJobId: job.id,
-          url: post.url,
-          title: post.title,
-          platform: post.platform,
-          author: post.author,
-          publishedAt: post.publishedAt,
-          content: post.content.slice(0, 20_000),
-          engagement: (post.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-          rawMetadata: post.rawMetadata as Prisma.InputJsonValue,
-          queryUsed: parsed.topic,
-        },
+      const persisted = await persistResearchSourceWithSnapshot({
+        organisationId: ctx.organisationId,
+        researchJobId: job.id,
+        url: post.url,
+        title: post.title,
+        platform: post.platform,
+        author: post.author,
+        publishedAt: post.publishedAt,
+        content: post.content,
+        engagement: (post.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        rawMetadata: post.rawMetadata as Prisma.InputJsonValue,
+        queryUsed: parsed.topic,
       });
 
       await prisma.socialPost.create({
         data: {
           organisationId: ctx.organisationId,
           researchJobId: job.id,
-          researchSourceId: source.id,
+          researchSourceId: persisted.sourceId,
           platform: post.platform,
           url: post.url,
           title: post.title,

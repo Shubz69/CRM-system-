@@ -7,6 +7,10 @@ import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
+  parseClaimKind,
+  persistResearchSourceWithSnapshot,
+} from "@/services/research-evidence";
+import {
   dedupeSourceResults,
   formatUnavailableSourceNotes,
   listConfiguredSourcePlatforms,
@@ -32,6 +36,10 @@ const findingSchema = z.object({
   claim: z.string().min(1),
   sourceUrl: z.string().url(),
   evidenceExcerpt: z.string().optional(),
+  claimKind: z
+    .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
+    .optional(),
+  confidence: z.number().min(0).max(1).optional(),
 });
 
 export const researchOutputSchema = z.object({
@@ -146,6 +154,10 @@ const findingsExtractSchema = z.object({
         claim: z.string().min(1).max(500),
         sourceUrl: z.string().url(),
         evidenceExcerpt: z.string().max(800).optional(),
+        claimKind: z
+          .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
+          .optional(),
+        confidence: z.number().min(0).max(1).optional(),
       }),
     )
     .max(40),
@@ -260,27 +272,30 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const ranked = rankSourceResults(dedupeSourceResults(collected)).slice(0, maxSources);
 
-    const sourceRows = [];
+    const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
     for (const r of ranked) {
-      const row = await prisma.researchSource.create({
-        data: {
-          organisationId: ctx.organisationId,
-          researchJobId: job.id,
-          url: r.url,
-          title: r.title,
-          platform: r.platform,
-          author: r.author,
-          publishedAt: r.publishedAt,
-          content: r.content.slice(0, 20_000),
-          engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-          rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
-          queryUsed: parsed.topic,
-        },
+      const persisted = await persistResearchSourceWithSnapshot({
+        organisationId: ctx.organisationId,
+        researchJobId: job.id,
+        url: r.url,
+        title: r.title,
+        platform: r.platform,
+        author: r.author,
+        publishedAt: r.publishedAt,
+        content: r.content,
+        engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
+        queryUsed: parsed.topic,
       });
-      sourceRows.push(row);
+      sourceRows.push({
+        id: persisted.sourceId,
+        url: r.url,
+        freshnessScore: persisted.freshnessScore,
+      });
     }
 
     const urlToId = new Map(sourceRows.map((s) => [s.url, s.id]));
+    const urlToFreshness = new Map(sourceRows.map((s) => [s.url, s.freshnessScore]));
     const catalog = ranked
       .map(
         (r) =>
@@ -295,7 +310,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           tier: "cheap",
           model,
           system:
-            "Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Never invent statistics or URLs. If unsure, omit.",
+            'Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION (what happened), INFERENCE (your reasoned take), or SECONDARY (repost/summary). Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit.',
           prompt: `Topic: ${parsed.topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
           temperature: 0.1,
         })
@@ -315,6 +330,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           researchSourceId: sourceId,
           claim: f.claim,
           evidenceExcerpt: f.evidenceExcerpt,
+          claimKind: parseClaimKind(f.claimKind),
+          confidence: f.confidence ?? null,
+          freshnessScore: urlToFreshness.get(f.sourceUrl) ?? null,
         },
       });
     }

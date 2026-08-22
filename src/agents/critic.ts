@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
+import { isExcerptGrounded } from "@/services/research-evidence";
 
 export const criticInputSchema = z.object({
   researchJobId: z.string().min(1),
@@ -12,6 +13,7 @@ export const criticInputSchema = z.object({
       z.object({
         claim: z.string(),
         sourceUrl: z.string().url(),
+        evidenceExcerpt: z.string().optional(),
       }),
     )
     .optional(),
@@ -35,6 +37,7 @@ export const criticOutputSchema = z.object({
       claim: z.string(),
       sourceUrl: z.string(),
       ok: z.boolean(),
+      grounded: z.boolean().optional(),
       reason: z.string().optional(),
     }),
   ),
@@ -45,20 +48,28 @@ export const criticOutputSchema = z.object({
       reason: z.string(),
     }),
   ),
+  ungroundedClaims: z.array(
+    z.object({
+      claim: z.string(),
+      sourceUrl: z.string(),
+      reason: z.string(),
+    }),
+  ),
   allCitationsValid: z.boolean(),
+  allClaimsGrounded: z.boolean(),
 });
 
 export type CriticInput = z.infer<typeof criticInputSchema>;
 export type CriticOutput = z.infer<typeof criticOutputSchema>;
 
 /**
- * Critic — verifies every citation URL appears in collected sources.
- * Flags unsupported claims. Guard against invented statistics. Not optional.
+ * Critic — verifies citation URLs exist in collected sources AND that
+ * evidence excerpts / claim tokens are grounded in source content.
  */
 export const criticAgent: Agent<CriticInput, CriticOutput> = {
   name: "critic",
   description:
-    "Checks that every claim in a research brief cites a URL that was actually collected. Flags unsupported claims.",
+    "Checks that every claim cites a collected URL and that evidence is grounded in source content. Flags unsupported or ungrounded claims.",
   inputSchema: criticInputSchema,
   outputSchema: criticOutputSchema,
   tier: "cheap",
@@ -73,11 +84,11 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
       include: {
         sources: {
           where: { organisationId: ctx.organisationId },
-          select: { id: true, url: true },
+          select: { id: true, url: true, content: true },
         },
         findings: {
           where: { organisationId: ctx.organisationId },
-          include: { source: { select: { url: true } } },
+          include: { source: { select: { url: true, content: true } } },
         },
       },
     });
@@ -86,8 +97,9 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
     }
 
     const collectedUrls = new Set(job.sources.map((s) => s.url));
+    const contentByUrl = new Map(job.sources.map((s) => [s.url, s.content]));
 
-    type Claim = { claim: string; sourceUrl: string };
+    type Claim = { claim: string; sourceUrl: string; evidenceExcerpt?: string };
     let claims: Claim[] = parsed.claims ?? [];
 
     if (!claims.length && job.brief && typeof job.brief === "object") {
@@ -103,11 +115,13 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
       claims = job.findings.map((f) => ({
         claim: f.claim,
         sourceUrl: f.source.url,
+        evidenceExcerpt: f.evidenceExcerpt ?? undefined,
       }));
     }
 
     const verifiedClaims: CriticOutput["verifiedClaims"] = [];
     const unsupportedClaims: CriticOutput["unsupportedClaims"] = [];
+    const ungroundedClaims: CriticOutput["ungroundedClaims"] = [];
 
     for (const claim of claims) {
       if (!claim.sourceUrl || !collectedUrls.has(claim.sourceUrl)) {
@@ -122,21 +136,51 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
           claim: claim.claim,
           sourceUrl: claim.sourceUrl || "",
           ok: false,
+          grounded: false,
           reason: "missing or unknown source URL",
         });
         continue;
       }
+
+      const grounding = isExcerptGrounded({
+        claim: claim.claim,
+        evidenceExcerpt: claim.evidenceExcerpt,
+        sourceContent: contentByUrl.get(claim.sourceUrl) ?? null,
+      });
+
+      if (!grounding.grounded) {
+        ungroundedClaims.push({
+          claim: claim.claim,
+          sourceUrl: claim.sourceUrl,
+          reason: grounding.reason,
+        });
+        verifiedClaims.push({
+          claim: claim.claim,
+          sourceUrl: claim.sourceUrl,
+          ok: true,
+          grounded: false,
+          reason: grounding.reason,
+        });
+        continue;
+      }
+
       verifiedClaims.push({
         claim: claim.claim,
         sourceUrl: claim.sourceUrl,
         ok: true,
+        grounded: true,
+        reason: grounding.reason,
       });
     }
 
-    // Mark DB findings
     for (const finding of job.findings) {
       const url = finding.source.url;
-      const ok = collectedUrls.has(url);
+      const urlOk = collectedUrls.has(url);
+      const grounding = isExcerptGrounded({
+        claim: finding.claim,
+        evidenceExcerpt: finding.evidenceExcerpt,
+        sourceContent: finding.source.content,
+      });
       await prisma.researchFinding.updateMany({
         where: {
           id: finding.id,
@@ -144,32 +188,48 @@ export const criticAgent: Agent<CriticInput, CriticOutput> = {
           researchJobId: job.id,
         },
         data: {
-          verifiedByCritic: ok,
-          flaggedUnsupported: !ok,
+          verifiedByCritic: urlOk && grounding.grounded,
+          flaggedUnsupported: !urlOk,
+          flaggedUngrounded: urlOk && !grounding.grounded,
         },
       });
+    }
+
+    const issues: string[] = [];
+    if (unsupportedClaims.length) {
+      issues.push(
+        `${unsupportedClaims.length} claim${unsupportedClaims.length === 1 ? "" : "s"} lacked a collected source URL`,
+      );
+    }
+    if (ungroundedClaims.length) {
+      issues.push(
+        `${ungroundedClaims.length} claim${ungroundedClaims.length === 1 ? "" : "s"} were not grounded in source content`,
+      );
     }
 
     const output: CriticOutput = {
       researchJobId: job.id,
       summary:
-        unsupportedClaims.length === 0
+        issues.length === 0
           ? claims.length
-            ? `All ${claims.length} claims cite sources we actually collected.`
+            ? `All ${claims.length} claims cite collected sources and are grounded in source content.`
             : parsed.summary?.trim()
               ? `${parsed.summary.trim()}\n\n(No citeable claims were available to verify against collected URLs.)`
               : "Research finished, but no citeable claims were produced from the sources."
-          : `${unsupportedClaims.length} claim${unsupportedClaims.length === 1 ? "" : "s"} lacked a collected source URL.`,
+          : `${issues.join("; ")}.`,
       verifiedClaims,
       unsupportedClaims,
+      ungroundedClaims,
       allCitationsValid: unsupportedClaims.length === 0 || claims.length === 0,
+      allClaimsGrounded:
+        (unsupportedClaims.length === 0 && ungroundedClaims.length === 0) || claims.length === 0,
     };
 
     await prisma.researchJob.updateMany({
       where: { id: job.id, organisationId: ctx.organisationId },
       data: {
         criticReport: output as unknown as Prisma.InputJsonValue,
-        status: output.allCitationsValid ? job.status : "PARTIAL",
+        status: output.allCitationsValid && output.allClaimsGrounded ? job.status : "PARTIAL",
       },
     });
 

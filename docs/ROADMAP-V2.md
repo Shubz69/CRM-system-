@@ -42,11 +42,12 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 3 — Research & Evidence Fabric
 
-- Research Source Registry + connection states  
-- SourceSnapshot, Claim confidence/freshness  
-- Parallel independent research tasks via Kernel  
-- Stronger critic (excerpt grounding)  
-- Integration capability matrix doc + API  
+- [x] Research Source Registry + connection states (`capability-matrix` API)
+- [x] SourceSnapshot, Claim confidence/freshness/`claimKind`
+- [x] Parallel independent research tasks via Kernel (`searchConfiguredSources` / `mapPool`)
+- [x] Stronger critic (excerpt grounding + `flaggedUngrounded`)
+- [x] Integration capability matrix doc + API
+- [ ] Optional: deeper provider health heartbeats / last-success telemetry UI  
 
 ---
 

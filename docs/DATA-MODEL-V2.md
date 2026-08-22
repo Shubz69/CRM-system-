@@ -18,7 +18,8 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 |-------|------------|
 | `AgentRun` | optional `missionId`, `evaluationSummary`, `policyDecisions` JSON |
 | `ToolCall` | `riskLevel`, `toolVersion`, `idempotencyKey` |
-| `ResearchFinding` | `confidence`, `freshness`, `claimKind` (OFFICIAL/OBSERVATION/INFERENCE/…) |
+| `ResearchFinding` | `confidence`, `freshnessScore`, `claimKind`, `flaggedUngrounded` ✅ |
+| `ResearchSource` | `retrievedAt`, `contentHash`, `freshnessScore` ✅ |
 | `ResearchSource` | `retrievedAt` vs `publishedAt` already partial — ensure both |
 | `Campaign` | goals link, status lifecycle |
 | `Organisation` | entitlement snapshot cache (optional) |
@@ -35,9 +36,9 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 3
 
-- `ResearchProvider` / registry config (or SystemSetting + code)  
-- `SourceSnapshot`  
-- `Evidence` / `Claim` if Finding insufficient  
+- `ResearchProvider` / registry config (or SystemSetting + code) → capability matrix API ✅  
+- `ResearchSourceSnapshot` ✅  
+- `Evidence` / `Claim` if Finding insufficient — Finding extended for now  
 
 ### Phase 4–5
 

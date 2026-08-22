@@ -34,6 +34,9 @@ type Mocks = {
 
 const mocks = (prisma as unknown as { __mocks: Mocks }).__mocks;
 
+const SOURCE_BODY =
+  "Creators saw stronger reach this week when they posted short vertical clips with a clear hook in the first three seconds.";
+
 describe("critic agent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -47,13 +50,14 @@ describe("critic agent", () => {
       organisationId: "org_a",
       status: "COMPLETED",
       brief: null,
-      sources: [{ id: "s1", url: "https://example.com/real" }],
+      sources: [{ id: "s1", url: "https://example.com/real", content: SOURCE_BODY }],
       findings: [
         {
           id: "f1",
-          claim: "Real claim",
+          claim: "Creators saw stronger reach this week",
+          evidenceExcerpt: "stronger reach this week",
           researchSourceId: "s1",
-          source: { url: "https://example.com/real" },
+          source: { url: "https://example.com/real", content: SOURCE_BODY },
         },
       ],
     });
@@ -62,7 +66,11 @@ describe("critic agent", () => {
       {
         researchJobId: "job_1",
         claims: [
-          { claim: "Real claim", sourceUrl: "https://example.com/real" },
+          {
+            claim: "Creators saw stronger reach this week",
+            sourceUrl: "https://example.com/real",
+            evidenceExcerpt: "stronger reach this week",
+          },
           { claim: "Invented statistic: 87% of buyers", sourceUrl: "https://evil.example/fake" },
         ],
       },
@@ -79,25 +87,62 @@ describe("critic agent", () => {
     );
   });
 
-  it("passes when every citation is in the collected set", async () => {
+  it("passes when every citation is collected and grounded", async () => {
     mocks.researchJob.findFirst.mockResolvedValue({
       id: "job_1",
       organisationId: "org_a",
       status: "COMPLETED",
       brief: null,
-      sources: [{ id: "s1", url: "https://example.com/real" }],
+      sources: [{ id: "s1", url: "https://example.com/real", content: SOURCE_BODY }],
       findings: [],
     });
 
     const result = await criticAgent.execute(
       {
         researchJobId: "job_1",
-        claims: [{ claim: "Supported", sourceUrl: "https://example.com/real" }],
+        claims: [
+          {
+            claim: "Creators saw stronger reach this week with short vertical clips",
+            sourceUrl: "https://example.com/real",
+            evidenceExcerpt: "stronger reach this week when they posted short vertical clips",
+          },
+        ],
       },
       { organisationId: "org_a", agentRunId: "run_1", agentStepId: "step_1" },
     );
 
     expect(result.output.allCitationsValid).toBe(true);
+    expect(result.output.allClaimsGrounded).toBe(true);
     expect(result.output.unsupportedClaims).toHaveLength(0);
+    expect(result.output.ungroundedClaims).toHaveLength(0);
+  });
+
+  it("flags ungrounded claims that cite a real URL", async () => {
+    mocks.researchJob.findFirst.mockResolvedValue({
+      id: "job_1",
+      organisationId: "org_a",
+      status: "COMPLETED",
+      brief: null,
+      sources: [{ id: "s1", url: "https://example.com/real", content: SOURCE_BODY }],
+      findings: [],
+    });
+
+    const result = await criticAgent.execute(
+      {
+        researchJobId: "job_1",
+        claims: [
+          {
+            claim: "Quantum bananas increase subscriber count by 400%",
+            sourceUrl: "https://example.com/real",
+            evidenceExcerpt: "quantum bananas increase subscriber count",
+          },
+        ],
+      },
+      { organisationId: "org_a", agentRunId: "run_1", agentStepId: "step_1" },
+    );
+
+    expect(result.output.allCitationsValid).toBe(true);
+    expect(result.output.allClaimsGrounded).toBe(false);
+    expect(result.output.ungroundedClaims).toHaveLength(1);
   });
 });

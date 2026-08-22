@@ -195,6 +195,7 @@ model Organisation {
   researchJobs         ResearchJob[]
   researchSources      ResearchSource[]
   researchFindings     ResearchFinding[]
+  researchSourceSnapshots ResearchSourceSnapshot[]
   socialPosts          SocialPost[]
   trendSignals         TrendSignal[]
   assets               Asset[]
@@ -1393,6 +1394,7 @@ model ResearchJob {
   organisation Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   sources      ResearchSource[]
   findings     ResearchFinding[]
+  snapshots    ResearchSourceSnapshot[]
   socialPosts  SocialPost[]
   trendSignals TrendSignal[]
 
@@ -1400,6 +1402,14 @@ model ResearchJob {
   @@index([organisationId, status])
   @@index([organisationId, kind, createdAt])
   @@index([agentRunId])
+}
+
+enum ResearchClaimKind {
+  OFFICIAL
+  OBSERVATION
+  INFERENCE
+  SECONDARY
+  UNKNOWN
 }
 
 model ResearchSource {
@@ -1411,34 +1421,74 @@ model ResearchSource {
   platform       String
   author         String?
   publishedAt    DateTime?
+  /// When this row was fetched from the provider (not when the page was published).
+  retrievedAt    DateTime  @default(now())
   content        String?   @db.Text
+  /// SHA-256 hex of normalised content for dedupe / integrity.
+  contentHash    String?
+  /// 0–1 score from publishedAt age at retrieval time (null if unknown).
+  freshnessScore Float?
   engagement     Json?
   rawMetadata    Json      @default("{}")
   queryUsed      String?
   createdAt      DateTime  @default(now())
 
-  organisation Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  researchJob  ResearchJob       @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  organisation Organisation            @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob  ResearchJob             @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
   findings     ResearchFinding[]
+  snapshot     ResearchSourceSnapshot?
   socialPosts  SocialPost[]
 
   @@unique([researchJobId, url])
   @@index([organisationId, researchJobId])
   @@index([organisationId, platform, createdAt])
+  @@index([organisationId, contentHash])
+}
+
+/// Immutable capture of source content at retrieval time (Evidence Fabric).
+model ResearchSourceSnapshot {
+  id               String   @id @default(cuid())
+  organisationId   String
+  researchJobId    String
+  researchSourceId String   @unique
+  url              String
+  title            String?
+  platform         String
+  author           String?
+  publishedAt      DateTime?
+  retrievedAt      DateTime
+  content          String?  @db.Text
+  contentHash      String?
+  engagement       Json?
+  rawMetadata      Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  organisation   Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  researchJob    ResearchJob   @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  researchSource ResearchSource @relation(fields: [researchSourceId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, researchJobId])
+  @@index([organisationId, contentHash])
+  @@index([organisationId, retrievedAt])
 }
 
 /// A claim grounded in exactly one source URL (via ResearchSource).
 model ResearchFinding {
-  id                  String   @id @default(cuid())
+  id                  String            @id @default(cuid())
   organisationId      String
   researchJobId       String
   researchSourceId    String
-  claim               String   @db.Text
-  evidenceExcerpt     String?  @db.Text
+  claim               String            @db.Text
+  evidenceExcerpt     String?           @db.Text
   confidence          Float?
-  verifiedByCritic    Boolean  @default(false)
-  flaggedUnsupported  Boolean  @default(false)
-  createdAt           DateTime @default(now())
+  claimKind           ResearchClaimKind @default(UNKNOWN)
+  /// Inherited / computed from source freshness at write time.
+  freshnessScore      Float?
+  verifiedByCritic    Boolean           @default(false)
+  flaggedUnsupported  Boolean           @default(false)
+  /// Critic: excerpt/claim not found in source body (URL may still be valid).
+  flaggedUngrounded   Boolean           @default(false)
+  createdAt           DateTime          @default(now())
 
   organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   researchJob  ResearchJob   @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
@@ -1446,6 +1496,7 @@ model ResearchFinding {
 
   @@index([organisationId, researchJobId])
   @@index([organisationId, researchSourceId])
+  @@index([organisationId, claimKind])
 }
 
 model SocialPost {
