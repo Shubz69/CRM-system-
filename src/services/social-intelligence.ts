@@ -199,5 +199,16 @@ export async function ingestResearchJobSocialContent(input: {
     upserted += 1;
     if (result.snapshotId) snapshots += 1;
   }
+
+  try {
+    const { refreshTrendsForOrganisation } = await import("@/services/trend-intelligence");
+    await refreshTrendsForOrganisation({
+      organisationId: input.organisationId,
+      researchJobId: input.researchJobId,
+    });
+  } catch {
+    // Trend refresh is best-effort — never fail social ingest.
+  }
+
   return { upserted, snapshots };
 }

@@ -201,6 +201,11 @@ model Organisation {
   socialCreators       SocialCreator[]
   socialContents       SocialContent[]
   socialMetricSnapshots SocialMetricSnapshot[]
+  trendClusters        TrendCluster[]
+  trendFeatureSnapshots TrendFeatureSnapshot[]
+  algorithmChanges     AlgorithmChange[]
+  trendForecasts       TrendForecast[]
+  trendForecastOutcomes TrendForecastOutcome[]
   assets               Asset[]
   memoryEpisodes       MemoryEpisode[]
   memoryEntityFacts    MemoryEntityFact[]
@@ -1623,6 +1628,157 @@ model SocialMetricSnapshot {
   @@index([organisationId, socialContentId, capturedAt])
   @@index([organisationId, capturedAt])
   @@index([socialContentId, capturedAt])
+}
+
+// ─── Phase 5 — Trend & Algorithm Intelligence ───────────────────────────────
+
+enum TrendLifecycleState {
+  EMERGING
+  ACCELERATING
+  BREAKOUT
+  MAINSTREAM
+  SATURATED
+  DECLINING
+  RECURRING
+}
+
+enum AlgorithmEvidenceKind {
+  OFFICIAL
+  OBSERVATIONAL
+  UNKNOWN
+}
+
+enum TrendForecastHorizon {
+  H24
+  D3
+  D7
+  D30
+}
+
+/// Aggregated trend cluster with lifecycle state (features drive state; LLM interprets later).
+model TrendCluster {
+  id             String              @id @default(cuid())
+  organisationId String
+  /// Normalised label key (lowercase slug-ish).
+  key            String
+  label          String
+  /// theme | hook | format | topic | other
+  kind           String              @default("theme")
+  state          TrendLifecycleState @default(EMERGING)
+  platforms      String[]            @default([])
+  evidenceUrls   String[]            @default([])
+  /// Latest feature vector summary (velocity, acceleration, crossPlatformCount, …).
+  features       Json                @default("{}")
+  firstSeenAt    DateTime            @default(now())
+  lastSeenAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organisation Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  featureSnaps TrendFeatureSnapshot[]
+  forecasts    TrendForecast[]
+
+  @@unique([organisationId, key])
+  @@index([organisationId, state, lastSeenAt])
+  @@index([organisationId, kind, lastSeenAt])
+}
+
+model TrendFeatureSnapshot {
+  id             String   @id @default(cuid())
+  organisationId String
+  trendClusterId String
+  /// 24h | 3d | 7d | 30d
+  window         String
+  capturedAt     DateTime @default(now())
+  mentionCount   Int      @default(0)
+  contentCount   Int      @default(0)
+  velocity       Float    @default(0)
+  acceleration   Float    @default(0)
+  crossPlatformCount Int  @default(0)
+  engagementScore Float   @default(0)
+  features       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  trendCluster TrendCluster @relation(fields: [trendClusterId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, trendClusterId, capturedAt])
+  @@index([organisationId, window, capturedAt])
+}
+
+/// Documented or observed platform algorithm changes — never invent official status.
+model AlgorithmChange {
+  id               String                @id @default(cuid())
+  organisationId   String
+  platform         String
+  /// e.g. reels_fyp | youtube_shorts | linkedin_feed
+  surface          String?
+  changeType       String
+  title            String
+  summary          String?               @db.Text
+  evidenceKind     AlgorithmEvidenceKind @default(UNKNOWN)
+  confidence       Float?
+  detectedAt       DateTime              @default(now())
+  effectiveAt      DateTime?
+  sourceUrl        String?
+  affectedFormats  String[]              @default([])
+  expectedImpact   String?               @db.Text
+  recommendedExperiment String?           @db.Text
+  validationNotes  String?               @db.Text
+  metadata         Json                  @default("{}")
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, platform, detectedAt])
+  @@index([organisationId, evidenceKind, detectedAt])
+}
+
+/// Probabilistic forecast with explicit uncertainty — no certainty theatre.
+model TrendForecast {
+  id               String              @id @default(cuid())
+  organisationId   String
+  trendClusterId   String
+  horizon          TrendForecastHorizon
+  /// Probability the trend remains accelerating / breakout in this horizon (0–1).
+  probability      Float
+  /// Half-width uncertainty band around probability (0–0.5 typical).
+  uncertainty      Float
+  drivers          String[]            @default([])
+  counterSignals   String[]            @default([])
+  featureSnapshotId String?
+  /// low | medium | high — qualitative only
+  confidenceLabel  String?
+  createdAt        DateTime            @default(now())
+  /// When this forecast becomes evaluable.
+  resolveAfter     DateTime
+
+  organisation Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  trendCluster TrendCluster          @relation(fields: [trendClusterId], references: [id], onDelete: Cascade)
+  outcome      TrendForecastOutcome?
+
+  @@index([organisationId, trendClusterId, createdAt])
+  @@index([organisationId, resolveAfter])
+  @@index([organisationId, horizon, createdAt])
+}
+
+/// Real outcome for backtesting — metrics only when rows exist.
+model TrendForecastOutcome {
+  id              String   @id @default(cuid())
+  organisationId  String
+  trendForecastId String   @unique
+  /// Whether the predicted state direction held.
+  realizedPositive Boolean
+  realizedState   TrendLifecycleState?
+  notes           String?  @db.Text
+  evaluatedAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  organisation  Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  trendForecast TrendForecast @relation(fields: [trendForecastId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, evaluatedAt])
 }
 
 

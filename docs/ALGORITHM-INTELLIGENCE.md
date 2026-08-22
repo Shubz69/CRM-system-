@@ -1,9 +1,18 @@
 # Algorithm Intelligence
 
-**Status:** Spec (Phase 5).
+**Status:** Phase 5 — `AlgorithmChange` model + API.
 
-## AlgorithmChange (target)
+## AlgorithmChange
 
-platform, surface (Reels FYP, YT Shorts, LI Feed…), change type, detected/effective dates, official vs observational evidence, confidence, affected formats/audiences, expected impact, recommended experiment, validation.
+Fields: platform, surface (Reels FYP, YT Shorts, LI Feed…), change type, detected/effective dates, `evidenceKind` (`OFFICIAL` | `OBSERVATIONAL` | `UNKNOWN`), confidence, affected formats, expected impact, recommended experiment, validation notes.
+
+**Official requires a source URL** — otherwise the write path forces `UNKNOWN`.
 
 Separate **official** documentation from **inferred** behaviour. When unknown, say unknown.
+
+## API
+
+```http
+GET  /api/algorithm-changes   # insights:read
+POST /api/algorithm-changes   # integrations:manage
+```

@@ -65,6 +65,16 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "trends.refresh",
+    version: "1.0.0",
+    description: "Refresh trend clusters and probabilistic forecasts from recent social evidence.",
+    risk: "read",
+    costClass: "cheap",
+    requiredPermission: "insights:read",
+    timeoutMs: 60_000,
+  });
+
+  registerTool({
     name: "crm.read_conversation",
     version: "1.0.0",
     description: "Read conversation and messages within the active organisation.",

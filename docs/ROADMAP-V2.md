@@ -62,10 +62,11 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 5 — Trend & Algorithm Intelligence
 
-- Trend lifecycle states + feature pipeline  
-- AlgorithmChange evidence store (official vs observational)  
-- Probabilistic forecasts with uncertainty  
-- Backtest harness (display metrics only when real history exists)  
+- [x] Trend lifecycle states + feature pipeline (`TrendCluster` / `TrendFeatureSnapshot`)
+- [x] AlgorithmChange evidence store (official vs observational)
+- [x] Probabilistic forecasts with uncertainty (`TrendForecast`)
+- [x] Backtest harness (metrics only when `TrendForecastOutcome` history exists)
+- [ ] Richer multi-window feature jobs + UI dashboards 
 
 ---
 
