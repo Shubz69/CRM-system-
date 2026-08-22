@@ -96,6 +96,17 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "learning.eval",
+    version: "1.0.0",
+    description:
+      "Run deterministic regression evals for agent version candidates (does not promote).",
+    risk: "write_internal",
+    costClass: "cheap",
+    requiredPermission: "agent:manage",
+    timeoutMs: 30_000,
+  });
+
+  registerTool({
     name: "crm.read_conversation",
     version: "1.0.0",
     description: "Read conversation and messages within the active organisation.",

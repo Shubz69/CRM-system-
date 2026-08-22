@@ -228,6 +228,11 @@ model Organisation {
   memoryEntityFacts    MemoryEntityFact[]
   memoryPerformanceOutcomes MemoryPerformanceOutcome[]
   organisationPreferences OrganisationPreference[]
+  recommendationFeedbacks RecommendationFeedback[]
+  experiments          Experiment[]
+  agentVersionCandidates AgentVersionCandidate[]
+  evalSuites           EvalSuite[]
+  evalRuns             EvalRun[]
 }
 
 model User {
@@ -1058,6 +1063,7 @@ model AgentConfiguration {
   updatedAt               DateTime @updatedAt
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  versionCandidates AgentVersionCandidate[]
 
   @@index([organisationId, isActive])
 }
@@ -2316,5 +2322,146 @@ model OrganisationPreference {
 
   @@unique([organisationId, key])
   @@index([organisationId])
+}
+
+// ─── Phase 9 — Learning & Experimentation ───────────────────────────────────
+
+enum ExperimentStatus {
+  DRAFT
+  RUNNING
+  COMPLETED
+  CANCELLED
+}
+
+enum AgentVersionCandidateStatus {
+  DRAFT
+  EVALUATING
+  PASSED
+  FAILED
+  PROMOTED
+  REJECTED
+}
+
+enum EvalRunStatus {
+  PENDING
+  RUNNING
+  PASSED
+  FAILED
+}
+
+/// Explicit human/system signal on a recommendation — never inferred as success.
+model RecommendationFeedback {
+  id             String   @id @default(cuid())
+  organisationId String
+  /// knowledge_recommendation | content_opportunity | insight | other
+  subjectKind    String
+  subjectId      String
+  /// helpful | not_helpful | accepted | dismissed | outcome_positive | outcome_negative
+  signal         String
+  rating         Int?
+  note           String?  @db.Text
+  userId         String?
+  outcomeMetric  String?
+  /// Only set when a real measured value exists.
+  outcomeValue   Float?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, subjectKind, createdAt])
+  @@index([organisationId, subjectId, createdAt])
+  @@index([organisationId, signal, createdAt])
+}
+
+/// A/B or multi-variant experiment. Results stay null until real measurements exist.
+model Experiment {
+  id              String           @id @default(cuid())
+  organisationId  String
+  name            String
+  hypothesis      String           @db.Text
+  status          ExperimentStatus @default(DRAFT)
+  /// [{ key, label, description? }]
+  variants        Json             @default("[]")
+  primaryMetric   String
+  /// { sampleSize, winnerKey?, metricByVariant?, message } — null metrics when sampleSize=0
+  resultSummary   Json?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  createdByUserId String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, createdAt])
+}
+
+/// Candidate agent config/prompt — promotion requires a passing EvalRun.
+model AgentVersionCandidate {
+  id                   String                      @id @default(cuid())
+  organisationId       String
+  agentConfigurationId String?
+  label                String
+  status               AgentVersionCandidateStatus @default(DRAFT)
+  /// Proposed overrides: systemPromptExtra, model, brandTone, …
+  configSnapshot       Json                        @default("{}")
+  evalSuiteKey         String?
+  lastEvalRunId        String?
+  /// { passed, caseCount, failedKeys[], message } — never invent pass rates
+  evalSummary          Json?
+  promotedAt           DateTime?
+  createdByUserId      String?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  organisation       Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  agentConfiguration AgentConfiguration? @relation(fields: [agentConfigurationId], references: [id], onDelete: SetNull)
+  evalRuns           EvalRun[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, agentConfigurationId])
+}
+
+/// Named suite of deterministic eval cases (org-scoped).
+model EvalSuite {
+  id             String   @id @default(cuid())
+  organisationId String
+  key            String
+  name           String
+  description    String?  @db.Text
+  /// [{ id, name, kind, expect }]
+  cases          Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  runs         EvalRun[]
+
+  @@unique([organisationId, key])
+  @@index([organisationId, key])
+}
+
+model EvalRun {
+  id             String        @id @default(cuid())
+  organisationId String
+  evalSuiteId    String?
+  suiteKey       String
+  candidateId    String?
+  status         EvalRunStatus @default(PENDING)
+  /// Per-case results; scores only when cases actually ran.
+  results        Json          @default("{}")
+  passed         Boolean?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime      @default(now())
+
+  organisation Organisation           @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  evalSuite    EvalSuite?             @relation(fields: [evalSuiteId], references: [id], onDelete: SetNull)
+  candidate    AgentVersionCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, suiteKey, createdAt])
+  @@index([candidateId])
 }
 

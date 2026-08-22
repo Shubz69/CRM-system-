@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePermission } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
+import { recordRecommendationFeedback } from "@/services/learning-os";
 
 export async function GET() {
   try {
@@ -47,6 +48,22 @@ export async function PATCH(req: NextRequest) {
     const recommendation = await prisma.knowledgeRecommendation.findFirst({
       where: { id: body.id, organisationId: session.organisationId },
     });
+
+    const signal =
+      body.status === "APPROVED" || body.status === "USED"
+        ? "accepted"
+        : body.status === "DISMISSED"
+          ? "dismissed"
+          : null;
+    if (signal) {
+      await recordRecommendationFeedback({
+        organisationId: session.organisationId,
+        userId: session.userId,
+        subjectKind: "knowledge_recommendation",
+        subjectId: body.id,
+        signal,
+      });
+    }
 
     await writeAuditLog({
       organisationId: session.organisationId,

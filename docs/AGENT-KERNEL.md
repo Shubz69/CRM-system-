@@ -28,7 +28,7 @@ It does **not** replace prompts-as-agents. It standardises definition, tools, po
 | **Evidence** | Citeable artifact from tools/research | ResearchSource/Finding; later Evidence table |
 | **Artifact** | Deliverable (brief, script, campaign draft) | `finalOutput` / ContentPiece later |
 | **Approval** | Human gate | Autopilot + AWAITING_* ; later ApprovalRequest |
-| **Evaluation** | Offline/online quality | Phase 9 |
+| **Evaluation** | Offline/online quality | Phase 9 ✅ |
 
 ---
 

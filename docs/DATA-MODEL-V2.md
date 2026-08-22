@@ -63,10 +63,10 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 - `ApprovalRequest` ✅  
 - AutomationRule `workflow` / `naturalLanguageSource` / `requiresApproval` ✅  
-- `Experiment`  
-- `Goal`, `Kpi`, `Initiative`  
-- `RecommendationFeedback`  
-- `AgentVersion` (candidate prompts)  
+- `Experiment` ✅  
+- `RecommendationFeedback` ✅  
+- `AgentVersionCandidate` + `EvalSuite` / `EvalRun` ✅  
+- `Goal`, `Kpi`, `Initiative` (deferred — Phase 10 metering/home)  
 
 ### Phase 10
 

@@ -43,6 +43,7 @@ export const PRIMARY_NAV: NavItem[] = [
 export const WORK_NAV: NavItem[] = [
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/insights", label: "Insights", icon: Sparkles },
+  { href: "/learning", label: "Learning", icon: FlaskConical },
   { href: "/reports", label: "Reports", icon: FileBarChart },
   { href: "/agent", label: "AI Agent", icon: Bot },
 ];

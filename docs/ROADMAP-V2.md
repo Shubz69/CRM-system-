@@ -99,10 +99,10 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 9 — Learning & Experimentation
 
-- Recommendation feedback loop  
-- Experiment entity  
-- Agent version candidates + eval gates before promotion  
-- Forecast backtesting dashboards  
+- [x] Recommendation feedback loop
+- [x] Experiment entity
+- [x] Agent version candidates + eval gates before promotion
+- [x] Forecast backtesting dashboards
 
 ---
 
