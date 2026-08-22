@@ -30,7 +30,8 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 ### Phase 1–2
 
 - `Mission` (optional if AgentRun metadata sufficient initially)  
-- Memory provenance fields on retrieval logs (or `MemoryEpisode`)  
+- Memory provenance fields on retrieval logs (or `MemoryEpisode`) ✅  
+- `MemoryEntityFact`, `MemoryPerformanceOutcome`, `OrganisationPreference` ✅  
 
 ### Phase 3
 

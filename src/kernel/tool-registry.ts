@@ -54,6 +54,17 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "memory.retrieve",
+    version: "1.0.0",
+    description:
+      "Retrieve episodic Ask memory and organisation preferences (not approved Knowledge).",
+    risk: "read",
+    costClass: "cheap",
+    requiredPermission: "ask:use",
+    timeoutMs: 10_000,
+  });
+
+  registerTool({
     name: "crm.read_conversation",
     version: "1.0.0",
     description: "Read conversation and messages within the active organisation.",

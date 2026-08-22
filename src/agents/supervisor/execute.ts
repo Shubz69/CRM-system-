@@ -6,6 +6,12 @@ import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
 import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 import { logger } from "@/lib/logger";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
+import {
+  formatPreferencesForContext,
+  getOrganisationPreferences,
+  recordEpisodeFromAgentRun,
+  retrieveRelevantEpisodes,
+} from "@/services/agent-memory";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import { evaluateToolPolicy } from "@/kernel";
 
@@ -46,6 +52,8 @@ async function finishRun(input: {
   userFacingError?: string | null;
   /** When true, leave finishedAt null (user still needs to act). */
   keepOpen?: boolean;
+  /** Used to write episodic memory on terminal outcomes. */
+  request?: string;
 }): Promise<ExecuteAgentRunResult> {
   const updated = await prisma.agentRun.updateMany({
     where: { id: input.runId, organisationId: input.organisationId },
@@ -62,6 +70,29 @@ async function finishRun(input: {
   if (updated.count !== 1) {
     throw new Error("Failed to update agent run (org scope mismatch?)");
   }
+
+  if (
+    !input.keepOpen &&
+    input.request &&
+    (input.status === "COMPLETED" || input.status === "PARTIAL")
+  ) {
+    try {
+      await recordEpisodeFromAgentRun({
+        organisationId: input.organisationId,
+        agentRunId: input.runId,
+        request: input.request,
+        status: input.status,
+        finalOutput: input.finalOutput,
+      });
+    } catch (error) {
+      logger.warn("Episodic memory write skipped", {
+        runId: input.runId,
+        organisationId: input.organisationId,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+
   return {
     runId: input.runId,
     status: input.status,
@@ -196,6 +227,13 @@ export async function executeAgentRun(input: {
     mode: string;
     chunkCount: number;
   } | null = null;
+  let pendingMemoryTool: {
+    durationMs: number;
+    episodeCount: number;
+    episodeIds: string[];
+  } | null = null;
+  let episodicContext: string | null = null;
+
   const knowledgePolicy = evaluateToolPolicy("knowledge.retrieve", {
     organisationId: input.organisationId,
   });
@@ -232,11 +270,50 @@ export async function executeAgentRun(input: {
     }
   }
 
+  const memoryPolicy = evaluateToolPolicy("memory.retrieve", {
+    organisationId: input.organisationId,
+  });
+  if (memoryPolicy.effect !== "deny") {
+    try {
+      const startedMemory = Date.now();
+      const [episodes, prefs] = await Promise.all([
+        retrieveRelevantEpisodes({
+          organisationId: input.organisationId,
+          query: run.request,
+          limit: 4,
+        }),
+        getOrganisationPreferences({ organisationId: input.organisationId }),
+      ]);
+      const prefBlock = formatPreferencesForContext(prefs);
+      const parts = [episodes.contextText, prefBlock].filter(Boolean);
+      if (parts.length) {
+        episodicContext = parts.join("\n\n").slice(0, 8_000);
+        if (knowledgeContext) {
+          knowledgeContext = `${knowledgeContext}\n\n${episodicContext}`.slice(0, 14_000);
+        } else {
+          knowledgeContext = episodicContext;
+        }
+      }
+      pendingMemoryTool = {
+        durationMs: Date.now() - startedMemory,
+        episodeCount: episodes.episodes.length,
+        episodeIds: episodes.episodes.map((e) => e.id),
+      };
+    } catch (error) {
+      logger.warn("Episodic memory retrieval skipped for agent run", {
+        runId: run.id,
+        organisationId: input.organisationId,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+
   for (let i = 0; i < stepsToRun.length; i++) {
     const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
     if (elapsedSec > maxWallClockSeconds) {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: "PARTIAL",
         totalCostCents,
@@ -250,6 +327,7 @@ export async function executeAgentRun(input: {
     if (maxSpendCents != null && totalCostCents >= maxSpendCents) {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: "PARTIAL",
         totalCostCents,
@@ -267,6 +345,7 @@ export async function executeAgentRun(input: {
     } catch {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: stepOutputs.length ? "PARTIAL" : "FAILED",
         totalCostCents,
@@ -317,6 +396,7 @@ export async function executeAgentRun(input: {
     if (!parsedInput.success) {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: stepOutputs.length ? "PARTIAL" : "FAILED",
         totalCostCents,
@@ -333,6 +413,7 @@ export async function executeAgentRun(input: {
     if (!label || !label.trim()) {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: "FAILED",
         totalCostCents,
@@ -349,6 +430,7 @@ export async function executeAgentRun(input: {
       if (error instanceof SpendCapExceededError) {
         return finishRun({
           organisationId: input.organisationId,
+          request: run.request,
           runId: run.id,
           status: stepOutputs.length ? "PARTIAL" : "FAILED",
           totalCostCents,
@@ -366,6 +448,7 @@ export async function executeAgentRun(input: {
     if (maxSpendCents != null && totalCostCents + estimate > maxSpendCents) {
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: stepOutputs.length ? "PARTIAL" : "FAILED",
         totalCostCents,
@@ -410,6 +493,21 @@ export async function executeAgentRun(input: {
         pendingKnowledgeTool = null;
       }
 
+      if (i === 0 && pendingMemoryTool) {
+        await recordResearchToolCall({
+          organisationId: input.organisationId,
+          agentStepId: stepRow.id,
+          toolName: "memory.retrieve",
+          args: { query: run.request.slice(0, 500), limit: 4 },
+          result: {
+            episodeCount: pendingMemoryTool.episodeCount,
+            episodeIds: pendingMemoryTool.episodeIds,
+          },
+          durationMs: pendingMemoryTool.durationMs,
+        });
+        pendingMemoryTool = null;
+      }
+
       const result = await agent.execute(parsedInput.data as never, {
         organisationId: input.organisationId,
         agentRunId: run.id,
@@ -417,6 +515,7 @@ export async function executeAgentRun(input: {
         knowledgeContext,
         knowledgeDocumentTitles,
         knowledgeRetrievalMode,
+        episodicContext,
       });
 
       const durationMs = Date.now() - stepStarted;
@@ -500,6 +599,7 @@ export async function executeAgentRun(input: {
         if (!out.proposedPrompt?.trim()) {
           return finishRun({
             organisationId: input.organisationId,
+            request: run.request,
             runId: run.id,
             status: "FAILED",
             totalCostCents,
@@ -513,6 +613,7 @@ export async function executeAgentRun(input: {
         }
         return finishRun({
           organisationId: input.organisationId,
+          request: run.request,
           runId: run.id,
           status: "AWAITING_PROMPT_CONFIRM",
           totalCostCents,
@@ -583,6 +684,7 @@ export async function executeAgentRun(input: {
 
       return finishRun({
         organisationId: input.organisationId,
+        request: run.request,
         runId: run.id,
         status: stepOutputs.length ? "PARTIAL" : "FAILED",
         totalCostCents,
@@ -602,6 +704,7 @@ export async function executeAgentRun(input: {
   if (plan.steps.length > maxSteps) {
     return finishRun({
       organisationId: input.organisationId,
+      request: run.request,
       runId: run.id,
       status: "PARTIAL",
       totalCostCents,
@@ -614,6 +717,7 @@ export async function executeAgentRun(input: {
 
   return finishRun({
     organisationId: input.organisationId,
+    request: run.request,
     runId: run.id,
     status: "COMPLETED",
     totalCostCents,

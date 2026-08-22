@@ -35,8 +35,8 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 - [x] Wire knowledge retrieval into supervisor context (working memory for runs)
 - [x] Provenance via `knowledge.retrieve` ToolCall (titles + mode)
 - [x] Research query expand + analyst prompts use knowledge without inventing citations
-- [ ] Episodic / entity / performance / preference memory models
-- [ ] Agents must not promote uncertain findings to Knowledge without approval (still manual Save)
+- [x] Episodic / entity / performance / preference memory models
+- [x] Agents must not promote uncertain findings to Knowledge without approval (Ask saves forced INACTIVE; ACTIVE blocked for from-ask)
 
 ---
 

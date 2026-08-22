@@ -75,6 +75,7 @@ export type AgentRunProgress = {
       documentTitles: string[];
       mode: string;
     } | null;
+    memoryUsed: { episodeCount: number } | null;
   };
 };
 
@@ -496,6 +497,15 @@ export async function getAgentRunProgress(input: {
         }
       : null;
 
+  const memoryTool = run.steps
+    .flatMap((s) => s.toolCalls)
+    .find((t) => t.toolName === "memory.retrieve" && t.result && typeof t.result === "object");
+  const memoryResult = memoryTool?.result as { episodeCount?: unknown } | undefined;
+  const memoryUsed =
+    memoryResult && typeof memoryResult.episodeCount === "number"
+      ? { episodeCount: memoryResult.episodeCount }
+      : null;
+
   return {
     runId: run.id,
     status: run.status,
@@ -547,6 +557,7 @@ export async function getAgentRunProgress(input: {
         description: t.description,
       })),
       knowledgeUsed,
+      memoryUsed,
     },
   };
 }

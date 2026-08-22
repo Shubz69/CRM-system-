@@ -50,6 +50,7 @@ type Progress = {
     toolsInvoked: Array<{ toolName: string; durationMs: number | null; error: string | null }>;
     registeredTools: Array<{ name: string; risk: string; description: string }>;
     knowledgeUsed: { documentTitles: string[]; mode: string } | null;
+    memoryUsed: { episodeCount: number } | null;
   };
 };
 
@@ -975,6 +976,12 @@ export default function AskPage() {
             ) : (
               <p>No organisation knowledge chunks matched this request.</p>
             )}
+            {progress.kernel.memoryUsed ? (
+              <p>
+                Episodic memory: {progress.kernel.memoryUsed.episodeCount} prior episode
+                {progress.kernel.memoryUsed.episodeCount === 1 ? "" : "s"} retrieved.
+              </p>
+            ) : null}
             {progress.kernel.toolsInvoked.length > 0 ? (
               <ul className="list-disc space-y-1 pl-5">
                 {progress.kernel.toolsInvoked.map((t, i) => (

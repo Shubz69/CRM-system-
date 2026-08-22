@@ -4,6 +4,7 @@ import { KnowledgeDocStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
 import { upsertKnowledgeDocument, chunkText, updateKnowledgeDocument, archiveKnowledgeDocument } from "@/services/knowledge";
+import { assertKnowledgePromotionPolicy } from "@/services/agent-memory";
 
 export async function GET() {
   try {
@@ -82,6 +83,13 @@ export async function POST(req: NextRequest) {
     }
 
     const body = createSchema.parse(await req.json());
+    const promotion = assertKnowledgePromotionPolicy({
+      category: body.category,
+      tags: body.tags,
+      status: body.status ?? null,
+    });
+    if (!promotion.ok) return jsonError(promotion.error, 400);
+
     const id = await upsertKnowledgeDocument({
       organisationId: session.organisationId,
       title: body.title,
@@ -90,10 +98,13 @@ export async function POST(req: NextRequest) {
       tags: body.tags,
     });
 
-    if (body.status) {
+    const status = promotion.forcedStatus
+      ? KnowledgeDocStatus.INACTIVE
+      : body.status;
+    if (status) {
       await prisma.knowledgeDocument.update({
         where: { id },
-        data: { status: body.status },
+        data: { status },
       });
     }
 

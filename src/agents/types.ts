@@ -15,6 +15,8 @@ export type AgentContext = {
   knowledgeContext?: string | null;
   knowledgeDocumentTitles?: string[];
   knowledgeRetrievalMode?: "hybrid" | "lexical" | "none";
+  /** Prior Ask episodes + admin preferences — not approved Knowledge. */
+  episodicContext?: string | null;
 };
 
 export type AgentExecuteResult<TOut> = {

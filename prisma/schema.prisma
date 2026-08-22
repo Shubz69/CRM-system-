@@ -198,6 +198,10 @@ model Organisation {
   socialPosts          SocialPost[]
   trendSignals         TrendSignal[]
   assets               Asset[]
+  memoryEpisodes       MemoryEpisode[]
+  memoryEntityFacts    MemoryEntityFact[]
+  memoryPerformanceOutcomes MemoryPerformanceOutcome[]
+  organisationPreferences OrganisationPreference[]
 }
 
 model User {
@@ -1287,6 +1291,7 @@ model AgentRun {
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   referenceAsset Asset?       @relation("AgentRunReferenceAsset", fields: [referenceAssetId], references: [id], onDelete: SetNull)
   steps          AgentStep[]
+  memoryEpisodes MemoryEpisode[]
 
   @@index([organisationId, createdAt])
   @@index([organisationId, status])
@@ -1524,5 +1529,100 @@ model Asset {
   @@index([organisationId, kind, createdAt])
   @@index([derivedFromAssetId])
   @@index([createdByUserId])
+}
+
+// ─── Memory V2 (episodic / entity / performance / preference) ───────────────
+
+enum MemoryEntityFactStatus {
+  CANDIDATE
+  APPROVED
+  REJECTED
+}
+
+/// Prior agent run / interaction summary. Auto-written; TTL via expiresAt.
+model MemoryEpisode {
+  id             String    @id @default(cuid())
+  organisationId String
+  agentRunId     String?
+  /// ask | inbound | automation | other
+  kind           String    @default("ask")
+  summary        String    @db.Text
+  requestPreview String?   @db.Text
+  outcomeStatus  String?
+  tags           String[]  @default([])
+  metadata       Json      @default("{}")
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  agentRun     AgentRun?    @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, expiresAt])
+  @@index([organisationId, kind, createdAt])
+  @@index([agentRunId])
+}
+
+/// Fact about a contact, company, topic, or other entity. Provenance required.
+model MemoryEntityFact {
+  id             String                 @id @default(cuid())
+  organisationId String
+  /// contact | company | topic | other
+  entityType     String
+  /// Stable key (contact id, normalised name, slug).
+  entityKey      String
+  factKey        String
+  factValue      String                 @db.Text
+  confidence     Float                  @default(0.5)
+  /// { sourceType, sourceId?, excerpt?, recordedAt }
+  provenance     Json
+  status         MemoryEntityFactStatus @default(CANDIDATE)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, entityType, entityKey, factKey])
+  @@index([organisationId, entityType, entityKey])
+  @@index([organisationId, status, updatedAt])
+}
+
+/// Measured campaign / experiment / content outcomes (not estimates).
+model MemoryPerformanceOutcome {
+  id             String   @id @default(cuid())
+  organisationId String
+  /// campaign | experiment | content | ask_feedback | other
+  kind           String
+  subjectKey     String?
+  metric         String
+  value          Float
+  unit           String?
+  measuredAt     DateTime @default(now())
+  /// Optional link to Campaign / Experiment / Asset id
+  sourceRef      String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, kind, measuredAt])
+  @@index([organisationId, subjectKey, measuredAt])
+  @@index([organisationId, sourceRef])
+}
+
+/// Admin / operator preferences (tone, operating style). Not auto-inferred as truth.
+model OrganisationPreference {
+  id             String   @id @default(cuid())
+  organisationId String
+  key            String
+  value          Json
+  updatedByUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, key])
+  @@index([organisationId])
 }
 
