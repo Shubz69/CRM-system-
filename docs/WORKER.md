@@ -44,12 +44,21 @@ not run.
 
 ## Deploy (Railway / Render / Fly)
 
-1. Create a service from the **same** Git repo.
+**Default production topology:** Vercel (Next.js) + **hosted worker** on Railway or Render from this same repo.
+
+Copy-paste configs in-repo:
+
+- `railway.toml` — start `npm run worker`
+- `render.yaml` — worker service blueprint
+
+1. Create a worker service from the **same** Git repo.
 2. Start command: `npm run worker` (or `npx tsx src/workers/index.ts`).
 3. Set env: `DATABASE_URL`, `DIRECT_URL` (if needed), `REDIS_URL` (same as
    Vercel), `ENCRYPTION_KEY`, AI keys as needed.
 4. On Vercel: set the same `REDIS_URL` (Production + Preview).
 5. Health: `GET /api/health` — in production, Redis `down` → **503 unhealthy**.
+6. Ops UI: `/admin/ai-ops` shows queue depths + failed jobs (real BullMQ counts).
+7. Go Live checklist treats Redis + worker as **required** for Ask (cron does not run `agent-runs`).
 
 ### Graceful shutdown
 

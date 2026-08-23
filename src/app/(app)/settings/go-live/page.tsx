@@ -119,11 +119,11 @@ export default function GoLivePage() {
         },
         {
           key: "jobs",
-          label: "Background processing",
-          status: redisOk ? "ready" : "optional",
+          label: "Hosted worker + Redis",
+          status: redisOk ? "ready" : "needs_attention",
           detail: redisOk
-            ? "Redis reachable"
-            : "Cron/Vercel path used when Redis is unavailable",
+            ? "Redis reachable — keep `npm run worker` running (Railway/Render/Fly) for Ask"
+            : "Redis down — Ask agent-runs will not process. Cron only covers short follow-ups.",
         },
         {
           key: "webhooks",
@@ -153,7 +153,9 @@ export default function GoLivePage() {
   const criticalReady = useMemo(
     () =>
       checks
-        .filter((c) => ["database", "auth", "ai", "manychat", "business"].includes(c.key))
+        .filter((c) =>
+          ["database", "auth", "ai", "manychat", "business", "jobs"].includes(c.key),
+        )
         .every((c) => c.status === "ready" || (c.key === "ai" && c.status !== "needs_attention")),
     [checks],
   );

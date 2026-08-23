@@ -38,7 +38,8 @@ export const PRIMARY_NAV: NavItem[] = [
 ];
 
 /**
- * Work tools — research, reports, and the agent itself.
+ * Work tools — knowledge, intelligence, agent.
+ * Grouped by outcome: Knowledge · Intelligence · Agent (not raw infra).
  */
 export const WORK_NAV: NavItem[] = [
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
@@ -48,11 +49,20 @@ export const WORK_NAV: NavItem[] = [
   { href: "/agent", label: "AI Agent", icon: Bot },
 ];
 
+/** Intelligence cluster — used by shell section label + command palette. */
+export const INTELLIGENCE_NAV: NavItem[] = [
+  { href: "/insights", label: "Insights", icon: Sparkles },
+  { href: "/learning", label: "Learning", icon: FlaskConical },
+  { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
+];
+
 /** Setup and go-live. */
 export const SETUP_NAV: NavItem[] = [
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings, match: "exact" },
   { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
+  { href: "/setup", label: "Setup Assistant", icon: ListChecks },
 ];
 
 /**
@@ -62,7 +72,6 @@ export const SETUP_NAV: NavItem[] = [
 export const SECONDARY_NAV: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
-  { href: "/setup", label: "Setup Assistant", icon: ListChecks },
   { href: "/autopilot", label: "Autopilot", icon: Sparkles },
   { href: "/automations", label: "Automations", icon: Workflow },
   { href: "/qualification", label: "Qualification", icon: ListChecks },
@@ -79,6 +88,7 @@ export const WORKSPACE_NAV: NavItem[] = [
 
 export const ADMIN_NAV: NavItem[] = [
   { href: "/admin", label: "Platform Overview", icon: Shield, match: "exact" },
+  { href: "/admin/ai-ops", label: "AI Ops", icon: Activity },
   { href: "/admin/workspaces", label: "Workspaces", icon: Building2 },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/usage", label: "AI Usage", icon: Cpu },
@@ -128,6 +138,12 @@ export const HOME_OUTCOME_CARDS: OutcomeCard[] = [
     title: "Write content",
     hint: "Posts, emails, or scripts in your voice",
     prefill: "Write content about ",
+  },
+  {
+    id: "attention",
+    title: "What needs me",
+    hint: "Handoffs, hot leads, and failed jobs from live data",
+    href: "/attention",
   },
   {
     id: "reports",

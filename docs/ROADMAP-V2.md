@@ -108,13 +108,13 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 ## Phase 10 — Enterprise product experience
 
-- AI Chief of Staff Home  
-- Universal command bar  
-- Outcome-based navigation  
-- Entitlements + metering  
-- Onboarding Agent configuring the workspace  
-- Hosted worker as default production topology  
-- AI Ops observability console  
+- [x] AI Chief of Staff Home  
+- [x] Universal command bar  
+- [x] Outcome-based navigation  
+- [x] Entitlements + metering  
+- [x] Onboarding Agent configuring the workspace  
+- [x] Hosted worker as default production topology  
+- [x] AI Ops observability console  
 
 ---
 

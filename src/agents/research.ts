@@ -4,6 +4,7 @@ import type { Agent } from "@/agents/types";
 import { completeStructured } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
+import { assertEntitlement, recordMeteredUsage } from "@/services/entitlements";
 import { prisma } from "@/lib/db";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
@@ -190,6 +191,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   async execute(input, ctx) {
     const parsed = researchInputSchema.parse(input);
     const maxSources = parsed.maxSources ?? 28;
+    await assertEntitlement(ctx.organisationId, "research");
     await assertWithinSpendCap(ctx.organisationId, researchAgent.estimateCostCents(parsed));
 
     const model = resolveModelForTier("cheap");
@@ -373,6 +375,15 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     });
 
     if (ranked.length) {
+      try {
+        await recordMeteredUsage({
+          organisationId: ctx.organisationId,
+          feature: "research",
+          metadata: { researchJobId: job.id },
+        });
+      } catch {
+        /* metering must not fail the research output */
+      }
       try {
         await ingestResearchJobSocialContent({
           organisationId: ctx.organisationId,

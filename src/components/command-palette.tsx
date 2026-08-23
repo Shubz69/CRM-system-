@@ -12,6 +12,12 @@ export function openCommandPalette() {
   window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT));
 }
 
+type PaletteItem = {
+  label: string;
+  href: string;
+  hint?: string;
+};
+
 export function CommandPalette() {
   const router = useRouter();
   const { data: session } = useSession();
@@ -22,20 +28,59 @@ export function CommandPalette() {
     session?.user?.isPlatformAdmin || session?.user?.role === "SUPER_ADMIN";
 
   const items = useMemo(() => {
-    const base = [...WORKSPACE_NAV, ...(isAdmin ? ADMIN_NAV : [])].map((i) => ({
-      label: i.label,
-      href: i.href,
-    }));
-    const actions = [
+    const base: PaletteItem[] = [...WORKSPACE_NAV, ...(isAdmin ? ADMIN_NAV : [])].map(
+      (i) => ({
+        label: i.label,
+        href: i.href,
+      }),
+    );
+    const actions: PaletteItem[] = [
       { label: "Test conversation (Simulator)", href: "/simulator" },
       { label: "Upload knowledge", href: "/knowledge" },
       { label: "Create automation", href: "/automations" },
       { label: "Open inbox", href: "/inbox" },
+      { label: "Needs attention", href: "/attention" },
+      { label: "Go-live checklist", href: "/settings/go-live" },
+      { label: "Setup Assistant", href: "/setup" },
     ];
-    const all = [...actions, ...base];
-    const q = query.trim().toLowerCase();
-    if (!q) return all.slice(0, 12);
-    return all.filter((i) => i.label.toLowerCase().includes(q)).slice(0, 12);
+    if (isAdmin) {
+      actions.push({ label: "AI Ops console", href: "/admin/ai-ops" });
+    }
+
+    const q = query.trim();
+    const qLower = q.toLowerCase();
+
+    // Universal Ask: any query that looks like a question or starts with ask:
+    const askItems: PaletteItem[] = [];
+    if (q.length >= 2) {
+      const askText = qLower.startsWith("ask:") ? q.slice(4).trim() : q;
+      if (askText) {
+        askItems.push({
+          label: `Ask: ${askText}`,
+          href: `/ask?q=${encodeURIComponent(askText)}`,
+          hint: "Start on Home with this request",
+        });
+      }
+    } else {
+      askItems.push({
+        label: "Ask on Home…",
+        href: "/ask",
+        hint: "Type a request or navigate",
+      });
+    }
+
+    const all = [...askItems, ...actions, ...base];
+    if (!qLower || qLower.startsWith("ask:")) {
+      return all.slice(0, 14);
+    }
+    return all
+      .filter(
+        (i) =>
+          i.label.toLowerCase().includes(qLower) ||
+          i.href.toLowerCase().includes(qLower) ||
+          i.label.startsWith("Ask:"),
+      )
+      .slice(0, 14);
   }, [isAdmin, query]);
 
   useEffect(() => {
@@ -70,10 +115,18 @@ export function CommandPalette() {
         <input
           autoFocus
           className="input rounded-none border-0 border-b border-[var(--border)]"
-          placeholder="Search pages and actions…"
-          aria-label="Search pages and actions"
+          placeholder="Ask something, or jump to a page…"
+          aria-label="Ask or search pages"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && items[0]) {
+              e.preventDefault();
+              setOpen(false);
+              setQuery("");
+              router.push(items[0].href);
+            }
+          }}
         />
         <ul className="max-h-80 overflow-y-auto p-2">
           {items.length === 0 && (
@@ -90,13 +143,16 @@ export function CommandPalette() {
                   router.push(item.href);
                 }}
               >
-                {item.label}
+                <span className="block font-medium">{item.label}</span>
+                {item.hint && (
+                  <span className="block text-xs text-[var(--muted)]">{item.hint}</span>
+                )}
               </button>
             </li>
           ))}
         </ul>
         <p className="border-t border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
-          Esc to close · Enter to open
+          Esc to close · Enter opens top result · prefix with ask: for Home
         </p>
       </div>
       <button

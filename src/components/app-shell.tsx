@@ -216,7 +216,7 @@ export function AppShell({
 
           {!collapsed && (
             <p className="mt-5 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
-              Work
+              Intelligence
             </p>
           )}
           {collapsed && <div className="my-3 border-t border-white/10" />}

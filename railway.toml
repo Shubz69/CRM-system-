@@ -1,0 +1,16 @@
+# Railway — hosted worker (default production topology for Ask)
+# Deploy from the same Git repo as the Vercel web app.
+# Docs: docs/WORKER.md · docs/ENTERPRISE-OS.md
+
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm ci && npx prisma generate"
+
+[deploy]
+startCommand = "npm run worker"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Required env (set in Railway dashboard):
+# DATABASE_URL, DIRECT_URL, REDIS_URL, ENCRYPTION_KEY,
+# plus AI / source keys as needed (same as Vercel).

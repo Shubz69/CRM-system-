@@ -70,8 +70,10 @@ Organisation, User, OrganisationMember, Contact*, Conversation*, Message*, Pipel
 
 ### Phase 10
 
-- `Entitlement`, `UsageMeter`  
-- Outbox `DomainEvent` table if needed  
+- `Entitlement`, `UsageMeter` ✅  
+- `Organisation.entitlementSnapshot` ✅  
+- Outbox `DomainEvent` table if needed (deferred)  
+- `Goal`, `Kpi`, `Initiative` (deferred — CoS uses attention counts today)  
 
 ---
 

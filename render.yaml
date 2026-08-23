@@ -1,0 +1,16 @@
+# Render — hosted BullMQ worker for Agent Desk
+# https://render.com — Web Service is the Next app (or use Vercel);
+# this Blueprint defines the always-on worker.
+
+services:
+  - type: worker
+    name: agent-desk-worker
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npx prisma generate
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Sync these from the Vercel project / dashboard:
+      # DATABASE_URL, DIRECT_URL, REDIS_URL, ENCRYPTION_KEY, AI keys…

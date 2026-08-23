@@ -146,6 +146,8 @@ model Organisation {
   isPlatform     Boolean  @default(false)
   status         OrganisationStatus @default(ACTIVE)
   plan           String   @default("standard")
+  /// Snapshot of resolved plan entitlements (capability → enabled). Config, not billing truth.
+  entitlementSnapshot Json @default("{}")
   autopilotMode  AutopilotMode @default(LIVE)
   /// Capability modes: automatic | approval_required | disabled
   autopilotConfig Json    @default("{}")
@@ -233,6 +235,8 @@ model Organisation {
   agentVersionCandidates AgentVersionCandidate[]
   evalSuites           EvalSuite[]
   evalRuns             EvalRun[]
+  entitlements         Entitlement[]
+  usageMeters          UsageMeter[]
 }
 
 model User {
@@ -2463,5 +2467,47 @@ model EvalRun {
   @@index([organisationId, createdAt])
   @@index([organisationId, suiteKey, createdAt])
   @@index([candidateId])
+}
+
+// ─── Phase 10 — Enterprise entitlements + metering ──────────────────────────
+
+/// Feature entitlement for a workspace. Prefer syncing from plan; rows override plan defaults.
+model Entitlement {
+  id             String   @id @default(cuid())
+  organisationId String
+  /// e.g. research | imaging | social_listening | automations | content_publish | learning
+  capability     String
+  enabled        Boolean  @default(true)
+  /// Optional soft limit (e.g. research jobs / month). null = unlimited when enabled.
+  limitValue     Int?
+  /// Notes for operators — not shown as fake usage.
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, capability])
+  @@index([organisationId, enabled])
+}
+
+/// Period meter counters — quantity only from real UsageRecord / AiExecution rollups.
+model UsageMeter {
+  id             String   @id @default(cuid())
+  organisationId String
+  /// Matches Entitlement.capability or ledger feature keys.
+  meterKey       String
+  /// UTC month start (YYYY-MM-01) for monthly meters.
+  periodStart    DateTime
+  quantity       Int      @default(0)
+  /// Source of last sync: usage_record | ai_execution | manual
+  source         String   @default("usage_record")
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, meterKey, periodStart])
+  @@index([organisationId, periodStart])
 }
 
