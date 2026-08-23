@@ -2,7 +2,12 @@ import { NextRequest } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
 import { BookingStatus } from "@prisma/client";
 import { getBookingProvider } from "@/adapters/booking";
-import { getEnv, assertWebhookSecretsConfigured } from "@/lib/env";
+import { getEnv, assertProductionSecretsConfigured } from "@/lib/env";
+import {
+  assertWebhookTimestampFresh,
+  readWebhookTimestampHeader,
+  WebhookReplayError,
+} from "@/lib/webhook-replay";
 import { prisma } from "@/lib/db";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
@@ -41,11 +46,22 @@ export async function handleBookingWebhook(
   options?: { providerLabel?: string; normalizePayload?: (raw: unknown) => unknown },
 ) {
   try {
-    assertWebhookSecretsConfigured();
+    assertProductionSecretsConfigured();
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     const providerLabel = options?.providerLabel || "booking";
     if (!rateLimit(`${providerLabel}:${ip}`, 60, 60_000)) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
+    }
+
+    try {
+      assertWebhookTimestampFresh({
+        timestamp: readWebhookTimestampHeader(req.headers),
+      });
+    } catch (error) {
+      if (error instanceof WebhookReplayError) {
+        return Response.json({ error: error.message }, { status: 401 });
+      }
+      throw error;
     }
 
     const env = getEnv();

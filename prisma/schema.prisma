@@ -342,12 +342,18 @@ model Integration {
 }
 
 model IntegrationCredential {
-  id            String   @id @default(cuid())
-  integrationId String
-  keyName       String
-  encryptedValue String  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String    @id @default(cuid())
+  integrationId  String
+  keyName        String
+  encryptedValue String    @db.Text
+  /// UNKNOWN | HEALTHY | EXPIRED | REVOKED | ERROR
+  healthStatus   String    @default("UNKNOWN")
+  healthNote     String?
+  lastVerifiedAt DateTime?
+  /// Operator-recorded rotation time — never auto-rewrites ciphertext.
+  lastRotatedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
@@ -402,12 +408,17 @@ model SocialConnection {
 }
 
 model SocialConnectionCredential {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   socialConnectionId String
   keyName            String
-  encryptedValue     String   @db.Text
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  encryptedValue     String    @db.Text
+  /// UNKNOWN | HEALTHY | EXPIRED | REVOKED | ERROR
+  healthStatus       String    @default("UNKNOWN")
+  healthNote         String?
+  lastVerifiedAt     DateTime?
+  lastRotatedAt      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
 

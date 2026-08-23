@@ -5,6 +5,7 @@
 import { createHash } from "crypto";
 import { Prisma, ResearchClaimKind } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { stripInjectionMarkers } from "@/lib/untrusted-content";
 
 const STOP = new Set([
   "the",
@@ -100,7 +101,7 @@ export function isExcerptGrounded(input: {
   }
   const normalisedBody = normalizeEvidenceText(body);
 
-  const excerpt = input.evidenceExcerpt?.trim();
+  const excerpt = stripInjectionMarkers(input.evidenceExcerpt?.trim() || "");
   if (excerpt && excerpt.length >= 12) {
     const needle = normalizeEvidenceText(excerpt);
     if (needle.length >= 12 && normalisedBody.includes(needle)) {

@@ -1,5 +1,6 @@
 import { SocialPlatform } from "@prisma/client";
 import { getEnv } from "@/lib/env";
+import { safeFetch } from "@/lib/safe-fetch";
 import type {
   ExchangeCodeResult,
   PublishContent,
@@ -151,7 +152,7 @@ async function publish(
     return { ok: false, error: registerJson?.message || "Failed to register LinkedIn media upload" };
   }
 
-  const mediaFileRes = await fetch(content.mediaUrl);
+  const mediaFileRes = await safeFetch(content.mediaUrl);
   if (!mediaFileRes.ok) {
     return { ok: false, error: `Could not fetch media from ${content.mediaUrl}` };
   }

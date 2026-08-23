@@ -262,6 +262,41 @@ export function assertWebhookSecretsConfigured(): void {
   }
 }
 
+const DEFAULT_ENCRYPTION_KEY =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/**
+ * Production hard-fail for secrets that must never ship as defaults.
+ * Does NOT rotate ENCRYPTION_KEY — see docs/CREDENTIAL-ROTATION.md.
+ * Call from webhook ingress and worker boot.
+ */
+export function assertProductionSecretsConfigured(): void {
+  if (!isRuntimeProduction()) return;
+  assertWebhookSecretsConfigured();
+  const env = getEnv();
+  if (env.ENCRYPTION_KEY === DEFAULT_ENCRYPTION_KEY) {
+    throw new Error(
+      "ENCRYPTION_KEY is still the default. Generate a unique 64-hex key before storing secrets. See docs/CREDENTIAL-ROTATION.md — do not rewrite the key against existing ciphertext without a migration plan.",
+    );
+  }
+  const auth =
+    process.env.NEXTAUTH_SECRET ||
+    process.env.AUTH_SECRET ||
+    env.NEXTAUTH_SECRET ||
+    env.AUTH_SECRET ||
+    "";
+  if (
+    !auth ||
+    auth === "dev-only-auth-secret-change-me" ||
+    auth === "build-only-auth-secret-not-for-runtime" ||
+    auth.length < 16
+  ) {
+    throw new Error(
+      "AUTH_SECRET / NEXTAUTH_SECRET must be set to a strong non-default value in production",
+    );
+  }
+}
+
 export function resetEnvCache(): void {
   cached = null;
 }

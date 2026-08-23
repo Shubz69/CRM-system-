@@ -38,6 +38,16 @@ import { pruneAgentArtifactsAllOrganisations } from "@/services/agent-retention"
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { recordFailedJob } from "@/services/failed-jobs";
+import { assertProductionSecretsConfigured } from "@/lib/env";
+
+try {
+  assertProductionSecretsConfigured();
+} catch (error) {
+  logger.error("Worker refused to start — production secrets not configured", {
+    message: error instanceof Error ? error.message : "unknown",
+  });
+  process.exit(1);
+}
 
 const workers: Worker[] = [];
 const intervals: NodeJS.Timeout[] = [];

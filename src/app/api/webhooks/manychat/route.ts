@@ -1,8 +1,13 @@
 import { createHash } from "crypto";
 import { NextRequest } from "next/server";
-import { assertWebhookSecretsConfigured } from "@/lib/env";
+import { assertProductionSecretsConfigured } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
+import {
+  assertWebhookTimestampFresh,
+  readWebhookTimestampHeader,
+  WebhookReplayError,
+} from "@/lib/webhook-replay";
 import { manychatWebhookSchema } from "@/schemas/webhook";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { prisma } from "@/lib/db";
@@ -11,10 +16,21 @@ import { recordUsage } from "@/services/usage";
 
 export async function POST(req: NextRequest) {
   try {
-    assertWebhookSecretsConfigured();
+    assertProductionSecretsConfigured();
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     if (!rateLimit(`manychat:${ip}`, 120, 60_000)) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
+    }
+
+    try {
+      assertWebhookTimestampFresh({
+        timestamp: readWebhookTimestampHeader(req.headers),
+      });
+    } catch (error) {
+      if (error instanceof WebhookReplayError) {
+        return Response.json({ error: error.message }, { status: 401 });
+      }
+      throw error;
     }
 
     const secretHeader =

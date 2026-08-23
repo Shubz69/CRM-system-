@@ -1,0 +1,21 @@
+title = "Agent Desk gitleaks config"
+
+[[allowlists]]
+description = "Local examples and documented placeholders — never real production secrets"
+paths = [
+  '''(.*?)(\.env\.example)$''',
+  '''(.*?)docs/.*''',
+  '''(.*?)tests/.*''',
+  '''(.*?)prisma/seed.*''',
+]
+
+[[allowlists]]
+description = "Documented default ENCRYPTION_KEY placeholder in env schema"
+regexes = [
+  '''0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
+  '''dev-manychat-webhook-secret''',
+  '''dev-booking-webhook-secret''',
+  '''dev-only-auth-secret-change-me''',
+  '''build-only-auth-secret-not-for-runtime''',
+  '''ci-auth-secret-change-me-please''',
+]

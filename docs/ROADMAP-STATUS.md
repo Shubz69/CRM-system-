@@ -4,6 +4,8 @@ Incremental Agent Desk AI Operating System. Prefer migrations over `db push`. Ne
 
 Canonical checklist: [`ROADMAP-V2.md`](./ROADMAP-V2.md). Architecture: [`TARGET-ARCHITECTURE-V2.md`](./TARGET-ARCHITECTURE-V2.md). Structure overview: [`STRUCTURE-ROADMAP.md`](./STRUCTURE-ROADMAP.md).
 
+**V3:** [`V3-REALITY-AUDIT.md`](./V3-REALITY-AUDIT.md) · [`ROADMAP-V3.md`](./ROADMAP-V3.md) — do not treat V2 “done” as production-verified.
+
 ---
 
 ## Done (Phase 0 → 10)
