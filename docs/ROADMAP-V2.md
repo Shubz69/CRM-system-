@@ -2,6 +2,8 @@
 
 Incremental vertical slices. Keep `main` buildable. Prefer migrations over `db push`. Never fake production data.
 
+**Also see:** [`ROADMAP-STATUS.md`](./ROADMAP-STATUS.md) (done vs open) · [`STRUCTURE-ROADMAP.md`](./STRUCTURE-ROADMAP.md) (layers + runtime + nav)
+
 ---
 
 ## Phase 0 — Audit ✅
