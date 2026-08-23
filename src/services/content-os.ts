@@ -275,6 +275,19 @@ export async function requestPublish(input: {
     throw new Error(policy.reason || "Publishing is disabled by policy");
   }
 
+  if (input.socialConnectionId) {
+    const connection = await prisma.socialConnection.findFirst({
+      where: {
+        id: input.socialConnectionId,
+        organisationId: input.organisationId,
+      },
+      select: { id: true },
+    });
+    if (!connection) {
+      throw new Error("Social connection not found for this workspace");
+    }
+  }
+
   const status =
     policy.effect === "require_approval"
       ? PublishingJobStatus.PENDING_APPROVAL

@@ -5,7 +5,10 @@
  */
 
 import { prisma } from "@/lib/db";
-import { getOrganisationPeriodSpendCents } from "@/services/ai-spend-gate";
+import {
+  getOrganisationPeriodSpendCents,
+  getOrganisationSpendBreakdown,
+} from "@/services/ai-spend-gate";
 
 export type PlanId = "standard" | "pro" | "enterprise";
 
@@ -291,6 +294,7 @@ export async function getEntitlementsDashboard(organisationId: string) {
     where: { organisationId },
   });
   const spentCents = await getOrganisationPeriodSpendCents(organisationId);
+  const breakdown = await getOrganisationSpendBreakdown(organisationId);
 
   const meters: Record<string, { quantity: number; limit: number | null }> = {};
   for (const [cap, cfg] of Object.entries(resolved.capabilities)) {
@@ -310,6 +314,7 @@ export async function getEntitlementsDashboard(organisationId: string) {
         budget?.monthlyCapCents == null
           ? "No monthly AI spend cap configured."
           : `Estimated AI spend this UTC month (from AiExecution ledger).`,
+      breakdown,
     },
     meters,
   };

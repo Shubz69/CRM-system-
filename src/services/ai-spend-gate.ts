@@ -93,3 +93,76 @@ export async function assertWithinSpendCap(
 
   return { ok: true, spentCents, capCents };
 }
+
+export type SpendBreakdownRow = {
+  provider: string;
+  model: string;
+  taskType: string;
+  /** Sum of estimatedCost in USD from AiExecution — null costs omitted. */
+  estimatedCostUsd: number;
+  estimatedCostCents: number;
+  executionCount: number;
+};
+
+/**
+ * Provider/model/taskType rollup for the current UTC month.
+ * Only rows with non-null estimatedCost contribute — never invent rates.
+ */
+export async function getOrganisationSpendBreakdown(
+  organisationId: string,
+): Promise<{
+  periodStart: Date;
+  rows: SpendBreakdownRow[];
+  totalCents: number;
+  omittedNullCostCount: number;
+  message: string;
+}> {
+  const periodStart = startOfUtcMonth();
+  const [grouped, nullCostCount] = await Promise.all([
+    prisma.aiExecution.groupBy({
+      by: ["provider", "model", "taskType"],
+      where: {
+        organisationId,
+        createdAt: { gte: periodStart },
+        estimatedCost: { not: null },
+      },
+      _sum: { estimatedCost: true },
+      _count: { _all: true },
+    }),
+    prisma.aiExecution.count({
+      where: {
+        organisationId,
+        createdAt: { gte: periodStart },
+        estimatedCost: null,
+      },
+    }),
+  ]);
+
+  const rows: SpendBreakdownRow[] = grouped
+    .map((g) => {
+      const usd = g._sum.estimatedCost ?? 0;
+      return {
+        provider: g.provider,
+        model: g.model,
+        taskType: g.taskType,
+        estimatedCostUsd: usd,
+        estimatedCostCents: usdToCents(usd),
+        executionCount: g._count._all,
+      };
+    })
+    .sort((a, b) => b.estimatedCostCents - a.estimatedCostCents);
+
+  const totalCents = rows.reduce((sum, r) => sum + r.estimatedCostCents, 0);
+
+  return {
+    periodStart,
+    rows,
+    totalCents,
+    omittedNullCostCount: nullCostCount,
+    message:
+      rows.length === 0
+        ? "No AiExecution rows with estimatedCost this UTC month — breakdown hidden."
+        : `Ledger rollup from ${rows.reduce((n, r) => n + r.executionCount, 0)} priced execution(s)` +
+          (nullCostCount > 0 ? `; ${nullCostCount} row(s) omitted (null estimatedCost).` : "."),
+  };
+}

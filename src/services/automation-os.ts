@@ -260,6 +260,30 @@ export async function decideApprovalRequest(input: {
       ? ApprovalRequestStatus.APPROVED
       : ApprovalRequestStatus.REJECTED;
 
+  const payload = existing.payload as {
+    context?: {
+      organisationId: string;
+      contactId?: string;
+      conversationId?: string;
+      leadId?: string;
+      triggerType: string;
+      payload?: Record<string, unknown>;
+    };
+    actions?: Array<{ type: string; [key: string]: unknown }>;
+  };
+
+  if (
+    status === ApprovalRequestStatus.APPROVED &&
+    payload?.context &&
+    Array.isArray(payload.actions)
+  ) {
+    if (payload.context.organisationId !== input.organisationId) {
+      throw new Error(
+        "Approval payload organisation mismatch — refusing to execute cross-tenant actions",
+      );
+    }
+  }
+
   await prisma.approvalRequest.update({
     where: { id: existing.id },
     data: {
@@ -271,24 +295,15 @@ export async function decideApprovalRequest(input: {
   });
 
   let actionsRun = 0;
-  if (status === ApprovalRequestStatus.APPROVED) {
-    const payload = existing.payload as {
-      context?: {
-        organisationId: string;
-        contactId?: string;
-        conversationId?: string;
-        leadId?: string;
-        triggerType: string;
-        payload?: Record<string, unknown>;
-      };
-      actions?: Array<{ type: string; [key: string]: unknown }>;
-    };
-    if (payload?.context && Array.isArray(payload.actions)) {
-      const { executeAction } = await import("@/services/automations");
-      for (const action of payload.actions) {
-        await executeAction(action as never, payload.context);
-        actionsRun += 1;
-      }
+  if (
+    status === ApprovalRequestStatus.APPROVED &&
+    payload?.context &&
+    Array.isArray(payload.actions)
+  ) {
+    const { executeAction } = await import("@/services/automations");
+    for (const action of payload.actions) {
+      await executeAction(action as never, payload.context);
+      actionsRun += 1;
     }
   }
 

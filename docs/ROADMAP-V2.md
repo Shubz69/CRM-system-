@@ -121,8 +121,11 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 ## Parallel continuous work
 
 - Isolation + permission tests for every new domain  
+  - [x] Learning / Entitlements / Approvals (+ publish connection org check) — `tests/learning-entitlements-approvals.isolation.test.ts`, `tests/content-publish-isolation.test.ts`
 - Cost intelligence improvements  
+  - [x] `getOrganisationSpendBreakdown` from AiExecution ledger (wired into entitlements dashboard)
 - Security reviews on tool fetch / publish / messaging  
+  - [x] Approval payload org assert before execute; `requestPublish` socialConnection org check
 - Documentation updates per phase  
 
 ---

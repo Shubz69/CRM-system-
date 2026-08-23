@@ -26,3 +26,4 @@
 - No invented uptime %, success rates, or usage gauges without ledger rows
 - Queue depths come from BullMQ when Redis is up; otherwise `ok: false`
 - CoS briefing only lists counts from live inbox / pipeline / approvals / failed jobs
+- `GET /api/entitlements` → `spend.breakdown` is an `AiExecution` groupBy (provider/model/taskType) for the UTC month; rows with null `estimatedCost` are omitted, never estimated from hardcoded rates
