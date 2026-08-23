@@ -460,7 +460,8 @@ async function testRedis(): Promise<{ ok: boolean; message: string }> {
     // Prove BullMQ can open the same queue the worker uses — not merely that the URL parses.
     // Redis PING above already verified the client; waitUntilReady proves the queue wiring.
     const { Queue } = await import("bullmq");
-    const followUpsQueue = new Queue("follow-ups", { connection: redis });
+    const { getBullMqPrefix } = await import("@/jobs/redis");
+    const followUpsQueue = new Queue("follow-ups", { connection: redis, prefix: getBullMqPrefix() });
     queue = followUpsQueue;
     await followUpsQueue.waitUntilReady();
 

@@ -17,6 +17,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     ".data/**",
+    "_to_delete/**",
+    "scripts/**",
   ]),
 ]);
 

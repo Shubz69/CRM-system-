@@ -87,11 +87,26 @@ export default function AdminAiOpsPage() {
               {data.workerRequiredForAsk && (
                 <span className="badge">Hosted worker required for Ask</span>
               )}
+              {"queuePrefix" in data && data.queuePrefix != null && (
+                <span className="badge">prefix:{String(data.queuePrefix)}</span>
+              )}
             </div>
             <p className="text-sm text-[var(--muted)]">{data.message}</p>
             <p className="text-sm">
               Open failed jobs: <strong>{data.openFailedJobs}</strong>
             </p>
+            {"topology" in data && data.topology != null && (
+              <p className="text-xs text-[var(--muted)]">
+                Topology: 1 BullMQ worker (agent-runs); follow-ups/retention via Postgres
+                intervals; cron only if CRON_FALLBACK_ENABLED.
+              </p>
+            )}
+            {"queueOps" in data && data.queueOps != null && (
+              <p className="text-xs text-[var(--muted)]">
+                Process queue ops (not Upstash billing): refresh loads cached Redis depths
+                (30s). See docs/REDIS-COST.md.
+              </p>
+            )}
           </section>
 
           <section className="space-y-2">

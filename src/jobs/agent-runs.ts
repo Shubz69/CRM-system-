@@ -1,9 +1,17 @@
 import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { getAgentRunsQueue, type JobsOptions } from "@/jobs/queues";
-import { pingRedis, redisRequired } from "@/jobs/redis";
+import { pingRedis, redisRequired, toSafeBullMqJobId} from "@/jobs/redis";
+import { recordQueueOp } from "@/services/queue-ops";
 
-export const agentRunJobNameSchema = z.enum(["sleep-test", "noop", "agent-framework-run"]);
+/** Agent-runs queue also carries rare on-demand maintenance (single worker topology). */
+export const agentRunJobNameSchema = z.enum([
+  "sleep-test",
+  "noop",
+  "agent-framework-run",
+  "agent-retention-sweep",
+  "knowledge-embedding-backfill",
+]);
 export type AgentRunJobName = z.infer<typeof agentRunJobNameSchema>;
 
 export const sleepTestPayloadSchema = z.object({
@@ -50,6 +58,10 @@ export async function enqueueAgentRunJob(input: {
   }
 
   const queue = getAgentRunsQueue();
+  const attempts = Math.min(
+    typeof input.opts?.attempts === "number" ? input.opts.attempts : 2,
+    3,
+  );
   const job = await queue.add(
     input.name,
     {
@@ -58,11 +70,16 @@ export async function enqueueAgentRunJob(input: {
       enqueuedAt: new Date().toISOString(),
     },
     {
-      jobId: undefined,
-      ...input.opts,
+      ...(input.opts ?? {}),
+      jobId:
+        typeof input.opts?.jobId === "string" && input.opts.jobId.length > 0
+          ? toSafeBullMqJobId(input.opts.jobId)
+          : undefined,
+      attempts,
     },
   );
 
+  recordQueueOp("added");
   logger.info("Enqueued agent-runs job", {
     jobId: job.id,
     name: input.name,

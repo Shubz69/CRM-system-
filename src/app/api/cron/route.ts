@@ -3,9 +3,11 @@ import { processDueFollowUps } from "@/workers/followups";
 import { aggregateDailyInsights } from "@/services/insights-aggregation";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { cronFallbackEnabled } from "@/jobs/redis";
 
 /**
- * Vercel Cron entrypoint for follow-ups + daily insights when a long-running worker is unavailable.
+ * Vercel Cron fallback — OFF by default when a hosted worker owns sweeps.
+ * Set CRON_FALLBACK_ENABLED=true only if the worker process is unavailable.
  * Protect with CRON_SECRET (Authorization: Bearer …).
  */
 export async function GET(req: NextRequest) {
@@ -13,6 +15,15 @@ export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") || "";
   if (secret && auth !== `Bearer ${secret}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!cronFallbackEnabled()) {
+    return Response.json({
+      ok: true,
+      skipped: true,
+      reason:
+        "CRON_FALLBACK_ENABLED is false — hosted worker owns follow-ups and insights. Set CRON_FALLBACK_ENABLED=true only as an explicit fallback.",
+    });
   }
 
   try {

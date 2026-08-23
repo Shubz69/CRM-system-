@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { logger } from "@/lib/logger";
-import { getMaintenanceQueue, type JobsOptions } from "@/jobs/queues";
+import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { assertRedisAllowedFallback, pingRedis, redisRequired } from "@/jobs/redis";
+import type { JobsOptions } from "@/jobs/queues";
 
 export const maintenanceJobNameSchema = z.enum([
   "agent-retention-sweep",
@@ -23,12 +24,18 @@ const backfillPayloadSchema = z.object({
 export type RetentionJobPayload = z.infer<typeof retentionPayloadSchema>;
 export type BackfillJobPayload = z.infer<typeof backfillPayloadSchema>;
 
+/**
+ * On-demand maintenance rides the agent-runs queue (single BullMQ worker).
+ * Scheduled retention/insights do NOT use Redis — worker Postgres intervals own those.
+ * Never create hourly/minute repeatable Redis jobs.
+ */
 async function enqueueMaintenanceJob(input: {
   name: MaintenanceJobName;
   organisationId?: string;
   payload?: Record<string, unknown>;
   opts?: JobsOptions;
 }): Promise<{ jobId: string; enqueued: boolean }> {
+  const orgId = input.organisationId ?? "system";
   const ok = await pingRedis();
   if (!ok) {
     if (redisRequired()) {
@@ -39,20 +46,25 @@ async function enqueueMaintenanceJob(input: {
   }
 
   try {
-    const job = await getMaintenanceQueue().add(
-      input.name,
-      {
+    const { jobId } = await enqueueAgentRunJob({
+      name: input.name,
+      organisationId: orgId,
+      payload: {
         ...(input.organisationId ? { organisationId: input.organisationId } : {}),
         ...(input.payload ?? {}),
       },
-      input.opts,
-    );
-    logger.info("Enqueued maintenance job", {
+      opts: {
+        ...input.opts,
+        // Cap retries — runaway protection
+        attempts: Math.min(input.opts?.attempts ?? 2, 3),
+      },
+    });
+    logger.info("Enqueued on-demand maintenance via agent-runs", {
       name: input.name,
-      jobId: job.id,
+      jobId,
       organisationId: input.organisationId ?? null,
     });
-    return { jobId: job.id || "unknown", enqueued: true };
+    return { jobId, enqueued: true };
   } catch (error) {
     logger.warn("Could not enqueue maintenance job", {
       name: input.name,
@@ -64,22 +76,25 @@ async function enqueueMaintenanceJob(input: {
   }
 }
 
-/** Daily retention sweep across orgs (or a single org when organisationId set). */
+/**
+ * On-demand retention for one org (or all). Prefer the worker hourly Postgres sweep
+ * for routine work — do not schedule Redis repeatables.
+ */
 export async function enqueueAgentRetentionSweep(opts?: {
   organisationId?: string;
+  /** @deprecated Ignored — repeatable Redis schedules removed (P0). */
   schedule?: boolean;
 }): Promise<{ jobId: string; enqueued: boolean }> {
   retentionPayloadSchema.parse({ organisationId: opts?.organisationId });
+  if (opts?.schedule) {
+    logger.info(
+      "enqueueAgentRetentionSweep({ schedule: true }) ignored — retention uses worker Postgres interval",
+    );
+    return { jobId: "not-scheduled", enqueued: false };
+  }
   return enqueueMaintenanceJob({
     name: "agent-retention-sweep",
     organisationId: opts?.organisationId,
-    opts: opts?.schedule
-      ? {
-          // Hourly is enough; retention windows are measured in days.
-          repeat: { every: 60 * 60 * 1000 },
-          jobId: "agent-retention-sweep-hourly",
-        }
-      : undefined,
   });
 }
 

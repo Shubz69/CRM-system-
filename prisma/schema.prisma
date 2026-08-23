@@ -237,6 +237,11 @@ model Organisation {
   evalRuns             EvalRun[]
   entitlements         Entitlement[]
   usageMeters          UsageMeter[]
+  agentMissions        AgentMission[]
+  missionTasks         MissionTask[]
+  missionCheckpoints   MissionCheckpoint[]
+  missionArtifacts     MissionArtifact[]
+  missionOutcomes      MissionOutcome[]
 }
 
 model User {
@@ -1465,6 +1470,9 @@ model OrganisationAgentRetention {
 model AgentRun {
   id                      String                  @id @default(cuid())
   organisationId          String
+  /// Optional parent Mission — AgentRun remains the execution trace (not duplicated as Mission).
+  missionId               String?
+  missionTaskId           String?
   /// Null when triggered by system/schedule (recurring runs later).
   userId                  String?
   /// user | system | schedule
@@ -1499,6 +1507,8 @@ model AgentRun {
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
   referenceAsset Asset?       @relation("AgentRunReferenceAsset", fields: [referenceAssetId], references: [id], onDelete: SetNull)
+  mission        AgentMission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  missionTask    MissionTask?  @relation(fields: [missionTaskId], references: [id], onDelete: SetNull)
   steps          AgentStep[]
   memoryEpisodes MemoryEpisode[]
 
@@ -1507,6 +1517,8 @@ model AgentRun {
   @@index([organisationId, partialResultsRetention, createdAt])
   @@index([bullJobId])
   @@index([referenceAssetId])
+  @@index([missionId])
+  @@index([missionTaskId])
 }
 
 model AgentStep {
@@ -1559,6 +1571,203 @@ model ToolCall {
   @@index([organisationId, agentStepId])
   @@index([organisationId, payloadClearedAt, createdAt])
   @@index([agentStepId, createdAt])
+}
+
+// ─── Phase 12 — Durable Mission runtime ─────────────────────────────────────
+// Hierarchy: Organisation → (Goal later) → Mission → Task DAG → AgentRun → Step → ToolCall
+// Never persist private chain-of-thought — only plan summaries, evidence, decisions, outcomes.
+// Mutations use transactions so Phase 12B outbox rows can attach atomically.
+
+enum MissionStatus {
+  QUEUED
+  PLANNING
+  RUNNING
+  WAITING
+  WAITING_APPROVAL
+  BLOCKED
+  RETRYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum MissionTaskStatus {
+  PENDING
+  READY
+  RUNNING
+  WAITING
+  WAITING_APPROVAL
+  BLOCKED
+  RETRYING
+  COMPLETED
+  FAILED
+  CANCELLED
+  SKIPPED
+}
+
+enum MissionErrorClass {
+  NONE
+  TRANSIENT
+  RATE_LIMIT
+  TIMEOUT
+  TOOL_FAILED
+  PROVIDER_OUTAGE
+  OAUTH_EXPIRED
+  BUDGET
+  PERMISSION
+  VALIDATION
+  DEPENDENCY
+  CANCELLED
+  UNKNOWN
+}
+
+/// Durable multi-step mission. Survives worker restart / Redis loss (state in Postgres).
+model AgentMission {
+  id                 String        @id @default(cuid())
+  organisationId     String
+  /// Optional Goal link (Phase 13) — nullable until Goal table exists.
+  goalId             String?
+  createdByUserId    String?
+  title              String
+  /// Operational objective summary — not private reasoning.
+  objectiveSummary   String        @db.Text
+  status             MissionStatus @default(QUEUED)
+  priority           Int           @default(100)
+  planSummary        String?       @db.Text
+  budgetCents        Int?
+  spentCents         Int           @default(0)
+  deadlineAt         DateTime?
+  /// Opaque cursor for resume after crash (task id + attempt).
+  resumeCursor       Json?
+  lastErrorClass     MissionErrorClass @default(NONE)
+  lastErrorMessage   String?       @db.Text
+  /// Decision summary only — never chain-of-thought.
+  decisionSummary    String?       @db.Text
+  confidence         Float?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  cancelledAt        DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  organisation Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  tasks        MissionTask[]
+  checkpoints  MissionCheckpoint[]
+  artifacts    MissionArtifact[]
+  outcomes     MissionOutcome[]
+  agentRuns    AgentRun[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, deadlineAt])
+  @@index([goalId])
+}
+
+model MissionTask {
+  id                 String            @id @default(cuid())
+  organisationId     String
+  missionId          String
+  /// Stable key within mission for idempotent retries.
+  idempotencyKey     String
+  title              String
+  description        String?           @db.Text
+  status             MissionTaskStatus @default(PENDING)
+  priority           Int               @default(100)
+  attempt            Int               @default(0)
+  maxAttempts        Int               @default(3)
+  timeoutMs          Int               @default(300000)
+  deadlineAt         DateTime?
+  budgetCents        Int?
+  spentCents         Int               @default(0)
+  assignedAgent      String?
+  assignedAgentVersion String?
+  checkpointRef      String?
+  errorClass         MissionErrorClass @default(NONE)
+  lastError          String?           @db.Text
+  /// Operational result summary — not private reasoning.
+  resultSummary      String?           @db.Text
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  mission      AgentMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  dependsOn    MissionTaskDependency[] @relation("TaskDependsOn")
+  dependedBy   MissionTaskDependency[] @relation("TaskDependedBy")
+  agentRuns    AgentRun[]
+
+  @@unique([missionId, idempotencyKey])
+  @@index([organisationId, missionId, status])
+  @@index([organisationId, status, priority])
+}
+
+/// DAG edge: taskId cannot start until dependsOnTaskId is COMPLETED.
+model MissionTaskDependency {
+  id               String   @id @default(cuid())
+  organisationId   String
+  missionId        String
+  taskId           String
+  dependsOnTaskId  String
+  createdAt        DateTime @default(now())
+
+  task        MissionTask @relation("TaskDependsOn", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn   MissionTask @relation("TaskDependedBy", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([missionId])
+  @@index([organisationId, missionId])
+}
+
+model MissionCheckpoint {
+  id             String   @id @default(cuid())
+  organisationId String
+  missionId      String
+  taskId         String?
+  /// Opaque resume payload (task ids, attempt, evidence refs) — not chain-of-thought.
+  payload        Json
+  label          String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  mission      AgentMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, missionId, createdAt])
+}
+
+model MissionArtifact {
+  id             String   @id @default(cuid())
+  organisationId String
+  missionId      String
+  taskId         String?
+  kind           String
+  /// URI or storage key — content may be untrusted; treat as data.
+  uri            String?
+  /// Redacted metadata / citations / evidence refs only.
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  mission      AgentMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, missionId])
+}
+
+model MissionOutcome {
+  id               String   @id @default(cuid())
+  organisationId   String
+  missionId        String
+  /// success | partial | failed | cancelled
+  kind             String
+  summary          String   @db.Text
+  confidence       Float?
+  evaluationNotes  String?  @db.Text
+  metrics          Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  mission      AgentMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, missionId])
 }
 
 

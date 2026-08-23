@@ -3,6 +3,7 @@
  * Fail CI if a real .env file is tracked by git.
  * .env.example is allowed.
  */
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { execSync } = require("child_process");
 
 let tracked = "";

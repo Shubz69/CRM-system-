@@ -5,6 +5,7 @@
  */
 
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
 import {
   getOrganisationPeriodSpendCents,
   getOrganisationSpendBreakdown,
@@ -222,7 +223,7 @@ export async function recordMeteredUsage(input: {
       feature: input.feature,
       quantity,
       provider: input.provider,
-      metadata: input.metadata ?? {},
+      metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
     },
   });
 

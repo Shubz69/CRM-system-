@@ -1,37 +1,23 @@
 import { logger } from "@/lib/logger";
-import { getFollowUpQueue, type JobsOptions } from "@/jobs/queues";
-import { assertRedisAllowedFallback, pingRedis, redisRequired } from "@/jobs/redis";
+import type { JobsOptions } from "@/jobs/queues";
+import { assertRedisAllowedFallback, redisRequired } from "@/jobs/redis";
 
 /**
- * Enqueue the periodic follow-up sweep. Next.js must only enqueue — never run
- * the sweep inside an HTTP handler for production workloads.
+ * Follow-up sweeps are authoritative on the hosted worker via a Postgres
+ * setInterval — they do NOT use BullMQ (P0 Redis cost fix).
+ *
+ * This enqueue is intentionally a no-op that never creates repeatable Redis jobs.
+ * Prefer processDueFollowUps on the worker; Vercel cron only when CRON_FALLBACK_ENABLED=true.
  */
 export async function enqueueFollowUpCheck(opts?: JobsOptions): Promise<{ enqueued: boolean }> {
-  const ok = await pingRedis();
-  if (!ok) {
-    if (redisRequired()) {
-      throw new Error("Cannot enqueue follow-up job: Redis is required and unavailable");
-    }
-    assertRedisAllowedFallback();
+  void opts;
+  logger.info(
+    "enqueueFollowUpCheck is a no-op — follow-ups run on the worker Postgres sweep (or CRON_FALLBACK_ENABLED)",
+  );
+  if (redisRequired()) {
+    // Production: worker owns the sweep; do not create Redis traffic.
     return { enqueued: false };
   }
-
-  try {
-    await getFollowUpQueue().add(
-      "process-due-followups",
-      {},
-      {
-        repeat: { every: 60_000 },
-        ...opts,
-      },
-    );
-    return { enqueued: true };
-  } catch (error) {
-    logger.warn("Could not enqueue follow-up job", {
-      message: error instanceof Error ? error.message : "unknown",
-    });
-    if (redisRequired()) throw error;
-    assertRedisAllowedFallback();
-    return { enqueued: false };
-  }
+  assertRedisAllowedFallback();
+  return { enqueued: false };
 }

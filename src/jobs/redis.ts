@@ -1,31 +1,125 @@
+/**
+ * Redis / BullMQ connection helpers.
+ * Never log REDIS_URL or tokens.
+ *
+ * P0 cost controls:
+ * - Dev/test must not hit Upstash unless ALLOW_REMOTE_REDIS_IN_DEV=true
+ * - pingRedis uses a short-lived cache; does not open a new connection every call when shared exists
+ * - Environment isolation uses BullMQ's native `prefix` option (never put ":" in queue names)
+ */
+
 import IORedis, { type RedisOptions } from "ioredis";
 import { logger } from "@/lib/logger";
 import { getRuntimeMode, isProductionRuntime } from "@/lib/runtime";
 
 let shared: IORedis | null = null;
+let lastPingAt = 0;
+let lastPingOk = false;
+const PING_CACHE_MS = 5_000;
+
+export class RemoteRedisInDevError extends Error {
+  readonly code = "REMOTE_REDIS_IN_DEV";
+  constructor(message: string) {
+    super(message);
+    this.name = "RemoteRedisInDevError";
+  }
+}
 
 /**
  * Accept a real redis:// / rediss:// URL.
  * Also recovers the common mistake of pasting a full `redis-cli --tls -u …` command.
+ * Default is local Docker Redis — never Upstash.
  */
 export function getRedisUrl(): string {
   const raw = (process.env.REDIS_URL || "redis://localhost:6379").trim();
   const embedded = raw.match(/rediss?:\/\/\S+/i);
   let url = embedded ? embedded[0].replace(/[>"']+$/, "") : raw;
-  // Upstash requires TLS — upgrade accidental redis:// to rediss://
   if (/^redis:\/\//i.test(url) && /upstash\.io/i.test(url)) {
     url = url.replace(/^redis:\/\//i, "rediss://");
   }
   return url;
 }
 
+export function isRemoteUpstashUrl(url: string): boolean {
+  return /upstash\.io/i.test(url);
+}
+
+/**
+ * Refuse Upstash (or other remote Redis) from local/dev/test unless explicitly opted in.
+ * Does not log the URL.
+ */
+export function assertRedisUrlAllowedForRuntime(): void {
+  const mode = getRuntimeMode();
+  if (mode === "production") return;
+  const url = getRedisUrl();
+  if (!isRemoteUpstashUrl(url)) return;
+  if (process.env.ALLOW_REMOTE_REDIS_IN_DEV === "true") {
+    logger.warn(
+      "ALLOW_REMOTE_REDIS_IN_DEV=true — local process is using remote Redis. Prefer docker compose Redis.",
+    );
+    return;
+  }
+  throw new RemoteRedisInDevError(
+    "REDIS_URL points at Upstash while runtime is development/test. " +
+      "Use redis://localhost:6379 (docker compose up redis) or set ALLOW_REMOTE_REDIS_IN_DEV=true only if intentional.",
+  );
+}
+
+/**
+ * Authoritative BullMQ Redis key prefix (NOT part of the queue name).
+ * BullMQ forbids ":" in queue names; isolation belongs here.
+ *
+ * Resolution:
+ * 1. QUEUE_PREFIX if explicitly set (colons normalized to hyphens)
+ * 2. otherwise agentdesk-{dev|test|preview|prod}
+ */
+export function getBullMqPrefix(): string {
+  const explicit = (process.env.QUEUE_PREFIX || "").trim();
+  if (explicit) {
+    const normalized = explicit.replace(/:/g, "-").replace(/-+$/g, "").replace(/^-+/g, "");
+    return normalized || "agentdesk-dev";
+  }
+  const mode = getRuntimeMode();
+  if (mode === "production") return "agentdesk-prod";
+  if (mode === "test") return "agentdesk-test";
+  if (process.env.VERCEL_ENV === "preview") return "agentdesk-preview";
+  return "agentdesk-dev";
+}
+
+/** @deprecated use getBullMqPrefix — same value (BullMQ `prefix`, not queue name). */
+export function getQueuePrefix(): string {
+  return getBullMqPrefix();
+}
+
+/**
+ * BullMQ custom jobIds must not contain ":".
+ * Keeps idempotency keys stable while remaining Redis-safe.
+ */
+export function toSafeBullMqJobId(...parts: Array<string | number | null | undefined>): string {
+  const cleaned = parts
+    .map((p) => (p == null ? "" : String(p)))
+    .map((p) => p.replace(/:/g, "-").trim())
+    .filter(Boolean);
+  if (cleaned.length === 0) {
+    throw new Error("toSafeBullMqJobId requires at least one non-empty part");
+  }
+  return cleaned.join("-");
+}
+
+/** Idempotent mission / agent-run job ids (no colons). */
+export function missionAgentRunJobId(organisationId: string, missionId: string): string {
+  return toSafeBullMqJobId("org", organisationId, "mission", missionId, "agent-run");
+}
+
+export function missionTaskJobId(organisationId: string, taskId: string): string {
+  return toSafeBullMqJobId("org", organisationId, "task", taskId);
+}
+
 function redisConnectionOptions(url: string, overrides: RedisOptions = {}): RedisOptions {
   const isTls = /^rediss:\/\//i.test(url);
   const insecure =
     process.env.REDIS_TLS_INSECURE === "true" ||
-    // Local Windows / corporate proxies often break Upstash cert verification.
     (!isProductionRuntime() && isTls) ||
-    // Upstash on some serverless runtimes also needs this when the CA chain fails.
     (isTls && /upstash\.io/i.test(url) && process.env.VERCEL === "1");
 
   return {
@@ -44,10 +138,11 @@ function redisConnectionOptions(url: string, overrides: RedisOptions = {}): Redi
 
 /**
  * Shared BullMQ-compatible Redis connection.
- * maxRetriesPerRequest must be null for BullMQ workers.
+ * Call assertRedisUrlAllowedForRuntime before connecting in workers.
  */
 export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
   if (!shared) {
+    assertRedisUrlAllowedForRuntime();
     const url = getRedisUrl();
     shared = new IORedis(
       url,
@@ -62,15 +157,50 @@ export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
   return shared;
 }
 
+/**
+ * Lightweight ping. Prefers shared connection; caches result briefly to avoid
+ * connect storms from health/enqueue paths.
+ */
 export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
-  let client: IORedis | null = null;
+  const now = Date.now();
+  if (now - lastPingAt < PING_CACHE_MS) {
+    return lastPingOk;
+  }
+
   try {
-    const url = getRedisUrl();
-    // Reject clearly non-URL values (e.g. a pasted `redis-cli …` without a URL).
-    if (!/^rediss?:\/\//i.test(url.trim())) {
-      logger.warn("REDIS_URL is not a redis:// or rediss:// URL — treating Redis as down");
+    assertRedisUrlAllowedForRuntime();
+  } catch (error) {
+    if (error instanceof RemoteRedisInDevError) {
+      logger.warn("Redis ping skipped — remote Redis blocked in this runtime");
+      lastPingAt = now;
+      lastPingOk = false;
       return false;
     }
+    throw error;
+  }
+
+  const url = getRedisUrl();
+  if (!/^rediss?:\/\//i.test(url.trim())) {
+    logger.warn("REDIS_URL is not a redis:// or rediss:// URL — treating Redis as down");
+    lastPingAt = now;
+    lastPingOk = false;
+    return false;
+  }
+
+  // Reuse shared connection when already open (no extra TCP handshake).
+  if (shared && shared.status === "ready") {
+    try {
+      const pong = await shared.ping();
+      lastPingOk = pong === "PONG";
+      lastPingAt = now;
+      return lastPingOk;
+    } catch {
+      /* fall through to ephemeral */
+    }
+  }
+
+  let client: IORedis | null = null;
+  try {
     client = new IORedis(
       url,
       redisConnectionOptions(url, {
@@ -82,11 +212,15 @@ export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
     );
     await client.connect();
     const pong = await client.ping();
-    return pong === "PONG";
+    lastPingOk = pong === "PONG";
+    lastPingAt = now;
+    return lastPingOk;
   } catch (error) {
     logger.warn("Redis ping failed", {
       message: error instanceof Error ? error.message : "unknown",
     });
+    lastPingOk = false;
+    lastPingAt = now;
     return false;
   } finally {
     if (client) {
@@ -113,9 +247,21 @@ export function assertRedisAllowedFallback(): void {
   );
 }
 
+export function cronFallbackEnabled(): boolean {
+  return process.env.CRON_FALLBACK_ENABLED === "true";
+}
+
 export async function closeRedisConnection(): Promise<void> {
   if (shared) {
     await shared.quit().catch(() => undefined);
     shared = null;
   }
+  lastPingAt = 0;
+  lastPingOk = false;
+}
+
+/** Test helper */
+export function resetRedisPingCache(): void {
+  lastPingAt = 0;
+  lastPingOk = false;
 }

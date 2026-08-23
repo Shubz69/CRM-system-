@@ -4,13 +4,17 @@
  */
 
 import { prisma } from "@/lib/db";
-import { pingRedis } from "@/jobs/redis";
-import {
-  getAgentRunsQueue,
-  getFollowUpQueue,
-  getMaintenanceQueue,
-} from "@/jobs/queues";
+import { getQueuePrefix, pingRedis } from "@/jobs/redis";
+import { getAgentRunsQueue } from "@/jobs/queues";
 import { getEntitlementsDashboard } from "@/services/entitlements";
+import { getQueueOpsSnapshot } from "@/services/queue-ops";
+
+/** Throttle Redis getJobCounts — do not hammer Redis for admin UI. */
+let cachedAgentQueueCounts: {
+  at: number;
+  value: Awaited<ReturnType<typeof queueCountsSafe>>;
+} | null = null;
+const QUEUE_COUNTS_CACHE_MS = 30_000;
 
 export type BriefingItem = {
   id: string;
@@ -136,7 +140,9 @@ export async function getChiefOfStaffBriefing(organisationId: string): Promise<{
 
 async function queueCountsSafe(name: string, getQueue: () => { getJobCounts: (...types: string[]) => Promise<Record<string, number>> }) {
   try {
-    const q = getQueue();
+    const q = getQueue() as {
+      getJobCounts: (...types: string[]) => Promise<Record<string, number>>;
+    };
     const counts = await q.getJobCounts("waiting", "active", "delayed", "failed");
     return {
       name,
@@ -162,14 +168,25 @@ async function queueCountsSafe(name: string, getQueue: () => { getJobCounts: (..
 /**
  * Platform AI Ops snapshot — real FailedJob / AgentRun / queue depths only.
  */
+async function getAgentRunsCountsCached() {
+  const now = Date.now();
+  if (cachedAgentQueueCounts && now - cachedAgentQueueCounts.at < QUEUE_COUNTS_CACHE_MS) {
+    return cachedAgentQueueCounts.value;
+  }
+  const value = await queueCountsSafe("agent-runs", () => getAgentRunsQueue() as never);
+  cachedAgentQueueCounts = { at: now, value };
+  return value;
+}
+
 export async function getAiOpsSnapshot(organisationId?: string) {
   const redisOk = await pingRedis().catch(() => false);
+  const queueOps = getQueueOpsSnapshot();
 
   const failedWhere = organisationId
     ? { organisationId, resolvedAt: null }
     : { resolvedAt: null };
 
-  const [openFailedJobs, recentFailedJobs, recentRuns, recentAiFailures, queues] =
+  const [openFailedJobs, recentFailedJobs, recentRuns, recentAiFailures, agentQueue] =
     await Promise.all([
       prisma.failedJob.count({ where: failedWhere }),
       prisma.failedJob.findMany({
@@ -217,24 +234,29 @@ export async function getAiOpsSnapshot(organisationId?: string) {
           createdAt: true,
         },
       }),
-      Promise.all([
-        queueCountsSafe("follow-ups", getFollowUpQueue),
-        queueCountsSafe("agent-runs", getAgentRunsQueue),
-        queueCountsSafe("maintenance", getMaintenanceQueue),
-      ]),
+      redisOk ? getAgentRunsCountsCached() : Promise.resolve(null),
     ]);
 
   return {
     redisOk,
+    queuePrefix: getQueuePrefix(),
     workerRequiredForAsk: true,
     openFailedJobs,
     recentFailedJobs,
     recentRuns,
     recentAiFailures,
-    queues,
+    /** Single BullMQ queue — follow-ups/retention are Postgres sweeps (no Redis depth). */
+    queues: agentQueue ? [agentQueue] : [],
+    queueOps,
+    topology: {
+      bullmqWorkers: 1,
+      authoritativeFollowUps: "worker-postgres-interval",
+      authoritativeRetention: "worker-postgres-interval",
+      cronFallback: "CRON_FALLBACK_ENABLED only",
+    },
     message: redisOk
-      ? "Redis reachable — confirm a hosted worker process is running (npm run worker)."
-      : "Redis down — Ask agent-runs will not process until Redis + worker are healthy.",
+      ? "Redis reachable — confirm hosted worker (npm run worker). Follow-ups/retention do not poll Redis."
+      : "Redis down — Ask agent-runs will not process until Redis + worker are healthy. Durable state remains in Postgres.",
   };
 }
 

@@ -10,8 +10,12 @@ Maturity levels (exactly one per capability):
 |-------|---------|
 | **FOUNDATION** | Models / interfaces / docs / adapter stubs |
 | **WORKING** | Real local app data path + automated tests |
-| **LIVE_E2E** | End-to-end against real external provider/service (proven in-repo or operator-verified) |
+| **LIVE_E2E** | Verified through the **real external provider/service**. A mocked provider, fixture, simulator, Playwright test, or local adapter is **not** LIVE_E2E. |
 | **PRODUCTION_VERIFIED** | LIVE_E2E **plus** tenant isolation, permissions, retries/idempotency, recovery, observability, cost controls, degraded mode, relevant automated tests |
+
+**WORKING** = local/application implementation with real application data + automated tests.
+
+Do **not** write “LIVE_E2E at test level” — that state is invalid.
 
 ---
 
@@ -39,7 +43,7 @@ V2 delivered an AI-native **architecture**. Most capabilities are **WORKING**. H
 | Trends + backtest | TrendCluster/Forecast/Outcome | trend-intelligence | `/api/trends` | Learning backtest | manual refresh | Derived | No | Yes | insights:read | Honest null metrics | — | — | trend-intelligence | TREND-FORECASTING | **WORKING** | Dashboard; scheduled jobs; outcomes history |
 | Content OS pipeline | Content* models | content-os | `/api/content` | **No /content** | **No publish worker** | OAuth adapters unused | **No** | Partial | Kernel publish policy | Gate only | — | — | content-os | CONTENT-OPERATING-SYSTEM | **WORKING** | Workspace UI |
 | **External publish** | PublishingJob | requestPublish / recordPublishResult | via content API | No | **MISSING** | IG/LI/TT adapters exist | **No** | Connection org check | social.publish approval | No executor retries | — | — | content-publish-isolation | CONTENT-OS | **FOUNDATION** | Worker → adapter.publish → external ID |
-| CRM core | Contact/Lead/Pipeline | inbound-pipeline | inbox/pipeline/contacts | Yes | follow-ups | ManyChat | Simulator + code path | Strong tests | Role perms | Idempotent webhooks | Attention/FailedJob | Usage | inbound + org-isolation | — | **LIVE_E2E** (code+tests; prod traffic not claimed) | Operator ManyChat proof |
+| CRM core | Contact/Lead/Pipeline | inbound-pipeline | inbox/pipeline/contacts | Yes | follow-ups (Postgres sweep) | ManyChat | Simulator / fixtures ≠ live provider | Strong tests | Role perms | Idempotent webhooks | Attention/FailedJob | Usage | inbound + org-isolation | — | **WORKING** | Operator ManyChat LIVE_E2E proof |
 | CRM V2 | Company/Deal/CrmActivity | crm-v2 | companies/deals/360 | Yes | — | — | No Playwright | Org scope | leads:* | — | — | — | crm-v2 | CRM-V2 | **WORKING** | Deeper activities UX |
 | Automation OS | AutomationRule/Execution/Approval | automation-os | automations/approvals | Yes + viewer | rule execution | — | No | Payload org assert | automations:manage | Approval gate | Audit | — | automation-os + isolation | AUTOMATION-OS | **WORKING** | Drag-drop builder; broader actions |
 | Learning / evals | Feedback/Experiment/Candidate/Eval* | learning-os | `/api/learning/*` | `/learning` | — | — | No | Isolation tests | agent:manage | Promote blocked if fail | — | — | learning-os | LEARNING-OS / AI-EVALUATIONS | **WORKING** | Broader LLM eval suites |
@@ -51,12 +55,12 @@ V2 delivered an AI-native **architecture**. Most capabilities are **WORKING**. H
 | Messaging ManyChat | Conversation/Message | inbound + messaging adapter | webhooks | Inbox | follow-ups | ManyChat API | Token-gated | Secret resolution | inbox:* | Idempotency key | WebhookEvent | Usage | manychat-secrets | — | **WORKING** | Live E2E Playwright |
 | Social OAuth | SocialConnection | social-connections | connect/callback | Integrations | — | Meta/LI/TT | Connect only | Encrypted creds | integrations:manage | Token refresh partial | — | — | social-oauth/db | SOCIAL_CONNECTIONS | **WORKING** | Publish E2E |
 | Webhooks | WebhookEvent | inbound/booking | `/api/webhooks/*` | Admin | — | ManyChat/booking | Idempotent | Org resolve | Secrets | Dedupe | Failed jobs | Usage | org-isolation | SECURITY | **WORKING** | Timestamp replay (Phase 11) |
-| Tenant isolation | organisationId everywhere | services | APIs | — | — | — | Test suite | **Strong** | Role matrix | — | Audit | — | org-isolation* | SECURITY | **LIVE_E2E** (tests) | Prod red-team |
+| Tenant isolation | organisationId everywhere | services | APIs | — | — | — | Automated tests (not a live provider) | **Strong** | Role matrix | — | Audit | — | org-isolation* | SECURITY | **WORKING** | Prod red-team / PRODUCTION_VERIFIED proof |
 | Audit logging | AuditLog | audit.ts | admin audit | Yes | — | — | No | Scope ORG/PLATFORM | audit:read | — | Itself | — | audit-scope | SECURITY | **WORKING** | Full coverage |
 | Secrets / crypto | IntegrationCredential | crypto AES-GCM | — | — | — | — | — | Encrypted at rest | — | — | Env warnings | — | — | SECURITY | **WORKING** → Phase 11 hardens | Rotation migration design |
 | Domain events / outbox | **Absent** | — | — | — | — | — | No | — | — | — | — | — | — | DATA-MODEL deferred | **FOUNDATION** | Phase 12B |
 | Goals / KPIs | **Absent** | — | — | — | — | — | No | — | — | — | — | — | — | DATA-MODEL deferred | **FOUNDATION** | Phase 13 |
-| Mission persistence | Types only | — | — | — | AgentRun only | — | No | — | — | — | — | — | — | AGENT-KERNEL | **FOUNDATION** | Phase 12 |
+| Mission persistence | AgentMission/Task/Checkpoint/Artifact/Outcome | mission-runtime | — | — | resume via Postgres | — | Resilience tests | Org-scoped | Permission helper | State machine + idempotency | Checkpoints | Budget fields | mission-runtime | REDIS-COST / ROADMAP-V3 | **WORKING** | Wire Ask→Mission; LIVE worker proof; Goal link (13) |
 
 ---
 

@@ -1,4 +1,3 @@
-import { Worker } from "bullmq";
 import { FollowUpStatus, MessageDirection, MessageSenderType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -6,10 +5,8 @@ import { evaluateMessagingWindow } from "@/lib/messaging-window";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { writeAuditLog } from "@/services/audit";
 import { recordFailedJob } from "@/services/failed-jobs";
-import { getRedisConnection } from "@/jobs/redis";
-import { QUEUE_FOLLOW_UPS } from "@/jobs/queues";
 
-// Re-export enqueue from jobs layer (Next.js enqueues only).
+// Re-export enqueue from jobs layer (no-op — Postgres sweep is authoritative).
 export { enqueueFollowUpCheck } from "@/jobs/follow-ups";
 export { getFollowUpQueue } from "@/jobs/queues";
 
@@ -152,32 +149,4 @@ export function startInProcessFollowUpLoop(intervalMs = 60_000) {
       );
   }, intervalMs);
   return timer;
-}
-
-/** @deprecated Prefer the unified worker entry (src/workers/index.ts). */
-export function startBullWorker() {
-  const worker = new Worker(
-    QUEUE_FOLLOW_UPS,
-    async () => {
-      const sent = await processDueFollowUps();
-      return { sent };
-    },
-    { connection: getRedisConnection() },
-  );
-
-  worker.on("failed", (job, err) => {
-    logger.error("Follow-up worker failed", {
-      jobId: job?.id,
-      message: err.message,
-    });
-    void recordFailedJob({
-      queue: "follow-ups",
-      jobName: job?.name || "process-due-followups",
-      payload: { jobId: job?.id },
-      error: err.message,
-      attempts: job?.attemptsMade,
-    });
-  });
-
-  return worker;
 }

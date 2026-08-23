@@ -8,6 +8,7 @@ import {
   type AgentRunJobName,
 } from "@/jobs/agent-runs";
 import { executeAgentRun } from "@/agents/supervisor/execute";
+import { processMaintenanceJob } from "@/workers/maintenance-processor";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,14 +16,14 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Processes agent-runs queue jobs.
- * Prompt 2A: sleep-test / noop. Prompt 2B: agent-framework-run.
+ * Also handles rare on-demand maintenance (single-worker topology — P0 Redis).
  */
 export async function processAgentRunJob(job: Job): Promise<Record<string, unknown>> {
   const name = job.name as AgentRunJobName;
   const organisationId =
     typeof job.data?.organisationId === "string" ? job.data.organisationId : null;
 
-  if (!organisationId) {
+  if (!organisationId && name !== "agent-retention-sweep") {
     throw new Error(`agent-runs job ${job.id} missing organisationId`);
   }
 
@@ -34,6 +35,15 @@ export async function processAgentRunJob(job: Job): Promise<Record<string, unkno
   });
 
   try {
+    if (name === "agent-retention-sweep" || name === "knowledge-embedding-backfill") {
+      const result = await processMaintenanceJob(job);
+      return (result as Record<string, unknown>) ?? { ok: true };
+    }
+
+    if (!organisationId) {
+      throw new Error(`agent-runs job ${job.id} missing organisationId`);
+    }
+
     if (name === "sleep-test") {
       const payload = sleepTestPayloadSchema.parse(job.data);
       const started = Date.now();
@@ -92,7 +102,7 @@ export async function processAgentRunJob(job: Job): Promise<Record<string, unkno
   } catch (error) {
     const message = error instanceof Error ? error.message : "agent-runs job failed";
     await recordFailedJob({
-      organisationId,
+      organisationId: organisationId === "system" ? null : organisationId,
       queue: "agent-runs",
       jobName: name,
       payload: job.data,

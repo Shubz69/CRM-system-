@@ -4,12 +4,14 @@
  * Known first-party API hosts should continue using plain fetch.
  */
 
+import { promises as dns } from "dns";
 import { logger } from "@/lib/logger";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
   "metadata.google.internal",
   "metadata.google.com",
+  "metadata",
 ]);
 
 export class SsrfBlockedError extends Error {
@@ -37,12 +39,12 @@ function isPrivateIpv4(hostname: string): boolean {
 }
 
 function isBlockedHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (BLOCKED_HOSTNAMES.has(host)) return true;
   if (host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
     return true;
   }
-  if (host === "::1" || host === "[::1]") return true;
+  if (host === "::1") return true;
   if (isPrivateIpv4(host)) return true;
   // IPv6 unique local / link-local (simplified)
   if (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) return true;
@@ -72,6 +74,29 @@ export function assertUrlSafeForServerFetch(rawUrl: string): URL {
   return url;
 }
 
+/** Resolve hostname and reject if any address is private/link-local/loopback (DNS rebinding defence). */
+export async function assertResolvedAddressSafe(hostname: string): Promise<void> {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (isBlockedHostname(host)) {
+    throw new SsrfBlockedError(`Blocked hostname: ${host}`);
+  }
+  // Literal IPv4 already covered by isBlockedHostname; skip DNS for pure IPs.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host === "::1") {
+    return;
+  }
+  try {
+    const results = await dns.lookup(host, { all: true, verbatim: true });
+    for (const r of results) {
+      if (isBlockedHostname(r.address)) {
+        throw new SsrfBlockedError(`Blocked resolved address for ${host}`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof SsrfBlockedError) throw error;
+    throw new SsrfBlockedError("DNS resolution failed for hostname");
+  }
+}
+
 export type SafeFetchOptions = RequestInit & {
   /** Max redirect hops (default 3). Each hop re-validated. */
   maxRedirects?: number;
@@ -81,13 +106,17 @@ export type SafeFetchOptions = RequestInit & {
 /**
  * Fetch a user-supplied URL with SSRF protections.
  * Does not follow redirects blindly to private hosts.
+ * Re-resolves hostname on each hop where practical.
  */
 export async function safeFetch(
   rawUrl: string,
   init: SafeFetchOptions = {},
 ): Promise<Response> {
-  const { maxRedirects = 3, timeoutMs = 30_000, redirect: _ignored, ...rest } = init;
-  let current = assertUrlSafeForServerFetch(rawUrl).toString();
+  const { maxRedirects = 3, timeoutMs = 30_000, redirect, ...rest } = init;
+  void redirect;
+  const initial = assertUrlSafeForServerFetch(rawUrl);
+  await assertResolvedAddressSafe(initial.hostname);
+  let current = initial.toString();
   let redirects = 0;
 
   while (true) {
@@ -104,9 +133,10 @@ export async function safeFetch(
         if (!loc || redirects >= maxRedirects) {
           throw new SsrfBlockedError("Too many or missing redirects");
         }
-        const next = new URL(loc, current).toString();
-        assertUrlSafeForServerFetch(next);
-        current = next;
+        const next = new URL(loc, current);
+        assertUrlSafeForServerFetch(next.toString());
+        await assertResolvedAddressSafe(next.hostname);
+        current = next.toString();
         redirects += 1;
         continue;
       }

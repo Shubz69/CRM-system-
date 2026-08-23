@@ -19,13 +19,21 @@ Never use `prisma db push` on populated/production databases — `prisma migrate
 - [x] Webhook replay window + existing idempotency
 - [x] PII-aware logging / redaction
 - [x] SSRF-safe fetch for user-controlled URLs
-- [x] Untrusted content prompt-injection boundaries
+- [x] Untrusted content labelling (strip markers = defence-in-depth only; not claimed as injection prevention)
 - [x] Tool/agent capability permission tests
 - [x] Operator manual credential rotation doc
 
 ## Phase 12 — Durable Mission runtime
 
-`AgentMission` + tasks/dependencies/checkpoints/outcomes; `AgentRun` remains execution trace; resume across worker restart/outage.
+**Status:** Implemented (WORKING — resilience tests; not PRODUCTION_VERIFIED). Stop before 12B.
+
+- [x] AgentMission / MissionTask / Dependency / Checkpoint / Artifact / Outcome
+- [x] Reuse AgentRun / AgentStep / ToolCall (optional missionId links)
+- [x] Validated Mission state machine
+- [x] Durable resume / idempotency / cancel / budget / approval wait
+- [x] Outbox attach hook (`prepareDomainEventAttach`) for Phase 12B
+- [ ] Ask UI wiring to Mission (later)
+- [ ] Phase 12B transactional outbox (do not start until review)
 
 ## Phase 12B — Transactional domain events
 

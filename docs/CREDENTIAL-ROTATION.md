@@ -27,14 +27,18 @@ Assume any previously shared `.env` contents require **external manual rotation*
 
 `ENCRYPTION_KEY` (64 hex chars) encrypts `IntegrationCredential` / `SocialConnectionCredential` ciphertext.
 
-**Changing this key against existing rows without a re-encrypt migration makes all stored tokens unreadable.**
+**Do not rotate `ENCRYPTION_KEY` automatically.** Changing this env value before a controlled migration makes all stored tokens unreadable.
 
-Safe process (future work — design before executing):
+### Future safe rotation design (key versioning / keyring)
 
-1. Add `ENCRYPTION_KEY_PREVIOUS` support or dual-decrypt.
-2. Re-encrypt all credential rows under a maintenance job.
-3. Drop previous key only after verification.
-4. Record `lastRotatedAt` via `PATCH /api/security/credentials` `{ action: "mark_rotated" }` (metadata only).
+Production ciphertext must remain decryptable while the active env key changes. Planned approach (not implemented yet — do not run ad-hoc):
+
+1. **Keyring env** — support multiple keys by version, e.g. `ENCRYPTION_KEYS='{"v1":"<64hex>","v2":"<64hex>"}'` plus `ENCRYPTION_KEY_ACTIVE=v2`.
+2. **Ciphertext envelope** — store `keyVersion` alongside ciphertext (or prefix ciphertext with `v1:` / `v2:`). Decrypt tries the recorded version; encrypt always uses `ENCRYPTION_KEY_ACTIVE`.
+3. **Controlled re-encrypt migration** — background job (or maintenance window) decrypts with old version and re-encrypts with active version inside a Postgres transaction per row/batch. Progress tracked; resume-safe.
+4. **Verify** — sample decrypt after migration; credential-health `lastVerifiedAt` updated.
+5. **Retire** — remove old key from keyring only after 100% of rows report the new version.
+6. **Metadata** — operator may `PATCH /api/security/credentials` `{ action: "mark_rotated" }` (metadata only; never rewrites ciphertext from that API).
 
 Until that migration exists: generate a unique key **once** before first production secret storage, and never replace it in place.
 

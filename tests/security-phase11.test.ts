@@ -30,13 +30,16 @@ describe("SSRF-safe URL policy", () => {
     expect(u.hostname).toBe("media.example.com");
   });
 
-  it("blocks localhost and private IPs", () => {
+  it("blocks localhost, private IPs, metadata, and unsafe protocols", () => {
     expect(() => assertUrlSafeForServerFetch("http://127.0.0.1/x")).toThrow(SsrfBlockedError);
     expect(() => assertUrlSafeForServerFetch("http://10.0.0.5/x")).toThrow(SsrfBlockedError);
+    expect(() => assertUrlSafeForServerFetch("http://192.168.1.1/x")).toThrow(SsrfBlockedError);
     expect(() => assertUrlSafeForServerFetch("http://169.254.169.254/latest")).toThrow(
       SsrfBlockedError,
     );
     expect(() => assertUrlSafeForServerFetch("http://localhost/admin")).toThrow(SsrfBlockedError);
+    expect(() => assertUrlSafeForServerFetch("http://[::1]/")).toThrow(SsrfBlockedError);
+    expect(() => assertUrlSafeForServerFetch("file:///etc/passwd")).toThrow(SsrfBlockedError);
   });
 });
 
