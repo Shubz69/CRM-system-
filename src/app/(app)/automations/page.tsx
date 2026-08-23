@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { WorkflowViewer } from "@/components/automations/workflow-viewer";
 
 type WorkflowStep = {
   id: string;
@@ -167,15 +168,9 @@ export default function AutomationsPage() {
           )}
         </div>
         {preview && (
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm">
-            {preview.map((s) => (
-              <li key={s.id}>
-                <span className="font-medium">{s.label}</span>
-                {s.gated ? " · needs approval" : ""}
-                {s.detail ? <span className="text-[var(--muted)]"> — {s.detail}</span> : null}
-              </li>
-            ))}
-          </ol>
+          <div className="mt-3">
+            <WorkflowViewer steps={preview} title="Compiled preview" />
+          </div>
         )}
       </form>
 
@@ -260,14 +255,9 @@ export default function AutomationsPage() {
               Trigger: {rule.triggerType}. Actions: {summarizeActions(rule.actions)}.
             </p>
             {Array.isArray(rule.workflow?.steps) && rule.workflow!.steps!.length > 0 && (
-              <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-[var(--muted)]">
-                {rule.workflow!.steps!.map((s) => (
-                  <li key={s.id}>
-                    {s.label}
-                    {s.gated ? " (approval)" : ""}
-                  </li>
-                ))}
-              </ol>
+              <div className="mt-3">
+                <WorkflowViewer steps={rule.workflow!.steps!} title="Saved workflow" />
+              </div>
             )}
             <p className="mt-2 text-xs text-[var(--muted)]">
               Recent executions: {rule.executions.length}

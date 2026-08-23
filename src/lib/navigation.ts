@@ -35,6 +35,8 @@ export const PRIMARY_NAV: NavItem[] = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { href: "/contacts", label: "Contacts", icon: Users },
+  { href: "/companies", label: "Companies", icon: Building2 },
+  { href: "/deals", label: "Deals", icon: FileBarChart },
 ];
 
 /**

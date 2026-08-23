@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageError, PageLoading } from "@/components/ui/page-state";
+import { Customer360Panel } from "@/components/crm/customer-360-panel";
 
 type Contact = {
   id: string;
@@ -91,6 +92,8 @@ export default function ContactDetailPage() {
       <p className="font-[family-name:var(--font-fraunces)] text-2xl">
         {contact.fullName || "Unknown contact"}
       </p>
+
+      <Customer360Panel contactId={contact.id} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="surface p-5">

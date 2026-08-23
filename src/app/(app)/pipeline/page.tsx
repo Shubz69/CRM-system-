@@ -82,9 +82,12 @@ export default function PipelinePage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        description="Move leads through configurable sales stages."
+        description="Move leads through configurable sales stages. Revenue deals live under Deals."
         actions={
           <>
+            <a className="btn btn-secondary" href="/deals">
+              Open deals
+            </a>
             <button
               className={`btn ${view === "kanban" ? "btn-primary" : "btn-secondary"}`}
               type="button"

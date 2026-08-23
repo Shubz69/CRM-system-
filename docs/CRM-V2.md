@@ -1,6 +1,6 @@
 # CRM V2
 
-**Status:** Phase 7 — Company / Deal / Activity / Customer 360 / templates.
+**Status:** Phase 7 — Company / Deal / Activity / Customer 360 / templates + UI surfaces.
 
 ## Additions
 
@@ -9,6 +9,15 @@
 - **CrmActivity** — task / meeting / call / email timeline
 - **Attribution** — `confidence`, `limitations`, `method` (honest defaults)
 - **Industry templates** — config on Organisation (`industryTemplateKey` + snapshot), not product forks
+
+## UI
+
+| Page | Purpose |
+|------|---------|
+| `/companies` | List + create companies |
+| `/deals` | List + create + status PATCH |
+| `/contacts/[id]` | **Customer 360** panel (company, deals, attribution confidence, activities) |
+| `/pipeline` | Lead kanban (links to Deals) |
 
 ## APIs
 
@@ -21,7 +30,7 @@
 
 ## Customer 360
 
-Evidence from stored CRM rows only. Response includes explicit `limitations[]`. No sensitive inference.
+Evidence from stored CRM rows only. Response includes explicit `limitations[]`. No sensitive inference. Attribution confidence shown as **unknown** when null.
 
 ## Templates
 

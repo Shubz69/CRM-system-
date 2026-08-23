@@ -85,7 +85,7 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 - [x] Customer 360 view (`/api/contacts/[id]/360`)
 - [x] Attribution with explicit confidence/limitations
 - [x] Industry workspace templates (config, not forks)
-- [ ] Richer CRM UI surfaces for deals/companies/360 
+- [x] Richer CRM UI surfaces for deals/companies/360 
 
 ---
 
@@ -93,7 +93,7 @@ Exit criteria: existing Ask research path still works; new kernel APIs tested.
 
 - [x] Trigger → conditions → agent/logic → actions → approval → outcome
 - [x] NL → visible workflow (compile before enable)
-- [ ] Visual builder (after NL path is solid) 
+- [x] Read-only visual workflow viewer (`WorkflowViewer`) — full drag-drop builder still deferred
 
 ---
 
