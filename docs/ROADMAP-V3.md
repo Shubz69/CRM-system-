@@ -25,51 +25,105 @@ Never use `prisma db push` on populated/production databases — `prisma migrate
 
 ## Phase 12 — Durable Mission runtime
 
-**Status:** Implemented (WORKING — resilience tests; not PRODUCTION_VERIFIED). Stop before 12B.
+**Status:** Implemented + acceptance gate (WORKING — not PRODUCTION_VERIFIED / not LIVE_E2E). Stop before 12B.
 
 - [x] AgentMission / MissionTask / Dependency / Checkpoint / Artifact / Outcome
 - [x] Reuse AgentRun / AgentStep / ToolCall (optional missionId links)
 - [x] Validated Mission state machine
 - [x] Durable resume / idempotency / cancel / budget / approval wait
-- [x] Outbox attach hook (`prepareDomainEventAttach`) for Phase 12B
+- [x] Compare-and-swap task claim (duplicate worker delivery)
+- [x] External outcome states (NOT_STARTED / DISPATCHING / CONFIRMED / FAILED / RECONCILIATION_REQUIRED)
+- [x] Approval identity + timestamp + rejection; resume cannot bypass
+- [x] Outbox attach hook (`prepareDomainEventAttach` → real transactional append)
+- [x] Legacy BullMQ cleanup utility (dry-run default)
 - [ ] Ask UI wiring to Mission (later)
-- [ ] Phase 12B transactional outbox (do not start until review)
+- [x] Mission queue recovery after Redis loss (Phase 12B)
+- [x] Phase 12B transactional outbox (**WORKING**)
 
 ## Phase 12B — Transactional domain events
 
-PostgreSQL outbox; atomic mutation+event; idempotent consumers. No Kafka.
+**Status:** Implemented (WORKING — local/DB/tests; not LIVE_E2E / not PRODUCTION_VERIFIED).
 
-## Phase 13 — Business Goal graph
+- [x] DomainEvent + DomainEventConsumption
+- [x] Typed catalogue + Zod payloads
+- [x] `appendDomainEvent(tx, …)` atomic attach
+- [x] Postgres dispatcher (`FOR UPDATE SKIP LOCKED`)
+- [x] Fan-out consumers + idempotency
+- [x] Automation + Mission integration
+- [x] Mission queue recovery after Redis loss
+- [x] Admin outbox API + AI Ops snapshot fields
+- [ ] Multi-worker production soak / PRODUCTION_VERIFIED
 
-`Goal` / `Kpi` / targets / snapshots / `Initiative` / `Outcome`; link to campaigns, content, deals, experiments, missions.
+## Phase 13 — Business Intelligence Core (13A / 13B / 13C)
 
-## Phase 13B — Business digital twin
+**Status:** Implemented (**WORKING** — local/DB/tests; not LIVE_E2E / not PRODUCTION_VERIFIED).  
+Architecture: [`PHASE-13-BUSINESS-INTELLIGENCE.md`](./PHASE-13-BUSINESS-INTELLIGENCE.md).  
+Domain event coverage matrix: [`DOMAIN-EVENT-COVERAGE.md`](./DOMAIN-EVENT-COVERAGE.md).
 
-Evidence-backed entity relations over existing relational data (no separate graph DB).
+### 13A Goal & KPI
+- [x] Goal / KpiDefinition / KpiTarget / KpiSnapshot / Initiative / GoalLink
+- [x] Deterministic KPI calculators
+- [x] Transactional GOAL_* / KPI_SNAPSHOT_RECORDED events
+- [x] Minimal `/goals` UI + `/api/goals`
 
-## Phase 13C — Opportunity graph
+### 13B Digital Twin
+- [x] ProductOffering / AudienceSegment / EntityRelation / BusinessClaim
+- [x] Business profile + completeness (honest gaps)
+- [x] Freshness policy registry
+- [x] Minimal `/business-context` UI
 
-First-class cross-domain `Opportunity` with evidence, goal link, honest confidence.
+### 13C Opportunity graph
+- [x] BusinessOpportunity + Evidence + Outcome + DetectorRun
+- [x] Detectors: deal_risk, lead_reactivation, audience_objection, kpi_at_risk
+- [x] Priority / confidence / impact / urgency bands (deterministic)
+- [x] Opportunity → Mission
+- [x] Chief of Staff facts (`?v=2`) + Ask context budget
+- [x] Worker Postgres sweeps (detectors ~15m, KPI refresh ~1h)
+- [ ] Continuous trend/content/competitor detectors (need data plane)
+- [ ] Full Home redesign / onboarding UX (later)
 
-## Phase 14 — Integration mesh
+## Phase 14 — Integration mesh + Tool/Skill platform
 
-Granular capability states; OAuth lifecycle; SyncCursor/SyncRun; ProviderHealth; never claim ungained scopes.
+**Status:** 14A–E **WORKING**; **14F Intelligence Quality WORKING** (deterministic gates — not LIVE_E2E). Phase 14 complete only with 14F.  
+Docs: [`PHASE-14-INTEGRATION-MESH.md`](./PHASE-14-INTEGRATION-MESH.md).
 
-## Phase 14B — Tool & Skill platform
+### 14A–E
+- [x] Connector SDK catalogue + capability states + provenance
+- [x] ExternalObjectMapping + SyncCursor/SyncRun
+- [x] Rate limit + circuit breaker
+- [x] Provider health events (bounded)
+- [x] Tool Registry connector tools + authorize path
+- [x] Skill registry (versioned builtins)
+- [x] Reconciliation contract for consequential ops
+- [x] Optional MCP deny-by-default boundary
+- [x] `/integrations` mesh UI + `/api/integrations/mesh`
+- [x] DEAL_WON/LOST/STAGE_CHANGED outbox emits
+- [ ] Full OAuth refresh worker loop (TikTok adapter has refresh; no mesh-wide loop yet)
 
-Skill registry + versions/evals; optional MCP boundary (untrusted, permission-scoped).
+### 14F — Intelligence Quality & Verification Engine
+- [x] Claim normalisation + lineage + corroboration + contradiction + freshness + relevance + social quality
+- [x] Quality budgets FAST/STANDARD/DEEP/MISSION_CRITICAL
+- [x] Quality gate → BusinessOpportunity.qualityGateStatus (NEEDS_MORE_RESEARCH / CONFLICTED / INSUFFICIENT_EVIDENCE / STALE / REJECTED / PASSED)
+- [x] Traceability chain Opportunity → Claim → Evidence → Snapshot → Provider → retrieval time
+- [ ] Empirical calibration of confidence bands (Phase 17 samples)
 
 ## Phase 15 — Real execution (Content publish)
 
-`/content` workspace + worker publish → real OAuth → external ID → PostPerformance. No fake success.
+**Status:** **WORKING** architecture (dispatch + approval + Postgres sweep). Per-provider **not LIVE_E2E** until real OAuth publish proof.
+
+- [x] PublishingJob externalOutcome ledger (PREPARED/DISPATCHING/CONFIRMED/FAILED/RECONCILIATION_REQUIRED)
+- [x] `dispatchPublishingJob` → social adapter.publish → recordPublishResult (requires externalPostId)
+- [x] Worker Postgres publishing sweep (no new BullMQ worker)
+- [x] Job-bound approval description
+- [ ] LIVE_E2E LinkedIn/Instagram/TikTok with real credentials
 
 ## Phase 15B — Action mesh
 
-Same gates for CRM/email/calendar/messages.
+Same gates for CRM/email/calendar/messages — still deferred where adapters incomplete.
 
 ## Phase 16 — Continuous intelligence
 
-Scheduled ingestion queues with fairness, rate limits, DLQ, idempotency, cost.
+**Status:** **WORKING** time-series/lifecycle rules; Prediction Lab **FOUNDATION** (no accuracy claims).
 
 ## Phase 16B — Knowledge & Memory V3
 
@@ -77,10 +131,11 @@ Production embedding path; hybrid retrieval; memory kinds with provenance/TTL.
 
 ## Phase 16C — Prediction Lab
 
-Feature-derived forecasts + calibration metrics (no invented accuracy).
+**Status:** **FOUNDATION** — record + backtest scaffolding; no invented historical accuracy.
 
 ## Phase 17 — Evaluation platform
 
+**Status:** **FOUNDATION/WORKING** — datasets, scorers, shadow/canary states, calibration samples; no auto-promote.
 Candidate → Evaluate → Shadow → Canary → Promote → Rollback.
 
 ## Phase 17B — Online outcome learning

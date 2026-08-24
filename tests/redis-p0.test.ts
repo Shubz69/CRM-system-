@@ -18,7 +18,7 @@ describe("Redis P0 guards", () => {
     const { getRedisUrl, isRemoteUpstashUrl } = await import("@/jobs/redis");
     expect(getRedisUrl()).toBe("redis://localhost:6379");
     expect(isRemoteUpstashUrl(getRedisUrl())).toBe(false);
-  });
+  }, 15_000);
 
   it("refuses Upstash in development unless ALLOW_REMOTE_REDIS_IN_DEV", async () => {
     process.env.NODE_ENV = "development";
@@ -52,13 +52,47 @@ describe("Redis P0 guards", () => {
   it("uses BullMQ prefix isolation without colon queue names", async () => {
     process.env.APP_RUNTIME_MODE = "test";
     delete process.env.QUEUE_PREFIX;
-    const { getBullMqPrefix, getQueuePrefix } = await import("@/jobs/redis");
+    const { getBullMqPrefix, getQueuePrefix, toSafeBullMqJobId, missionTaskJobId } = await import(
+      "@/jobs/redis"
+    );
     const { QUEUE_AGENT_RUNS, getBullMqSharedOptions } = await import("@/jobs/queues");
     expect(getBullMqPrefix()).toBe("agentdesk-test");
     expect(getQueuePrefix()).toBe("agentdesk-test");
     expect(QUEUE_AGENT_RUNS()).toBe("agent-runs");
     expect(QUEUE_AGENT_RUNS()).not.toContain(":");
     expect(getBullMqSharedOptions().prefix).toBe("agentdesk-test");
+    expect(toSafeBullMqJobId("mission", "abc:def")).not.toContain(":");
+    expect(missionTaskJobId("org1", "task1")).toBe("org-org1-task-task1");
+    expect(missionTaskJobId("org1", "task1")).not.toContain(":");
+  });
+
+  it("isolates development preview and production prefixes", async () => {
+    process.env.APP_RUNTIME_MODE = "development";
+    delete process.env.QUEUE_PREFIX;
+    delete process.env.VERCEL_ENV;
+    let mod = await import("@/jobs/redis");
+    expect(mod.getBullMqPrefix()).toBe("agentdesk-dev");
+
+    vi.resetModules();
+    process.env.APP_RUNTIME_MODE = "production";
+    mod = await import("@/jobs/redis");
+    expect(mod.getBullMqPrefix()).toBe("agentdesk-prod");
+
+    vi.resetModules();
+    process.env.APP_RUNTIME_MODE = "development";
+    process.env.VERCEL_ENV = "preview";
+    mod = await import("@/jobs/redis");
+    expect(mod.getBullMqPrefix()).toBe("agentdesk-preview");
+  });
+
+  it("Queue and Worker share the same BullMQ prefix helper", async () => {
+    process.env.APP_RUNTIME_MODE = "development";
+    delete process.env.QUEUE_PREFIX;
+    const { getBullMqPrefix } = await import("@/jobs/redis");
+    const { getBullMqSharedOptions, QUEUE_AGENT_RUNS } = await import("@/jobs/queues");
+    const shared = getBullMqSharedOptions();
+    expect(shared.prefix).toBe(getBullMqPrefix());
+    expect(QUEUE_AGENT_RUNS()).toBe("agent-runs");
   });
 
   it("honours explicit QUEUE_PREFIX without colons", async () => {

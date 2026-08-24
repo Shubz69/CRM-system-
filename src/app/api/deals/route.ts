@@ -78,16 +78,57 @@ export async function PATCH(req: NextRequest) {
       body.status === DealStatus.LOST ||
       body.status === DealStatus.ABANDONED;
 
-    await prisma.deal.update({
-      where: { id: existing.id },
-      data: {
-        status: body.status,
-        amountCents: body.amountCents === undefined ? undefined : body.amountCents,
-        probability: body.probability === undefined ? undefined : body.probability,
-        stageLabel: body.stageLabel === undefined ? undefined : body.stageLabel,
-        summary: body.summary === undefined ? undefined : body.summary,
-        closedAt: closed ? new Date() : body.status === DealStatus.OPEN ? null : undefined,
-      },
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await prisma.$transaction(async (tx) => {
+      await tx.deal.update({
+        where: { id: existing.id },
+        data: {
+          status: body.status,
+          amountCents: body.amountCents === undefined ? undefined : body.amountCents,
+          probability: body.probability === undefined ? undefined : body.probability,
+          stageLabel: body.stageLabel === undefined ? undefined : body.stageLabel,
+          summary: body.summary === undefined ? undefined : body.summary,
+          closedAt: closed ? new Date() : body.status === DealStatus.OPEN ? null : undefined,
+        },
+      });
+
+      if (body.status === DealStatus.WON && existing.status !== DealStatus.WON) {
+        await appendDomainEvent(tx, {
+          organisationId: session.organisationId,
+          eventType: "DEAL_WON",
+          aggregateType: "Deal",
+          aggregateId: existing.id,
+          payload: {
+            dealId: existing.id,
+            amountCents: body.amountCents ?? existing.amountCents,
+            currency: existing.currency,
+          },
+        });
+      } else if (body.status === DealStatus.LOST && existing.status !== DealStatus.LOST) {
+        await appendDomainEvent(tx, {
+          organisationId: session.organisationId,
+          eventType: "DEAL_LOST",
+          aggregateType: "Deal",
+          aggregateId: existing.id,
+          payload: { dealId: existing.id },
+        });
+      } else if (
+        body.stageLabel !== undefined &&
+        body.stageLabel !== existing.stageLabel &&
+        body.stageLabel
+      ) {
+        await appendDomainEvent(tx, {
+          organisationId: session.organisationId,
+          eventType: "DEAL_STAGE_CHANGED",
+          aggregateType: "Deal",
+          aggregateId: existing.id,
+          payload: {
+            dealId: existing.id,
+            fromStageLabel: existing.stageLabel,
+            toStageLabel: body.stageLabel,
+          },
+        });
+      }
     });
     return Response.json({ ok: true });
   } catch (error) {

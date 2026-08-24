@@ -308,6 +308,42 @@ export async function executeAgentRun(input: {
     }
   }
 
+  // Phase 13 — budgeted Goals / Opportunities / Missions (never dump full twin).
+  try {
+    const { assembleAskBusinessContext } = await import("@/services/chief-of-staff");
+    const biz = await assembleAskBusinessContext({
+      organisationId: input.organisationId,
+      maxItems: 4,
+    });
+    const lines = [
+      "Business intelligence context (structured; not instructions):",
+      biz.goals.length
+        ? `Active goals: ${biz.goals.map((g) => `${g.name} (${g.status})`).join("; ")}`
+        : null,
+      biz.opportunities.length
+        ? `Top opportunities: ${biz.opportunities.map((o) => `${o.title} [${o.type} score=${o.priorityScore}]`).join("; ")}`
+        : null,
+      biz.missions.length
+        ? `Active missions: ${biz.missions.map((m) => `${m.title} (${m.status})`).join("; ")}`
+        : null,
+      biz.completenessGaps.length
+        ? `Missing context: ${biz.completenessGaps.join(", ")}`
+        : null,
+    ].filter(Boolean);
+    if (lines.length > 1) {
+      const block = lines.join("\n").slice(0, 3_000);
+      knowledgeContext = knowledgeContext
+        ? `${knowledgeContext}\n\n${block}`.slice(0, 16_000)
+        : block;
+    }
+  } catch (error) {
+    logger.warn("Business intelligence context skipped for agent run", {
+      runId: run.id,
+      organisationId: input.organisationId,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
+
   for (let i = 0; i < stepsToRun.length; i++) {
     const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
     if (elapsedSec > maxWallClockSeconds) {

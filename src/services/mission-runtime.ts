@@ -8,6 +8,7 @@
 
 import {
   MissionErrorClass,
+  MissionExternalOutcome,
   MissionStatus,
   MissionTaskStatus,
   type AgentMission,
@@ -20,6 +21,9 @@ import {
   assertTaskTransition,
   isTerminalMissionStatus,
 } from "@/services/mission-state";
+import { prepareDomainEventAttach } from "@/services/domain-events/append";
+
+export { prepareDomainEventAttach } from "@/services/domain-events/append";
 
 export class MissionNotFoundError extends Error {
   readonly code = "MISSION_NOT_FOUND";
@@ -51,22 +55,6 @@ export class MissionDuplicateDeliveryError extends Error {
     super(`Duplicate task delivery for idempotency key ${idempotencyKey}`);
     this.name = "MissionDuplicateDeliveryError";
   }
-}
-
-/** Hook point for Phase 12B transactional outbox — currently a no-op inside the same tx. */
-export async function prepareDomainEventAttach(
-  tx: Prisma.TransactionClient,
-  event: {
-    organisationId: string;
-    aggregateType: "AgentMission" | "MissionTask";
-    aggregateId: string;
-    eventType: string;
-    payload: Record<string, unknown>;
-  },
-): Promise<void> {
-  void tx;
-  void event;
-  // Phase 12B will insert into DomainEvent outbox here atomically.
 }
 
 export type CreateMissionInput = {
@@ -327,8 +315,14 @@ export async function claimNextTask(input: {
 
     assertTaskTransition(task.status, MissionTaskStatus.RUNNING);
     const nextAttempt = task.attempt + 1;
-    const claimed = await tx.missionTask.update({
-      where: { id: task.id },
+    // Compare-and-swap: exactly one concurrent worker wins the claim.
+    const cas = await tx.missionTask.updateMany({
+      where: {
+        id: task.id,
+        organisationId: input.organisationId,
+        missionId: input.missionId,
+        status: MissionTaskStatus.READY,
+      },
       data: {
         status: MissionTaskStatus.RUNNING,
         attempt: nextAttempt,
@@ -337,6 +331,10 @@ export async function claimNextTask(input: {
         lastError: null,
       },
     });
+    if (cas.count !== 1) {
+      return null; // lost race — duplicate delivery safely no-ops
+    }
+    const claimed = await tx.missionTask.findFirstOrThrow({ where: { id: task.id } });
 
     if (mission.status === MissionStatus.QUEUED || mission.status === MissionStatus.PLANNING) {
       assertMissionTransition(mission.status, MissionStatus.RUNNING);
@@ -378,6 +376,29 @@ export async function claimNextTask(input: {
     });
 
     return claimed;
+  });
+}
+
+/**
+ * Mark consequential external work state. CONFIRMED must not be blindly replayed after crash.
+ */
+export async function setTaskExternalOutcome(input: {
+  organisationId: string;
+  missionId: string;
+  taskId: string;
+  outcome: MissionExternalOutcome;
+}): Promise<MissionTask> {
+  const task = await prisma.missionTask.findFirst({
+    where: {
+      id: input.taskId,
+      missionId: input.missionId,
+      organisationId: input.organisationId,
+    },
+  });
+  if (!task) throw new MissionNotFoundError();
+  return prisma.missionTask.update({
+    where: { id: task.id },
+    data: { externalOutcome: input.outcome },
   });
 }
 
@@ -576,6 +597,22 @@ export async function failTask(input: {
   });
 }
 
+export class MissionApprovalRequiredError extends Error {
+  readonly code = "MISSION_APPROVAL_REQUIRED";
+  constructor(message = "Mission task requires an explicit approval before resume") {
+    super(message);
+    this.name = "MissionApprovalRequiredError";
+  }
+}
+
+export class MissionApprovalRejectedError extends Error {
+  readonly code = "MISSION_APPROVAL_REJECTED";
+  constructor(message = "Mission task approval was rejected") {
+    super(message);
+    this.name = "MissionApprovalRejectedError";
+  }
+}
+
 export async function waitForApproval(input: {
   organisationId: string;
   missionId: string;
@@ -593,7 +630,13 @@ export async function waitForApproval(input: {
     assertTaskTransition(task.status, MissionTaskStatus.WAITING_APPROVAL);
     await tx.missionTask.update({
       where: { id: task.id },
-      data: { status: MissionTaskStatus.WAITING_APPROVAL },
+      data: {
+        status: MissionTaskStatus.WAITING_APPROVAL,
+        approvedAt: null,
+        rejectedAt: null,
+        rejectionReason: null,
+        approvalUserId: null,
+      },
     });
     const mission = await tx.agentMission.findFirstOrThrow({
       where: { id: input.missionId, organisationId: input.organisationId },
@@ -606,6 +649,96 @@ export async function waitForApproval(input: {
   });
 }
 
+/** Record human approval — required before resumeAfterApproval. */
+export async function approveMissionTask(input: {
+  organisationId: string;
+  missionId: string;
+  taskId: string;
+  approverUserId: string;
+}): Promise<MissionTask> {
+  return prisma.$transaction(async (tx) => {
+    const task = await tx.missionTask.findFirst({
+      where: {
+        id: input.taskId,
+        missionId: input.missionId,
+        organisationId: input.organisationId,
+        status: MissionTaskStatus.WAITING_APPROVAL,
+      },
+    });
+    if (!task) throw new MissionNotFoundError();
+    return tx.missionTask.update({
+      where: { id: task.id },
+      data: {
+        approvalUserId: input.approverUserId,
+        approvedAt: new Date(),
+        rejectedAt: null,
+        rejectionReason: null,
+      },
+    });
+  });
+}
+
+export async function rejectMissionTask(input: {
+  organisationId: string;
+  missionId: string;
+  taskId: string;
+  approverUserId: string;
+  reason: string;
+}): Promise<MissionTask> {
+  return prisma.$transaction(async (tx) => {
+    const task = await tx.missionTask.findFirst({
+      where: {
+        id: input.taskId,
+        missionId: input.missionId,
+        organisationId: input.organisationId,
+        status: MissionTaskStatus.WAITING_APPROVAL,
+      },
+    });
+    if (!task) throw new MissionNotFoundError();
+    assertTaskTransition(task.status, MissionTaskStatus.FAILED);
+    const updated = await tx.missionTask.update({
+      where: { id: task.id },
+      data: {
+        status: MissionTaskStatus.FAILED,
+        approvalUserId: input.approverUserId,
+        rejectedAt: new Date(),
+        rejectionReason: input.reason,
+        approvedAt: null,
+        errorClass: MissionErrorClass.PERMISSION,
+        lastError: input.reason,
+        finishedAt: new Date(),
+      },
+    });
+    const mission = await tx.agentMission.findFirstOrThrow({
+      where: { id: input.missionId, organisationId: input.organisationId },
+    });
+    assertMissionTransition(mission.status, MissionStatus.FAILED);
+    await tx.agentMission.update({
+      where: { id: mission.id },
+      data: {
+        status: MissionStatus.FAILED,
+        lastErrorClass: MissionErrorClass.PERMISSION,
+        lastErrorMessage: input.reason,
+        finishedAt: new Date(),
+      },
+    });
+    await tx.missionOutcome.create({
+      data: {
+        organisationId: input.organisationId,
+        missionId: input.missionId,
+        kind: "failed",
+        summary: `Approval rejected: ${input.reason}`,
+      },
+    });
+    return updated;
+  });
+}
+
+/**
+ * Resume only after approveMissionTask. Cannot bypass WAITING_APPROVAL.
+ * Downstream consequential tasks stay blocked while mission is WAITING_APPROVAL
+ * (claimNextTask returns null).
+ */
 export async function resumeAfterApproval(input: {
   organisationId: string;
   missionId: string;
@@ -620,6 +753,15 @@ export async function resumeAfterApproval(input: {
       },
     });
     if (!task) throw new MissionNotFoundError();
+    if (task.status !== MissionTaskStatus.WAITING_APPROVAL) {
+      throw new MissionApprovalRequiredError(`Task is ${task.status}, not WAITING_APPROVAL`);
+    }
+    if (task.rejectedAt) {
+      throw new MissionApprovalRejectedError(task.rejectionReason || "rejected");
+    }
+    if (!task.approvedAt || !task.approvalUserId) {
+      throw new MissionApprovalRequiredError();
+    }
     assertTaskTransition(task.status, MissionTaskStatus.READY);
     await tx.missionTask.update({
       where: { id: task.id },
@@ -636,7 +778,12 @@ export async function resumeAfterApproval(input: {
   });
 }
 
-/** Simulate worker crash: leave task RUNNING; resume resets to READY from checkpoint. */
+/**
+ * Recover after worker crash without blindly replaying confirmed external work.
+ * - CONFIRMED → complete task (no re-dispatch)
+ * - DISPATCHING → RECONCILIATION_REQUIRED + BLOCKED
+ * - otherwise → READY for safe retry
+ */
 export async function resumeAfterWorkerCrash(input: {
   organisationId: string;
   missionId: string;
@@ -655,9 +802,76 @@ export async function resumeAfterWorkerCrash(input: {
       },
     });
 
+    let first: MissionTask | null = null;
     for (const task of stuck) {
+      if (task.externalOutcome === MissionExternalOutcome.CONFIRMED) {
+        assertTaskTransition(task.status, MissionTaskStatus.COMPLETED);
+        first = await tx.missionTask.update({
+          where: { id: task.id },
+          data: {
+            status: MissionTaskStatus.COMPLETED,
+            resultSummary: task.resultSummary || "Confirmed before crash — not replayed",
+            finishedAt: new Date(),
+            lastError: null,
+          },
+        });
+        await tx.missionCheckpoint.create({
+          data: {
+            organisationId: input.organisationId,
+            missionId: input.missionId,
+            taskId: task.id,
+            label: "resume.after_crash.confirmed",
+            payload: {
+              taskId: task.id,
+              externalOutcome: task.externalOutcome,
+              attempt: task.attempt,
+            },
+          },
+        });
+        await maybeCompleteMission(tx, input.organisationId, input.missionId);
+        continue;
+      }
+
+      if (task.externalOutcome === MissionExternalOutcome.DISPATCHING) {
+        assertTaskTransition(task.status, MissionTaskStatus.BLOCKED);
+        first = await tx.missionTask.update({
+          where: { id: task.id },
+          data: {
+            status: MissionTaskStatus.BLOCKED,
+            externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+            errorClass: MissionErrorClass.UNKNOWN,
+            lastError: "External dispatch in progress at crash — reconciliation required",
+          },
+        });
+        await tx.missionCheckpoint.create({
+          data: {
+            organisationId: input.organisationId,
+            missionId: input.missionId,
+            taskId: task.id,
+            label: "resume.after_crash.reconcile",
+            payload: {
+              taskId: task.id,
+              externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+              attempt: task.attempt,
+            },
+          },
+        });
+        if (mission.status === MissionStatus.RUNNING) {
+          assertMissionTransition(mission.status, MissionStatus.BLOCKED);
+          await tx.agentMission.update({
+            where: { id: mission.id },
+            data: {
+              status: MissionStatus.BLOCKED,
+              lastErrorClass: MissionErrorClass.UNKNOWN,
+              lastErrorMessage: "Reconciliation required after crash mid-dispatch",
+            },
+          });
+        }
+        continue;
+      }
+
       assertTaskTransition(task.status, MissionTaskStatus.READY);
-      await tx.missionTask.update({
+      first = await tx.missionTask.update({
         where: { id: task.id },
         data: {
           status: MissionTaskStatus.READY,
@@ -675,20 +889,25 @@ export async function resumeAfterWorkerCrash(input: {
             taskId: task.id,
             idempotencyKey: task.idempotencyKey,
             attempt: task.attempt,
+            externalOutcome: task.externalOutcome,
           },
         },
       });
     }
 
-    if (stuck.length && mission.status === MissionStatus.RUNNING) {
-      assertMissionTransition(mission.status, MissionStatus.RETRYING);
+    const refreshed = await tx.agentMission.findFirstOrThrow({ where: { id: mission.id } });
+    if (
+      stuck.some((t) => t.externalOutcome === MissionExternalOutcome.NOT_STARTED) &&
+      refreshed.status === MissionStatus.RUNNING
+    ) {
+      assertMissionTransition(refreshed.status, MissionStatus.RETRYING);
       await tx.agentMission.update({
         where: { id: mission.id },
         data: { status: MissionStatus.RETRYING },
       });
     }
 
-    return stuck[0] ?? null;
+    return first;
   });
 }
 

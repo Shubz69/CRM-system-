@@ -20,6 +20,8 @@ import {
   Cpu,
   Home,
   Plug,
+  Target,
+  Lightbulb,
 } from "lucide-react";
 
 export type NavItem = {
@@ -45,6 +47,9 @@ export const PRIMARY_NAV: NavItem[] = [
  */
 export const WORK_NAV: NavItem[] = [
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/goals", label: "Goals", icon: Target },
+  { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
+  { href: "/business-context", label: "Business context", icon: Building2 },
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/learning", label: "Learning", icon: FlaskConical },
   { href: "/reports", label: "Reports", icon: FileBarChart },
@@ -53,6 +58,9 @@ export const WORK_NAV: NavItem[] = [
 
 /** Intelligence cluster — used by shell section label + command palette. */
 export const INTELLIGENCE_NAV: NavItem[] = [
+  { href: "/goals", label: "Goals", icon: Target },
+  { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
+  { href: "/business-context", label: "Business context", icon: Building2 },
   { href: "/insights", label: "Insights", icon: Sparkles },
   { href: "/learning", label: "Learning", icon: FlaskConical },
   { href: "/reports", label: "Reports", icon: FileBarChart },

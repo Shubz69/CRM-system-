@@ -2,21 +2,21 @@
  * requestPublish rejects social connections from other orgs.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ContentPieceStatus } from "@prisma/client";
+import { ContentPieceStatus, PublishingJobStatus } from "@prisma/client";
 
-vi.mock("@/lib/db", () => {
-  const pieceFindFirst = vi.fn();
-  const connectionFindFirst = vi.fn();
-  const jobCreate = vi.fn();
-  return {
-    prisma: {
-      contentPiece: { findFirst: pieceFindFirst },
-      socialConnection: { findFirst: connectionFindFirst },
-      publishingJob: { create: jobCreate },
-      __mocks: { pieceFindFirst, connectionFindFirst, jobCreate },
-    },
-  };
-});
+const pieceFindFirst = vi.fn();
+const connectionFindFirst = vi.fn();
+const jobFindFirst = vi.fn();
+const $transaction = vi.fn();
+
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    contentPiece: { findFirst: (...a: unknown[]) => pieceFindFirst(...a), updateMany: vi.fn() },
+    socialConnection: { findFirst: (...a: unknown[]) => connectionFindFirst(...a) },
+    publishingJob: { findFirst: (...a: unknown[]) => jobFindFirst(...a) },
+    $transaction: (...a: unknown[]) => $transaction(...a),
+  },
+}));
 
 vi.mock("@/kernel", () => ({
   ensureBuiltinToolsRegistered: vi.fn(),
@@ -26,23 +26,19 @@ vi.mock("@/kernel", () => ({
   })),
 }));
 
+vi.mock("@/services/domain-events/append", () => ({
+  appendDomainEvent: vi.fn(async () => ({ id: "evt_1" })),
+}));
+
 import { requestPublish } from "@/services/content-os";
-import { prisma } from "@/lib/db";
-
-type Mocks = {
-  pieceFindFirst: ReturnType<typeof vi.fn>;
-  connectionFindFirst: ReturnType<typeof vi.fn>;
-  jobCreate: ReturnType<typeof vi.fn>;
-};
-
-const mocks = (prisma as unknown as { __mocks: Mocks }).__mocks;
 
 describe("requestPublish — social connection org isolation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.pieceFindFirst.mockResolvedValue({
+    pieceFindFirst.mockResolvedValue({
       id: "piece_1",
       organisationId: "org_a",
+      title: "Piece",
       status: ContentPieceStatus.APPROVED,
       whyEvidence: {
         rationale: "Trend cluster evidence",
@@ -50,10 +46,11 @@ describe("requestPublish — social connection org isolation", () => {
         sourceUrls: ["https://example.com"],
       },
     });
+    jobFindFirst.mockResolvedValue(null);
   });
 
   it("rejects a socialConnectionId that is not in the workspace", async () => {
-    mocks.connectionFindFirst.mockResolvedValue(null);
+    connectionFindFirst.mockResolvedValue(null);
     await expect(
       requestPublish({
         organisationId: "org_a",
@@ -62,19 +59,39 @@ describe("requestPublish — social connection org isolation", () => {
         socialConnectionId: "conn_other_org",
       }),
     ).rejects.toThrow(/Social connection not found/i);
-    expect(mocks.connectionFindFirst).toHaveBeenCalledWith({
+    expect(connectionFindFirst).toHaveBeenCalledWith({
       where: { id: "conn_other_org", organisationId: "org_a" },
-      select: { id: true },
+      select: {
+        id: true,
+        displayName: true,
+        externalAccountId: true,
+        platform: true,
+      },
     });
-    expect(mocks.jobCreate).not.toHaveBeenCalled();
+    expect($transaction).not.toHaveBeenCalled();
   });
 
   it("queues when connection belongs to the workspace", async () => {
-    mocks.connectionFindFirst.mockResolvedValue({ id: "conn_a" });
-    mocks.jobCreate.mockResolvedValue({
-      id: "job_1",
-      status: "PENDING_APPROVAL",
+    connectionFindFirst.mockResolvedValue({
+      id: "conn_a",
+      displayName: "Acme",
+      externalAccountId: "ig_1",
+      platform: "INSTAGRAM",
     });
+    $transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const created = { id: "job_1", status: PublishingJobStatus.PENDING_APPROVAL };
+      const tx = {
+        publishingJob: {
+          create: vi.fn().mockResolvedValue(created),
+          update: vi.fn().mockResolvedValue(created),
+        },
+        approvalRequest: {
+          create: vi.fn().mockResolvedValue({ id: "apr_1" }),
+        },
+      };
+      return fn(tx);
+    });
+
     const result = await requestPublish({
       organisationId: "org_a",
       pieceId: "piece_1",
@@ -82,6 +99,6 @@ describe("requestPublish — social connection org isolation", () => {
       socialConnectionId: "conn_a",
     });
     expect(result.jobId).toBe("job_1");
-    expect(mocks.jobCreate).toHaveBeenCalled();
+    expect(result.status).toBe(PublishingJobStatus.PENDING_APPROVAL);
   });
 });

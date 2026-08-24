@@ -80,8 +80,16 @@ After fix, idle hosted worker still generates some Redis commands from the **sin
 
 ---
 
-## Manual actions
+## Outbox idle DB activity (Phase 12B)
 
-1. Ensure local `.env` uses `redis://localhost:6379` (not Upstash).
-2. Production/preview: keep Upstash only in host env; set `CRON_FALLBACK_ENABLED=false` while worker is healthy.
-3. If an old Upstash instance still has repeatable keys from prior deploys, flush/remove obsolete `follow-ups` / `maintenance` repeatables once after deploy (ops one-time).
+Hosted worker also runs a Postgres outbox sweep every `OUTBOX_SWEEP_INTERVAL_MS` (default **15s**) plus stale-claim recovery and a mission-queue recovery sweep every `MISSION_QUEUE_RECOVERY_INTERVAL_MS` (default **60s**).
+
+These hit **Postgres only** — not Redis. No permanent BullMQ worker for the outbox.
+
+Expected idle: one `SELECT … FOR UPDATE SKIP LOCKED` batch (often empty) per interval.
+
+### Retention (policy — not automated purge yet)
+
+- Hot window: operational PENDING/RETRY/PROCESSING stay until resolved.
+- Processed / CANCELLED / DEAD_LETTER rows: keep for ops/audit; do **not** auto-delete in production without a tested retention job.
+- Future: organisation/platform policy for archive/purge of low-value PROCESSED events older than N days; DEAD_LETTER and security-related rows retain longer.

@@ -1,6 +1,9 @@
 /**
  * Phase 10 — Chief of Staff briefing + AI Ops snapshots.
  * All counts from real tables; never invent success rates.
+ *
+ * Phase 18 — Enterprise ops panel (SLO FOUNDATION, cost/RBAC WORKING) via
+ * `@/services/enterprise-ops`. No contractual SLO claims in customer UI.
  */
 
 import { prisma } from "@/lib/db";
@@ -8,6 +11,9 @@ import { getQueuePrefix, pingRedis } from "@/jobs/redis";
 import { getAgentRunsQueue } from "@/jobs/queues";
 import { getEntitlementsDashboard } from "@/services/entitlements";
 import { getQueueOpsSnapshot } from "@/services/queue-ops";
+import { getOutboxOpsSnapshot } from "@/services/domain-events";
+import { getIntegrationOpsForAiOps } from "@/services/connectors";
+import { getEnterpriseOpsPanel } from "@/services/enterprise-ops";
 
 /** Throttle Redis getJobCounts — do not hammer Redis for admin UI. */
 let cachedAgentQueueCounts: {
@@ -186,7 +192,7 @@ export async function getAiOpsSnapshot(organisationId?: string) {
     ? { organisationId, resolvedAt: null }
     : { resolvedAt: null };
 
-  const [openFailedJobs, recentFailedJobs, recentRuns, recentAiFailures, agentQueue] =
+  const [openFailedJobs, recentFailedJobs, recentRuns, recentAiFailures, agentQueue, outbox, phase13Raw, phase14, enterpriseOps] =
     await Promise.all([
       prisma.failedJob.count({ where: failedWhere }),
       prisma.failedJob.findMany({
@@ -235,7 +241,46 @@ export async function getAiOpsSnapshot(organisationId?: string) {
         },
       }),
       redisOk ? getAgentRunsCountsCached() : Promise.resolve(null),
+      getOutboxOpsSnapshot(organisationId).catch(() => null),
+      organisationId
+        ? Promise.all([
+            prisma.goal.count({ where: { organisationId } }),
+            prisma.goal.count({ where: { organisationId, status: "AT_RISK" } }),
+            prisma.businessOpportunity.groupBy({
+              by: ["status"],
+              where: { organisationId },
+              _count: { _all: true },
+            }),
+            prisma.opportunityDetectorRun.findMany({
+              where: { organisationId },
+              orderBy: { startedAt: "desc" },
+              take: 10,
+              select: {
+                detectorKey: true,
+                createdCount: true,
+                updatedCount: true,
+                suppressedCount: true,
+                errorSummary: true,
+                startedAt: true,
+                finishedAt: true,
+              },
+            }),
+          ]).catch(() => null)
+        : Promise.resolve(null),
+      getIntegrationOpsForAiOps(organisationId).catch(() => null),
+      getEnterpriseOpsPanel(organisationId).catch(() => null),
     ]);
+
+  const phase13 = phase13Raw
+    ? {
+        goalsTotal: phase13Raw[0],
+        goalsAtRisk: phase13Raw[1],
+        opportunitiesByStatus: Object.fromEntries(
+          phase13Raw[2].map((r) => [r.status, r._count._all]),
+        ),
+        recentDetectorRuns: phase13Raw[3],
+      }
+    : null;
 
   return {
     redisOk,
@@ -245,18 +290,26 @@ export async function getAiOpsSnapshot(organisationId?: string) {
     recentFailedJobs,
     recentRuns,
     recentAiFailures,
-    /** Single BullMQ queue — follow-ups/retention are Postgres sweeps (no Redis depth). */
+    /** Single BullMQ queue — follow-ups/retention/outbox are Postgres sweeps. */
     queues: agentQueue ? [agentQueue] : [],
     queueOps,
+    outbox,
+    phase13,
+    phase14,
+    /** Phase 18 — SLO FOUNDATION; publish health from real job counts only */
+    enterpriseOps,
     topology: {
       bullmqWorkers: 1,
       authoritativeFollowUps: "worker-postgres-interval",
       authoritativeRetention: "worker-postgres-interval",
+      authoritativeOutbox: "worker-postgres-interval",
+      authoritativeOpportunityDetectors: "worker-postgres-interval",
+      connectorMesh: "postgres-capability-eval",
       cronFallback: "CRON_FALLBACK_ENABLED only",
     },
     message: redisOk
-      ? "Redis reachable — confirm hosted worker (npm run worker). Follow-ups/retention do not poll Redis."
-      : "Redis down — Ask agent-runs will not process until Redis + worker are healthy. Durable state remains in Postgres.",
+      ? "Redis reachable — confirm hosted worker (npm run worker). Follow-ups/retention/outbox/detectors do not poll Redis."
+      : "Redis down — Ask agent-runs will not process until Redis + worker are healthy. Durable state + outbox remain in Postgres.",
   };
 }
 
@@ -268,3 +321,17 @@ export async function getWorkspaceOpsSummary(organisationId: string) {
   ]);
   return { briefing, entitlements, aiOps };
 }
+
+/** Phase 18 enterprise-ops re-exports */
+export {
+  captureOperationalSloSnapshot,
+  peekSloIndicators,
+  recordCostOutcomeLink,
+  getEnterpriseOpsPanel,
+  getSsoScimReadiness,
+  dryRunRetentionPurge,
+  getRbacMatrixDocumentation,
+  SLO_MATURITY_NOTE,
+  SSO_SCIM_MATURITY,
+} from "@/services/enterprise-ops";
+

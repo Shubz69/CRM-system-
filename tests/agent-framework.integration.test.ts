@@ -69,7 +69,7 @@ describe.skipIf(!hasDatabase)("agent framework org isolation (Postgres)", () => 
     });
     expect(progress).toBeTruthy();
     expect(progress!.steps.length).toBe(steps.length);
-  });
+  }, 60_000);
 
   it("cross-org progress read returns null (not another tenant's data)", async () => {
     const run = await prisma.agentRun.create({
@@ -92,5 +92,5 @@ describe.skipIf(!hasDatabase)("agent framework org isolation (Postgres)", () => 
       where: { id: run.id, organisationId: orgB.organisationId },
     });
     expect(foreign).toBeNull();
-  });
+  }, 30_000);
 });

@@ -1,16 +1,24 @@
 /**
  * Phase 6 Content Operating System.
  * Every recommendation must carry whyEvidence. Publishing never fakes success.
+ * Phase 15 — externalOutcome ledger on PublishingJob (CONFIRMED / FAILED / RECONCILIATION_REQUIRED).
  */
 
 import {
+  ApprovalRequestStatus,
   ContentOpportunityStatus,
   ContentPieceStatus,
+  MissionExternalOutcome,
   Prisma,
   PublishingJobStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ensureBuiltinToolsRegistered, evaluateToolPolicy } from "@/kernel";
+import { appendDomainEvent } from "@/services/domain-events/append";
+import {
+  buildPublishIdempotencyKey,
+  formatPublishActionDescription,
+} from "@/services/publishing/platform";
 
 export type WhyEvidence = {
   rationale: string;
@@ -249,6 +257,7 @@ export async function decidePieceApproval(input: {
 
 /**
  * Request publish via Kernel policy. Never marks PUBLISHED without a real external id.
+ * Sets externalOutcome=PREPARED and a stable idempotencyKey. Emits CONTENT_PUBLISH_REQUESTED.
  */
 export async function requestPublish(input: {
   organisationId: string;
@@ -275,42 +284,134 @@ export async function requestPublish(input: {
     throw new Error(policy.reason || "Publishing is disabled by policy");
   }
 
+  let accountLabel = "(no connected account)";
   if (input.socialConnectionId) {
     const connection = await prisma.socialConnection.findFirst({
       where: {
         id: input.socialConnectionId,
         organisationId: input.organisationId,
       },
-      select: { id: true },
+      select: { id: true, displayName: true, externalAccountId: true, platform: true },
     });
     if (!connection) {
       throw new Error("Social connection not found for this workspace");
     }
+    accountLabel =
+      connection.displayName?.trim() ||
+      `${connection.platform}:${connection.externalAccountId}`;
   }
 
-  const status =
-    policy.effect === "require_approval"
-      ? PublishingJobStatus.PENDING_APPROVAL
-      : PublishingJobStatus.APPROVED;
+  const needsApproval = policy.effect === "require_approval";
+  const scheduledFuture =
+    Boolean(input.scheduledAt) && (input.scheduledAt as Date).getTime() > Date.now();
+  const status = needsApproval
+    ? PublishingJobStatus.PENDING_APPROVAL
+    : scheduledFuture
+      ? PublishingJobStatus.SCHEDULED
+      : PublishingJobStatus.QUEUED;
 
-  const job = await prisma.publishingJob.create({
-    data: {
-      organisationId: input.organisationId,
-      pieceId: piece.id,
-      variantId: input.variantId ?? null,
-      platform: input.platform,
-      status,
-      socialConnectionId: input.socialConnectionId ?? null,
-      scheduledAt: input.scheduledAt ?? null,
-      policySnapshot: {
-        effect: policy.effect,
-        reason: policy.reason,
-        toolName: "social.publish",
-      } as Prisma.InputJsonValue,
-    },
+  const idempotencyKey = buildPublishIdempotencyKey({
+    organisationId: input.organisationId,
+    pieceId: piece.id,
+    platform: input.platform,
+    socialConnectionId: input.socialConnectionId,
+    scheduledAt: input.scheduledAt,
+    variantId: input.variantId,
   });
 
-  if (input.scheduledAt && status === PublishingJobStatus.APPROVED) {
+  const existing = await prisma.publishingJob.findFirst({
+    where: { organisationId: input.organisationId, idempotencyKey },
+  });
+  if (existing) {
+    if (
+      existing.externalOutcome === MissionExternalOutcome.CONFIRMED ||
+      existing.status === PublishingJobStatus.PUBLISHED
+    ) {
+      return {
+        jobId: existing.id,
+        status: existing.status,
+        policyEffect: policy.effect,
+      };
+    }
+    if (existing.status !== PublishingJobStatus.CANCELLED) {
+      return {
+        jobId: existing.id,
+        status: existing.status,
+        policyEffect: policy.effect,
+      };
+    }
+  }
+
+  const actionDescription = formatPublishActionDescription({
+    platform: input.platform,
+    accountLabel,
+    scheduledAt: input.scheduledAt ?? null,
+    pieceTitle: piece.title,
+  });
+
+  const job = await prisma.$transaction(async (tx) => {
+    const created = await tx.publishingJob.create({
+      data: {
+        organisationId: input.organisationId,
+        pieceId: piece.id,
+        variantId: input.variantId ?? null,
+        platform: input.platform,
+        status,
+        socialConnectionId: input.socialConnectionId ?? null,
+        scheduledAt: input.scheduledAt ?? null,
+        idempotencyKey,
+        externalOutcome: MissionExternalOutcome.PREPARED,
+        policySnapshot: {
+          effect: policy.effect,
+          reason: policy.reason,
+          toolName: "social.publish",
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    if (needsApproval) {
+      const approval = await tx.approvalRequest.create({
+        data: {
+          organisationId: input.organisationId,
+          kind: "publish",
+          title: `Publish to ${input.platform}`,
+          summary: actionDescription,
+          status: ApprovalRequestStatus.PENDING,
+          payload: {
+            kind: "publish",
+            publishingJobId: created.id,
+            organisationId: input.organisationId,
+            platform: input.platform,
+            socialConnectionId: input.socialConnectionId ?? null,
+            scheduledAt: input.scheduledAt?.toISOString() ?? null,
+            accountLabel,
+            actionDescription,
+            authorisedJobIds: [created.id],
+          } as Prisma.InputJsonValue,
+        },
+      });
+      await tx.publishingJob.update({
+        where: { id: created.id },
+        data: { approvalRequestId: approval.id },
+      });
+    }
+
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "CONTENT_PUBLISH_REQUESTED",
+      aggregateType: "PublishingJob",
+      aggregateId: created.id,
+      payload: {
+        publishingJobId: created.id,
+        contentPieceId: piece.id,
+      },
+      dedupeKey: `CONTENT_PUBLISH_REQUESTED:${created.id}`,
+    });
+
+    return created;
+  });
+
+  if (scheduledFuture && status !== PublishingJobStatus.PENDING_APPROVAL) {
     await prisma.contentPiece.updateMany({
       where: { id: piece.id, organisationId: input.organisationId },
       data: { status: ContentPieceStatus.SCHEDULED },
@@ -321,7 +422,11 @@ export async function requestPublish(input: {
 }
 
 /**
- * Record a real publish result only. Requires externalPostId or externalUrl from the platform API.
+ * Record a real publish result only.
+ * - Success requires externalPostId or externalUrl → PUBLISHED + CONFIRMED + CONTENT_PUBLISHED
+ * - Clear error → FAILED
+ * - reconciliationRequired → RECONCILIATION_REQUIRED (never PUBLISHED / never CONFIRMED)
+ * Never replays an already CONFIRMED job.
  */
 export async function recordPublishResult(input: {
   organisationId: string;
@@ -329,23 +434,88 @@ export async function recordPublishResult(input: {
   externalPostId?: string | null;
   externalUrl?: string | null;
   error?: string | null;
+  reconciliationRequired?: boolean;
+  reconciliationNote?: string | null;
 }): Promise<void> {
   const job = await prisma.publishingJob.findFirst({
     where: { id: input.jobId, organisationId: input.organisationId },
   });
   if (!job) throw new Error("Publishing job not found");
 
-  if (input.error) {
-    await prisma.publishingJob.updateMany({
-      where: { id: job.id, organisationId: input.organisationId },
-      data: {
-        status: PublishingJobStatus.FAILED,
-        error: input.error,
-      },
+  if (
+    job.externalOutcome === MissionExternalOutcome.CONFIRMED ||
+    job.status === PublishingJobStatus.PUBLISHED
+  ) {
+    return;
+  }
+
+  if (input.reconciliationRequired) {
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.publishingJob.updateMany({
+        where: {
+          id: job.id,
+          organisationId: input.organisationId,
+          externalOutcome: { not: MissionExternalOutcome.CONFIRMED },
+          status: { not: PublishingJobStatus.PUBLISHED },
+        },
+        data: {
+          status: PublishingJobStatus.RECONCILIATION_REQUIRED,
+          externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+          error: input.error ?? job.error,
+          reconciliationNote: (
+            input.reconciliationNote ??
+            input.error ??
+            "Reconciliation required"
+          ).slice(0, 4000),
+        },
+      });
+      if (updated.count !== 1) return;
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "CONTENT_PUBLISH_RECONCILIATION_REQUIRED",
+        aggregateType: "PublishingJob",
+        aggregateId: job.id,
+        payload: {
+          publishingJobId: job.id,
+          reason: (input.reconciliationNote ?? input.error ?? "Reconciliation required").slice(
+            0,
+            500,
+          ),
+        },
+      });
     });
-    await prisma.contentPiece.updateMany({
-      where: { id: job.pieceId, organisationId: input.organisationId },
-      data: { status: ContentPieceStatus.FAILED },
+    return;
+  }
+
+  if (input.error) {
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.publishingJob.updateMany({
+        where: {
+          id: job.id,
+          organisationId: input.organisationId,
+          externalOutcome: { not: MissionExternalOutcome.CONFIRMED },
+        },
+        data: {
+          status: PublishingJobStatus.FAILED,
+          externalOutcome: MissionExternalOutcome.FAILED,
+          error: input.error,
+        },
+      });
+      if (updated.count !== 1) return;
+      await tx.contentPiece.updateMany({
+        where: { id: job.pieceId, organisationId: input.organisationId },
+        data: { status: ContentPieceStatus.FAILED },
+      });
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "CONTENT_PUBLISH_FAILED",
+        aggregateType: "PublishingJob",
+        aggregateId: job.id,
+        payload: {
+          publishingJobId: job.id,
+          errorSummary: input.error!.slice(0, 500),
+        },
+      });
     });
     return;
   }
@@ -354,19 +524,47 @@ export async function recordPublishResult(input: {
     throw new Error("Cannot mark published without externalPostId or externalUrl from the platform");
   }
 
-  await prisma.publishingJob.updateMany({
-    where: { id: job.id, organisationId: input.organisationId },
-    data: {
-      status: PublishingJobStatus.PUBLISHED,
-      publishedAt: new Date(),
-      externalPostId: input.externalPostId ?? null,
-      externalUrl: input.externalUrl ?? null,
-      error: null,
-    },
-  });
-  await prisma.contentPiece.updateMany({
-    where: { id: job.pieceId, organisationId: input.organisationId },
-    data: { status: ContentPieceStatus.PUBLISHED },
+  const confirmedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    const updated = await tx.publishingJob.updateMany({
+      where: {
+        id: job.id,
+        organisationId: input.organisationId,
+        externalOutcome: { not: MissionExternalOutcome.CONFIRMED },
+        status: { not: PublishingJobStatus.PUBLISHED },
+      },
+      data: {
+        status: PublishingJobStatus.PUBLISHED,
+        externalOutcome: MissionExternalOutcome.CONFIRMED,
+        publishedAt: confirmedAt,
+        confirmedAt,
+        externalPostId: input.externalPostId ?? null,
+        externalUrl: input.externalUrl ?? null,
+        error: null,
+        reconciliationNote: null,
+      },
+    });
+    if (updated.count !== 1) return;
+
+    await tx.contentPiece.updateMany({
+      where: { id: job.pieceId, organisationId: input.organisationId },
+      data: { status: ContentPieceStatus.PUBLISHED },
+    });
+
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "CONTENT_PUBLISHED",
+      aggregateType: "PublishingJob",
+      aggregateId: job.id,
+      payload: {
+        publishingJobId: job.id,
+        contentPieceId: job.pieceId,
+        externalPostId: input.externalPostId?.trim() || undefined,
+        externalUrl: input.externalUrl?.trim() || undefined,
+        platform: job.platform,
+      },
+      dedupeKey: `CONTENT_PUBLISHED:${job.id}`,
+    });
   });
 }
 

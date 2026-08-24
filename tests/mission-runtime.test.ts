@@ -7,6 +7,7 @@ import {
 } from "./helpers/org-fixtures";
 import {
   assertMissionTenantIsolation,
+  approveMissionTask,
   cancelMission,
   claimNextTask,
   completeTask,
@@ -14,17 +15,21 @@ import {
   failTask,
   getMissionForOrg,
   loadMissionDurableState,
+  MissionApprovalRequiredError,
   MissionBudgetExceededError,
   MissionNotFoundError,
   MissionPermissionError,
   rejectMissionPermission,
+  rejectMissionTask,
   resumeAfterApproval,
   resumeAfterWorkerCrash,
+  setTaskExternalOutcome,
   stopMissionOnBudget,
   waitForApproval,
 } from "@/services/mission-runtime";
 import { assertMissionTransition, InvalidMissionTransitionError } from "@/services/mission-state";
 import { prisma } from "@/lib/db";
+import { MissionExternalOutcome } from "@prisma/client";
 
 describe("Phase 12 Mission runtime", () => {
   let orgA: TestOrganisationFixture;
@@ -260,12 +265,15 @@ describe("Phase 12 Mission runtime", () => {
     expect(loaded.status).toBe(MissionStatus.FAILED);
   });
 
-  it("WAITING_APPROVAL then resume", async () => {
+  it("WAITING_APPROVAL then approve and resume", async () => {
     const mission = await createMission({
       organisationId: orgA.organisationId,
       title: "Approval",
       objectiveSummary: "Need human",
-      tasks: [{ idempotencyKey: "ap", title: "Approve" }],
+      tasks: [
+        { idempotencyKey: "ap", title: "Approve" },
+        { idempotencyKey: "after", title: "After", dependsOnKeys: ["ap"] },
+      ],
     });
     const claimed = await claimNextTask({
       organisationId: orgA.organisationId,
@@ -279,6 +287,27 @@ describe("Phase 12 Mission runtime", () => {
     let loaded = await getMissionForOrg(orgA.organisationId, mission.id);
     expect(loaded.status).toBe(MissionStatus.WAITING_APPROVAL);
 
+    // Cannot claim downstream while waiting approval
+    expect(
+      await claimNextTask({ organisationId: orgA.organisationId, missionId: mission.id }),
+    ).toBeNull();
+
+    // Cannot bypass without approve
+    await expect(
+      resumeAfterApproval({
+        organisationId: orgA.organisationId,
+        missionId: mission.id,
+        taskId: claimed!.id,
+      }),
+    ).rejects.toBeInstanceOf(MissionApprovalRequiredError);
+
+    await approveMissionTask({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+      taskId: claimed!.id,
+      approverUserId: "user_approver_1",
+    });
+
     await resumeAfterApproval({
       organisationId: orgA.organisationId,
       missionId: mission.id,
@@ -286,7 +315,108 @@ describe("Phase 12 Mission runtime", () => {
     });
     loaded = await getMissionForOrg(orgA.organisationId, mission.id);
     expect(loaded.status).toBe(MissionStatus.RUNNING);
-    expect(loaded.tasks[0].status).toBe(MissionTaskStatus.READY);
+    expect(loaded.tasks.find((t) => t.idempotencyKey === "ap")?.approvalUserId).toBe(
+      "user_approver_1",
+    );
+    expect(loaded.tasks.find((t) => t.idempotencyKey === "ap")?.approvedAt).toBeTruthy();
+  });
+
+  it("rejects approval and blocks downstream", async () => {
+    const mission = await createMission({
+      organisationId: orgA.organisationId,
+      title: "Reject",
+      objectiveSummary: "No",
+      tasks: [{ idempotencyKey: "r", title: "R" }],
+    });
+    const claimed = await claimNextTask({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+    });
+    await waitForApproval({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+      taskId: claimed!.id,
+    });
+    await rejectMissionTask({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+      taskId: claimed!.id,
+      approverUserId: "user_rej",
+      reason: "policy",
+    });
+    const loaded = await getMissionForOrg(orgA.organisationId, mission.id);
+    expect(loaded.status).toBe(MissionStatus.FAILED);
+    expect(loaded.tasks[0].rejectedAt).toBeTruthy();
+    expect(loaded.tasks[0].rejectionReason).toBe("policy");
+  });
+
+  it("duplicate concurrent claim: exactly one wins", async () => {
+    const mission = await createMission({
+      organisationId: orgA.organisationId,
+      title: "CAS",
+      objectiveSummary: "One winner",
+      tasks: [{ idempotencyKey: "only", title: "Only" }],
+    });
+    const [a, b] = await Promise.all([
+      claimNextTask({ organisationId: orgA.organisationId, missionId: mission.id }),
+      claimNextTask({ organisationId: orgA.organisationId, missionId: mission.id }),
+    ]);
+    const winners = [a, b].filter(Boolean);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]!.attempt).toBe(1);
+  });
+
+  it("crash with CONFIRMED external outcome does not replay", async () => {
+    const mission = await createMission({
+      organisationId: orgA.organisationId,
+      title: "Confirmed crash",
+      objectiveSummary: "No replay",
+      tasks: [{ idempotencyKey: "pub", title: "Publish" }],
+    });
+    const claimed = await claimNextTask({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+    });
+    await setTaskExternalOutcome({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+      taskId: claimed!.id,
+      outcome: MissionExternalOutcome.CONFIRMED,
+    });
+    await resumeAfterWorkerCrash({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+    });
+    const loaded = await getMissionForOrg(orgA.organisationId, mission.id);
+    expect(loaded.tasks[0].status).toBe(MissionTaskStatus.COMPLETED);
+    expect(loaded.checkpoints.some((c) => c.label === "resume.after_crash.confirmed")).toBe(true);
+  }, 20_000);
+
+  it("crash mid-DISPATCHING requires reconciliation", async () => {
+    const mission = await createMission({
+      organisationId: orgA.organisationId,
+      title: "Dispatch crash",
+      objectiveSummary: "Reconcile",
+      tasks: [{ idempotencyKey: "d", title: "D" }],
+    });
+    const claimed = await claimNextTask({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+    });
+    await setTaskExternalOutcome({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+      taskId: claimed!.id,
+      outcome: MissionExternalOutcome.DISPATCHING,
+    });
+    await resumeAfterWorkerCrash({
+      organisationId: orgA.organisationId,
+      missionId: mission.id,
+    });
+    const loaded = await getMissionForOrg(orgA.organisationId, mission.id);
+    expect(loaded.tasks[0].status).toBe(MissionTaskStatus.BLOCKED);
+    expect(loaded.tasks[0].externalOutcome).toBe(MissionExternalOutcome.RECONCILIATION_REQUIRED);
+    expect(loaded.status).toBe(MissionStatus.BLOCKED);
   });
 
   it("enforces tenant isolation", async () => {

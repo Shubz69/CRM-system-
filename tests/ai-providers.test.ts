@@ -32,6 +32,8 @@ describe("optional AI providers — fail closed when unconfigured, never a silen
     }
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-test-key");
     vi.resetModules();
+    const { resetEnvCache } = await import("@/lib/env");
+    resetEnvCache();
 
     const { getAiProvider } = await import("@/adapters/ai");
     expect(getAiProvider("groq").name).toBe("anthropic");

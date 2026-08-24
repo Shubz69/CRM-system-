@@ -161,21 +161,36 @@ export async function createDeal(input: {
   if (input.probability != null && (input.probability < 0 || input.probability > 1)) {
     throw new Error("Deal probability must be between 0 and 1 (or null if unknown)");
   }
-  const row = await prisma.deal.create({
-    data: {
+  const row = await prisma.$transaction(async (tx) => {
+    const deal = await tx.deal.create({
+      data: {
+        organisationId: input.organisationId,
+        name: input.name.trim(),
+        companyId: input.companyId ?? null,
+        contactId: input.contactId ?? null,
+        leadId: input.leadId ?? null,
+        amountCents: input.amountCents ?? null,
+        currency: input.currency ?? "USD",
+        probability: input.probability ?? null,
+        stageLabel: input.stageLabel ?? null,
+        summary: input.summary ?? null,
+        expectedCloseAt: input.expectedCloseAt ?? null,
+        status: DealStatus.OPEN,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
       organisationId: input.organisationId,
-      name: input.name.trim(),
-      companyId: input.companyId ?? null,
-      contactId: input.contactId ?? null,
-      leadId: input.leadId ?? null,
-      amountCents: input.amountCents ?? null,
-      currency: input.currency ?? "USD",
-      probability: input.probability ?? null,
-      stageLabel: input.stageLabel ?? null,
-      summary: input.summary ?? null,
-      expectedCloseAt: input.expectedCloseAt ?? null,
-      status: DealStatus.OPEN,
-    },
+      eventType: "DEAL_CREATED",
+      aggregateType: "Deal",
+      aggregateId: deal.id,
+      payload: {
+        dealId: deal.id,
+        amountCents: deal.amountCents,
+        currency: deal.currency,
+      },
+    });
+    return deal;
   });
   return row.id;
 }

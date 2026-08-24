@@ -140,6 +140,42 @@ export function ensureBuiltinToolsRegistered(): void {
   });
 
   registerTool({
+    name: "manychat.send_message",
+    version: "1.0.0",
+    description: "Send via ManyChat connector operation (policy + capability gated).",
+    risk: "outbound_message",
+    costClass: "metered",
+    requiredPermission: "inbox:write",
+    requiredCredential: "MANYCHAT_API_TOKEN",
+    timeoutMs: 30_000,
+    platforms: ["manychat"],
+  });
+
+  registerTool({
+    name: "tavily.search_web",
+    version: "1.0.0",
+    description: "Web search via Tavily/Exa connector (untrusted results = data).",
+    risk: "read",
+    costClass: "metered",
+    requiredPermission: "ask:use",
+    requiredCredential: "TAVILY_API_KEY | EXA_API_KEY",
+    timeoutMs: 30_000,
+    platforms: ["tavily"],
+  });
+
+  registerTool({
+    name: "linkedin.publish_post",
+    version: "1.0.0",
+    description: "LinkedIn member-feed publish via connector (Phase 15 worker E2E).",
+    risk: "publish",
+    costClass: "metered",
+    requiredPermission: "integrations:manage",
+    requiredCredential: "SocialConnection",
+    timeoutMs: 120_000,
+    platforms: ["linkedin"],
+  });
+
+  registerTool({
     name: "imaging.generate",
     version: "1.0.0",
     description: "Generate an image after user prompt confirmation.",

@@ -44,6 +44,17 @@ import {
   markWorkerStopped,
   recordQueueOp,
 } from "@/services/queue-ops";
+import {
+  dispatchDomainEventBatch,
+  recoverStaleDomainEventClaims,
+  recoverMissionQueueJobs,
+} from "@/services/domain-events";
+import {
+  expireDueOpportunities,
+  runOpportunityDetectorSweep,
+} from "@/services/opportunities";
+import { refreshKpiFromCalculator } from "@/services/goals";
+import { processDuePublishingJobs } from "@/workers/publishing-sweep";
 
 try {
   assertProductionSecretsConfigured();
@@ -60,6 +71,18 @@ let shuttingDown = false;
 
 const FOLLOW_UP_INTERVAL_MS = Number(process.env.FOLLOW_UP_SWEEP_INTERVAL_MS || 60_000);
 const MAINTENANCE_INTERVAL_MS = Number(process.env.MAINTENANCE_SWEEP_INTERVAL_MS || 60 * 60_000);
+/** Outbox Postgres sweep — not a permanent BullMQ worker (Redis cost rule). */
+const OUTBOX_INTERVAL_MS = Number(process.env.OUTBOX_SWEEP_INTERVAL_MS || 15_000);
+const MISSION_QUEUE_RECOVERY_INTERVAL_MS = Number(
+  process.env.MISSION_QUEUE_RECOVERY_INTERVAL_MS || 60_000,
+);
+/** Opportunity detectors — conservative Postgres sweep (no new BullMQ worker). */
+const OPPORTUNITY_DETECTOR_INTERVAL_MS = Number(
+  process.env.OPPORTUNITY_DETECTOR_INTERVAL_MS || 15 * 60_000,
+);
+const KPI_REFRESH_INTERVAL_MS = Number(process.env.KPI_REFRESH_INTERVAL_MS || 60 * 60_000);
+/** Phase 15 — publishing dispatch via Postgres sweep (no new BullMQ worker). */
+const PUBLISHING_SWEEP_INTERVAL_MS = Number(process.env.PUBLISHING_SWEEP_INTERVAL_MS || 30_000);
 
 async function runDailyAggregationSweep() {
   const orgs = await prisma.organisation.findMany({
@@ -111,6 +134,95 @@ function startMaintenanceDbSweeps() {
         }),
       );
     }, MAINTENANCE_INTERVAL_MS),
+  );
+}
+
+/** Phase 12B — Postgres outbox + stale claim recovery (no extra BullMQ worker). */
+function startOutboxDbSweep() {
+  intervals.push(
+    setInterval(() => {
+      void (async () => {
+        try {
+          await recoverStaleDomainEventClaims();
+          await dispatchDomainEventBatch();
+        } catch (error) {
+          logger.error("Outbox sweep failed", {
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
+      })();
+    }, OUTBOX_INTERVAL_MS),
+  );
+}
+
+/** Re-enqueue eligible READY mission tasks after Redis loss. */
+function startMissionQueueRecoverySweep() {
+  intervals.push(
+    setInterval(() => {
+      recoverMissionQueueJobs().catch((error) =>
+        logger.error("Mission queue recovery failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        }),
+      );
+    }, MISSION_QUEUE_RECOVERY_INTERVAL_MS),
+  );
+}
+
+/** Phase 13 — opportunity detectors + expire (Postgres only). */
+function startOpportunityDetectorSweep() {
+  intervals.push(
+    setInterval(() => {
+      void (async () => {
+        try {
+          await expireDueOpportunities();
+          await runOpportunityDetectorSweep(50);
+        } catch (error) {
+          logger.error("Opportunity detector sweep failed", {
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
+      })();
+    }, OPPORTUNITY_DETECTOR_INTERVAL_MS),
+  );
+}
+
+/** Phase 13 — refresh KPI snapshots from deterministic calculators (hourly). */
+function startKpiRefreshSweep() {
+  intervals.push(
+    setInterval(() => {
+      void (async () => {
+        try {
+          const kpis = await prisma.kpiDefinition.findMany({
+            take: 100,
+            orderBy: { updatedAt: "desc" },
+            select: { id: true, organisationId: true },
+          });
+          for (const kpi of kpis) {
+            await refreshKpiFromCalculator({
+              organisationId: kpi.organisationId,
+              kpiDefinitionId: kpi.id,
+            }).catch(() => undefined);
+          }
+        } catch (error) {
+          logger.error("KPI refresh sweep failed", {
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
+      })();
+    }, KPI_REFRESH_INTERVAL_MS),
+  );
+}
+
+/** Phase 15 — due PublishingJobs → real adapter.publish (Postgres only). */
+function startPublishingSweep() {
+  intervals.push(
+    setInterval(() => {
+      processDuePublishingJobs(20).catch((error) =>
+        logger.error("Publishing sweep failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        }),
+      );
+    }, PUBLISHING_SWEEP_INTERVAL_MS),
   );
 }
 
@@ -179,11 +291,17 @@ async function startRedisWorkers() {
 
   startFollowUpDbSweep();
   startMaintenanceDbSweeps();
+  startOutboxDbSweep();
+  startMissionQueueRecoverySweep();
+  startOpportunityDetectorSweep();
+  startKpiRefreshSweep();
+  startPublishingSweep();
   runDailyAggregationSweep().catch(() => undefined);
   pruneAgentArtifactsAllOrganisations().catch(() => undefined);
+  void dispatchDomainEventBatch().catch(() => undefined);
 
   logger.info(
-    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention via Postgres intervals",
+    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention + outbox + mission-queue + opportunity detectors + KPI refresh + publishing via Postgres intervals",
   );
 }
 

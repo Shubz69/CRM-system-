@@ -15,6 +15,24 @@ type QueueRow = {
   error?: string;
 };
 
+type EnterpriseOpsPanel = {
+  slo?: {
+    maturityNote?: string;
+    indicators?: {
+      outboxLag?: { pendingCount?: number; deadLetterCount?: number };
+      workerFreshness?: { lastAgentRunFinishedAgeMs?: number | null };
+    };
+  };
+  quality?: {
+    publishHealth?: {
+      rate?: number | null;
+      publishedCount?: number;
+      failedCount?: number;
+    };
+  };
+  ssoScim?: { maturity?: string };
+};
+
 type Snapshot = {
   redisOk: boolean;
   workerRequiredForAsk: boolean;
@@ -43,6 +61,10 @@ type Snapshot = {
     taskType: string;
     error: string | null;
   }>;
+  enterpriseOps?: EnterpriseOpsPanel | null;
+  queuePrefix?: string | null;
+  topology?: unknown;
+  queueOps?: unknown;
 };
 
 export default function AdminAiOpsPage() {
@@ -128,6 +150,66 @@ export default function AdminAiOpsPage() {
                 </article>
               ))}
             </div>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-lg font-semibold">Enterprise ops (Phase 18)</h2>
+            <p className="text-xs text-[var(--muted)]">
+              SLO indicators are FOUNDATION — not contractual. Counts from live tables only;
+              no invented charts or uptime %.
+            </p>
+            {data.enterpriseOps ? (
+              <div className="grid gap-3 md:grid-cols-3">
+                <article className="surface p-4 text-sm space-y-1">
+                  <p className="font-medium">SLO snapshot</p>
+                  <span className="badge">FOUNDATION</span>
+                  <ul className="text-[var(--muted)] mt-1 space-y-0.5">
+                    <li>
+                      Outbox pending:{" "}
+                      {data.enterpriseOps.slo?.indicators?.outboxLag?.pendingCount ?? "—"}
+                    </li>
+                    <li>
+                      Outbox DLQ:{" "}
+                      {data.enterpriseOps.slo?.indicators?.outboxLag?.deadLetterCount ?? "—"}
+                    </li>
+                    <li>
+                      Worker freshness (ms):{" "}
+                      {data.enterpriseOps.slo?.indicators?.workerFreshness
+                        ?.lastAgentRunFinishedAgeMs ?? "null"}
+                    </li>
+                  </ul>
+                </article>
+                <article className="surface p-4 text-sm space-y-1">
+                  <p className="font-medium">Publish health</p>
+                  <ul className="text-[var(--muted)] mt-1 space-y-0.5">
+                    <li>
+                      Success rate:{" "}
+                      {data.enterpriseOps.quality?.publishHealth?.rate == null
+                        ? "null (no terminal jobs)"
+                        : `${(data.enterpriseOps.quality.publishHealth.rate * 100).toFixed(0)}%`}
+                    </li>
+                    <li>
+                      Published / failed:{" "}
+                      {data.enterpriseOps.quality?.publishHealth?.publishedCount ?? 0} /{" "}
+                      {data.enterpriseOps.quality?.publishHealth?.failedCount ?? 0}
+                    </li>
+                  </ul>
+                </article>
+                <article className="surface p-4 text-sm space-y-1">
+                  <p className="font-medium">Quality / identity</p>
+                  <p className="text-[var(--muted)] text-xs">
+                    Calibration & eval: use Learning + evaluation services (hit-rate when samples
+                    exist). SSO/SCIM:{" "}
+                    {data.enterpriseOps.ssoScim?.maturity ?? "FOUNDATION"} stubs only.
+                  </p>
+                  <Link className="text-xs underline" href="/learning">
+                    Open Learning
+                  </Link>
+                </article>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--muted)]">Enterprise ops panel unavailable.</p>
+            )}
           </section>
 
           <section className="space-y-2">

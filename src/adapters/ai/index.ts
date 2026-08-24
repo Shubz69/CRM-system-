@@ -40,10 +40,6 @@ export function getAiProvider(override?: string): AiProvider {
 
   if (configured === "openai") {
     if (!env.OPENAI_API_KEY) {
-      if (allowMockTransports()) {
-        logger.warn("Optional OpenAI selected but OPENAI_API_KEY missing; using mock (non-production)");
-        return new MockAiProvider();
-      }
       logger.warn("OpenAI requested without key — using Anthropic primary instead");
       return getAiProvider("anthropic");
     }
@@ -52,10 +48,6 @@ export function getAiProvider(override?: string): AiProvider {
 
   if (configured === "groq") {
     if (!env.GROQ_API_KEY) {
-      if (allowMockTransports()) {
-        logger.warn("Optional Groq selected but GROQ_API_KEY missing; using mock (non-production)");
-        return new MockAiProvider();
-      }
       logger.warn("Groq requested without key — using Anthropic primary instead");
       return getAiProvider("anthropic");
     }
@@ -64,10 +56,6 @@ export function getAiProvider(override?: string): AiProvider {
 
   if (configured === "mistral") {
     if (!env.MISTRAL_API_KEY) {
-      if (allowMockTransports()) {
-        logger.warn("Optional Mistral selected but MISTRAL_API_KEY missing; using mock (non-production)");
-        return new MockAiProvider();
-      }
       logger.warn("Mistral requested without key — using Anthropic primary instead");
       return getAiProvider("anthropic");
     }
@@ -76,10 +64,6 @@ export function getAiProvider(override?: string): AiProvider {
 
   if (configured === "deepseek") {
     if (!env.DEEPSEEK_API_KEY) {
-      if (allowMockTransports()) {
-        logger.warn("Optional DeepSeek selected but DEEPSEEK_API_KEY missing; using mock (non-production)");
-        return new MockAiProvider();
-      }
       logger.warn("DeepSeek requested without key — using Anthropic primary instead");
       return getAiProvider("anthropic");
     }
@@ -88,10 +72,6 @@ export function getAiProvider(override?: string): AiProvider {
 
   if (configured === "gemini") {
     if (!env.GEMINI_API_KEY) {
-      if (allowMockTransports()) {
-        logger.warn("Optional Gemini selected but GEMINI_API_KEY missing; using mock (non-production)");
-        return new MockAiProvider();
-      }
       logger.warn("Gemini requested without key — using Anthropic primary instead");
       return getAiProvider("anthropic");
     }

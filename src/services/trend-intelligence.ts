@@ -1,6 +1,8 @@
 /**
  * Phase 5 — Trend features, lifecycle, forecasts with uncertainty, backtest harness.
  * Never invent hit rates: backtest metrics only when real TrendForecastOutcome rows exist.
+ * Phase 16: lifecycle derivation delegated to continuous-intelligence/trend-lifecycle
+ * (history-aware, deterministic — no LLM state assignment).
  */
 
 import {
@@ -10,6 +12,11 @@ import {
   TrendLifecycleState,
 } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import {
+  deriveLifecycleFromFeatures,
+  deriveLifecycleFromHistory,
+  type LifecycleHistoryPoint,
+} from "@/services/continuous-intelligence/trend-lifecycle";
 
 const WINDOW_MS: Record<string, number> = {
   "24h": 24 * 60 * 60 * 1000,
@@ -35,6 +42,10 @@ export function normalizeTrendKey(label: string): string {
     .slice(0, 120);
 }
 
+/**
+ * Single-observation lifecycle helper — delegates to continuous-intelligence rules.
+ * Prefer deriveLifecycleFromHistory when TrendFeatureSnapshot series exist.
+ */
 export function inferLifecycleState(input: {
   velocity: number;
   acceleration: number;
@@ -42,23 +53,7 @@ export function inferLifecycleState(input: {
   crossPlatformCount: number;
   priorState?: TrendLifecycleState | null;
 }): TrendLifecycleState {
-  const { velocity, acceleration, mentionCount, crossPlatformCount, priorState } = input;
-
-  if (priorState === TrendLifecycleState.DECLINING && velocity > 0.5 && acceleration > 0) {
-    return TrendLifecycleState.RECURRING;
-  }
-  if (acceleration < -0.3 && velocity < 0.2) return TrendLifecycleState.DECLINING;
-  if (mentionCount >= 20 && crossPlatformCount >= 3 && velocity < 0.5) {
-    return TrendLifecycleState.SATURATED;
-  }
-  if (mentionCount >= 12 && crossPlatformCount >= 2 && velocity >= 1) {
-    return TrendLifecycleState.BREAKOUT;
-  }
-  if (mentionCount >= 8 && velocity >= 0.5) return TrendLifecycleState.ACCELERATING;
-  if (mentionCount >= 15 && velocity >= 0.2 && velocity < 0.8) {
-    return TrendLifecycleState.MAINSTREAM;
-  }
-  return TrendLifecycleState.EMERGING;
+  return deriveLifecycleFromFeatures(input).state;
 }
 
 export function computeForecastProbability(input: {
@@ -219,13 +214,38 @@ export async function refreshTrendsForOrganisation(input: {
       },
     });
 
-    const state = inferLifecycleState({
+    const priorSnaps = existing
+      ? await prisma.trendFeatureSnapshot.findMany({
+          where: {
+            organisationId: input.organisationId,
+            trendClusterId: existing.id,
+          },
+          orderBy: { capturedAt: "asc" },
+          take: 40,
+        })
+      : [];
+
+    const pendingPoint: LifecycleHistoryPoint = {
+      at: now,
       velocity,
       acceleration,
       mentionCount: agg.mentionCount,
       crossPlatformCount: agg.platforms.size,
-      priorState: existing?.state,
-    });
+      engagementScore: agg.engagementScore,
+    };
+    const historyPoints: LifecycleHistoryPoint[] = [
+      ...priorSnaps.map((s) => ({
+        at: s.capturedAt,
+        velocity: s.velocity,
+        acceleration: s.acceleration,
+        mentionCount: s.mentionCount,
+        crossPlatformCount: s.crossPlatformCount,
+        engagementScore: s.engagementScore,
+      })),
+      pendingPoint,
+    ];
+    const lifecycle = deriveLifecycleFromHistory(historyPoints, existing?.state);
+    const state = lifecycle.state;
 
     const features = {
       velocity,
@@ -234,6 +254,9 @@ export async function refreshTrendsForOrganisation(input: {
       crossPlatformCount: agg.platforms.size,
       engagementScore: agg.engagementScore,
       window: "7d",
+      lifecycleLabel: lifecycle.label,
+      lifecycleSampleSize: lifecycle.sampleSize,
+      lifecycleRationale: lifecycle.rationale,
     };
 
     const cluster = await prisma.trendCluster.upsert({

@@ -131,6 +131,30 @@ export default function IntegrationsClient() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [aiReady, setAiReady] = useState(false);
+  const [mesh, setMesh] = useState<{
+    connectors: Array<{
+      providerKey: string;
+      displayName: string;
+      connectionStatus: string;
+      customerLabel: string;
+      capabilities: Array<{
+        capability: string;
+        status: string;
+        provenance: string;
+        missingScopes: string[];
+        detail?: string;
+      }>;
+    }>;
+    recentSyncs: Array<{
+      id: string;
+      providerKey: string;
+      resource: string;
+      status: string;
+      processedCount: number;
+      startedAt: string;
+    }>;
+    limitations: string[];
+  } | null>(null);
 
   const loadReadiness = useCallback(async () => {
     const res = await fetch("/api/integrations/connection-tests");
@@ -153,11 +177,18 @@ export default function IntegrationsClient() {
     setSocialPlatforms(json.platforms);
   }, []);
 
+  const loadMesh = useCallback(async () => {
+    const res = await fetch("/api/integrations/mesh");
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Could not load integration mesh");
+    setMesh(json);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const providersPromise = fetch("/api/health/providers");
-      await Promise.all([loadManyChat(), loadReadiness(), loadSocial()]);
+      await Promise.all([loadManyChat(), loadReadiness(), loadSocial(), loadMesh()]);
       const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
@@ -168,7 +199,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadManyChat, loadReadiness, loadSocial]);
+  }, [loadManyChat, loadReadiness, loadSocial, loadMesh]);
 
   useEffect(() => {
     void load();
@@ -307,6 +338,80 @@ export default function IntegrationsClient() {
     <div className="space-y-6">
       <PageHeader description="Paste credentials, test each connection, and see what still needs doing before going live." />
 
+      {mesh && (
+        <section className="surface space-y-4 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold">Connector mesh</h2>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={async () => {
+                try {
+                  const res = await fetch("/api/integrations/mesh", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "refresh_capabilities" }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json.error || "Refresh failed");
+                  toast.success("Capabilities refreshed from live connection state");
+                  await loadMesh();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Refresh failed");
+                }
+              }}
+            >
+              Refresh capabilities
+            </button>
+          </div>
+          <p className="text-sm text-[var(--muted)]">
+            Connected ≠ all capabilities available. Statuses come from credentials, scopes, and
+            provider restrictions — never invented.
+          </p>
+          <div className="space-y-3">
+            {mesh.connectors.map((c) => (
+              <div key={c.providerKey} className="rounded border border-border p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="font-medium">{c.displayName}</h3>
+                  <span className="text-xs uppercase tracking-wide">{c.customerLabel}</span>
+                </div>
+                <p className="text-xs text-[var(--muted)]">
+                  {c.providerKey} · connection {c.connectionStatus}
+                </p>
+                <ul className="mt-2 space-y-1 text-sm">
+                  {c.capabilities.map((cap) => (
+                    <li key={cap.capability} className="flex flex-wrap gap-2">
+                      <span className="min-w-[10rem] font-medium">{cap.capability}</span>
+                      <span className="text-xs uppercase">{cap.status}</span>
+                      <span className="text-[var(--muted)]">{cap.provenance}</span>
+                      {cap.missingScopes?.length ? (
+                        <span className="text-xs">missing: {cap.missingScopes.join(", ")}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+          {mesh.recentSyncs.length > 0 && (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Recent syncs</h3>
+              <ul className="text-sm space-y-1">
+                {mesh.recentSyncs.slice(0, 5).map((s) => (
+                  <li key={s.id}>
+                    {s.providerKey}/{s.resource} · {s.status} · processed {s.processedCount}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <ul className="text-xs text-[var(--muted)] list-disc pl-4">
+            {mesh.limitations.map((l) => (
+              <li key={l}>{l}</li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="grid gap-3 md:grid-cols-3">
         <div className="surface p-4">

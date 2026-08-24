@@ -242,6 +242,41 @@ model Organisation {
   missionCheckpoints   MissionCheckpoint[]
   missionArtifacts     MissionArtifact[]
   missionOutcomes      MissionOutcome[]
+  domainEvents         DomainEvent[]
+  domainEventConsumptions DomainEventConsumption[]
+  goals                Goal[]
+  kpiDefinitions       KpiDefinition[]
+  kpiTargets           KpiTarget[]
+  kpiSnapshots         KpiSnapshot[]
+  initiatives          Initiative[]
+  goalLinks            GoalLink[]
+  productOfferings     ProductOffering[]
+  audienceSegments     AudienceSegment[]
+  entityRelations      EntityRelation[]
+  businessClaims       BusinessClaim[]
+  businessOpportunities BusinessOpportunity[]
+  opportunityEvidences OpportunityEvidence[]
+  opportunityOutcomes  OpportunityOutcome[]
+  opportunityDetectorRuns OpportunityDetectorRun[]
+  connectorCapabilityStates ConnectorCapabilityState[]
+  externalObjectMappings ExternalObjectMapping[]
+  syncCursors          SyncCursor[]
+  syncRuns             SyncRun[]
+  connectorRateLimits  ConnectorRateLimitState[]
+  connectorCircuits    ConnectorCircuitState[]
+  providerHealthEvents ProviderHealthEvent[]
+  skillDefinitions     SkillDefinition[]
+  skillExecutions      SkillExecution[]
+  connectorOperationLogs ConnectorOperationLog[]
+  intelligenceClaims   IntelligenceClaim[]
+  qualityAssessments   QualityAssessment[]
+  intelligencePredictions IntelligencePrediction[]
+  predictionEvaluations PredictionEvaluation[]
+  confidenceCalibrationSamples ConfidenceCalibrationSample[]
+  versionPerformanceSnapshots VersionPerformanceSnapshot[]
+  operationalSloSnapshots OperationalSloSnapshot[]
+  costOutcomeLinks     CostOutcomeLink[]
+  continuousCollectionRuns ContinuousCollectionRun[]
 }
 
 model User {
@@ -1621,12 +1656,24 @@ enum MissionErrorClass {
   UNKNOWN
 }
 
+/// External consequential action outcome — prevents blind replay after crash (publish/DM/email/calendar later).
+enum MissionExternalOutcome {
+  NOT_STARTED
+  PREPARED
+  DISPATCHING
+  CONFIRMED
+  FAILED
+  RECONCILIATION_REQUIRED
+}
+
 /// Durable multi-step mission. Survives worker restart / Redis loss (state in Postgres).
 model AgentMission {
   id                 String        @id @default(cuid())
   organisationId     String
-  /// Optional Goal link (Phase 13) — nullable until Goal table exists.
+  /// Optional Goal link (Phase 13).
   goalId             String?
+  /// Optional BusinessOpportunity that spawned this mission.
+  businessOpportunityId String?
   createdByUserId    String?
   title              String
   /// Operational objective summary — not private reasoning.
@@ -1650,16 +1697,19 @@ model AgentMission {
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
-  organisation Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
-  tasks        MissionTask[]
-  checkpoints  MissionCheckpoint[]
-  artifacts    MissionArtifact[]
-  outcomes     MissionOutcome[]
-  agentRuns    AgentRun[]
+  organisation         Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goal                 Goal?                 @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  businessOpportunity  BusinessOpportunity?  @relation(fields: [businessOpportunityId], references: [id], onDelete: SetNull)
+  tasks                MissionTask[]
+  checkpoints          MissionCheckpoint[]
+  artifacts            MissionArtifact[]
+  outcomes             MissionOutcome[]
+  agentRuns            AgentRun[]
 
   @@index([organisationId, status, createdAt])
   @@index([organisationId, deadlineAt])
   @@index([goalId])
+  @@index([businessOpportunityId])
 }
 
 model MissionTask {
@@ -1681,6 +1731,13 @@ model MissionTask {
   assignedAgent      String?
   assignedAgentVersion String?
   checkpointRef      String?
+  /// Consequential side-effect state — CONFIRMED must not be blindly replayed after crash.
+  externalOutcome    MissionExternalOutcome @default(NOT_STARTED)
+  /// Approver identity when task entered WAITING_APPROVAL / was decided.
+  approvalUserId     String?
+  approvedAt         DateTime?
+  rejectedAt         DateTime?
+  rejectionReason    String?           @db.Text
   errorClass         MissionErrorClass @default(NONE)
   lastError          String?           @db.Text
   /// Operational result summary — not private reasoning.
@@ -1770,6 +1827,90 @@ model MissionOutcome {
   @@index([organisationId, missionId])
 }
 
+// ─── Phase 12B — Transactional domain event outbox ───────────────────────────
+
+enum DomainEventStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  RETRY
+  DEAD_LETTER
+  CANCELLED
+}
+
+enum DomainEventConsumptionStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+  SKIPPED
+}
+
+/// Durable outbox row — inserted in the same Postgres transaction as the business mutation.
+model DomainEvent {
+  id               String            @id @default(cuid())
+  organisationId   String
+  eventType        String
+  eventVersion     Int               @default(1)
+  aggregateType    String
+  aggregateId      String
+  /// Immutable business payload (IDs + stable values only — never secrets).
+  payload          Json
+  metadata         Json              @default("{}")
+  occurredAt       DateTime          @default(now())
+  createdAt        DateTime          @default(now())
+  availableAt      DateTime          @default(now())
+  status           DomainEventStatus @default(PENDING)
+  attemptCount     Int               @default(0)
+  maxAttempts      Int               @default(8)
+  lockedAt         DateTime?
+  lockOwner        String?
+  processedAt      DateTime?
+  lastError        String?           @db.Text
+  errorClass       String?
+  firstFailedAt    DateTime?
+  lastFailedAt     DateTime?
+  correlationId    String?
+  causationId      String?
+  actorType        String?
+  actorId          String?
+  /// Optional idempotent emit key (unique per org when set).
+  dedupeKey        String?
+  /// Per-aggregate ordering within organisation.
+  aggregateSequence Int              @default(0)
+
+  organisation Organisation             @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  consumptions DomainEventConsumption[]
+
+  @@unique([organisationId, dedupeKey])
+  @@index([organisationId, status, availableAt])
+  @@index([organisationId, aggregateType, aggregateId, aggregateSequence])
+  @@index([organisationId, correlationId])
+  @@index([status, availableAt])
+  @@index([eventType, createdAt])
+}
+
+/// Per-consumer processing record — fan-out with independent idempotency.
+model DomainEventConsumption {
+  id               String                       @id @default(cuid())
+  organisationId   String
+  eventId          String
+  consumer         String
+  status           DomainEventConsumptionStatus @default(PENDING)
+  processedAt      DateTime?
+  resultReference  String?
+  lastError        String?                      @db.Text
+  attemptCount     Int                          @default(0)
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  event        DomainEvent  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, consumer])
+  @@index([organisationId, consumer, status])
+  @@index([organisationId, createdAt])
+}
 
 enum ResearchJobKind {
   RESEARCH
@@ -2213,9 +2354,12 @@ enum PublishingJobStatus {
   PENDING_APPROVAL
   APPROVED
   QUEUED
+  SCHEDULED
+  DISPATCHING
   PUBLISHING
   PUBLISHED
   FAILED
+  RECONCILIATION_REQUIRED
   CANCELLED
 }
 
@@ -2380,6 +2524,15 @@ model PublishingJob {
   error              String?             @db.Text
   /// Policy decision snapshot { effect, reason, toolName }
   policySnapshot     Json                @default("{}")
+  /// Phase 15 — external action ledger (aligns with MissionExternalOutcome).
+  externalOutcome    MissionExternalOutcome @default(NOT_STARTED)
+  attemptCount       Int                 @default(0)
+  idempotencyKey     String?
+  lastDispatchAt     DateTime?
+  confirmedAt        DateTime?
+  reconciliationNote String?             @db.Text
+  missionId          String?
+  approvalRequestId  String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -2387,9 +2540,11 @@ model PublishingJob {
   piece        ContentPiece @relation(fields: [pieceId], references: [id], onDelete: Cascade)
   performances PostPerformance[]
 
+  @@unique([organisationId, idempotencyKey])
   @@index([organisationId, status, createdAt])
   @@index([organisationId, pieceId])
   @@index([organisationId, platform, status])
+  @@index([organisationId, externalOutcome, status])
 }
 
 model PostPerformance {
@@ -2729,5 +2884,1028 @@ model UsageMeter {
 
   @@unique([organisationId, meterKey, periodStart])
   @@index([organisationId, periodStart])
+}
+
+// ─── Phase 13A — Goal & KPI graph ────────────────────────────────────────────
+
+enum GoalStatus {
+  DRAFT
+  ACTIVE
+  AT_RISK
+  ACHIEVED
+  PAUSED
+  CANCELLED
+}
+
+enum GoalCategory {
+  REVENUE
+  PIPELINE
+  SALES
+  CUSTOMER_ACQUISITION
+  RETENTION
+  CONTENT
+  BRAND
+  AUDIENCE_GROWTH
+  OPERATIONAL
+  CUSTOM
+}
+
+enum KpiAggregation {
+  SUM
+  AVG
+  COUNT
+  RATE
+  LAST
+}
+
+enum KpiDirection {
+  HIGHER_IS_BETTER
+  LOWER_IS_BETTER
+}
+
+enum KpiTargetComparator {
+  GTE
+  LTE
+  EQ
+  RANGE
+  PCT_IMPROVEMENT
+  ABS_IMPROVEMENT
+}
+
+enum InitiativeStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  PAUSED
+  CANCELLED
+}
+
+enum GoalLinkKind {
+  RELATED_TO
+  EXPECTED_TO_IMPACT
+  MEASURED_IMPACT
+  CONTRIBUTED_TO
+}
+
+model Goal {
+  id             String       @id @default(cuid())
+  organisationId String
+  name           String
+  description    String?      @db.Text
+  category       GoalCategory @default(CUSTOM)
+  status         GoalStatus   @default(DRAFT)
+  priority       Int          @default(100)
+  ownerUserId    String?
+  parentGoalId   String?
+  startAt        DateTime?
+  targetAt       DateTime?
+  completedAt    DateTime?
+  source         String       @default("user")
+  createdByUserId String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  parent       Goal?        @relation("GoalTree", fields: [parentGoalId], references: [id], onDelete: SetNull)
+  children     Goal[]       @relation("GoalTree")
+  kpiTargets   KpiTarget[]
+  initiatives  Initiative[]
+  links        GoalLink[]
+  missions     AgentMission[]
+  opportunities BusinessOpportunity[]
+
+  @@index([organisationId, status, priority])
+  @@index([organisationId, category])
+  @@index([parentGoalId])
+}
+
+model KpiDefinition {
+  id               String         @id @default(cuid())
+  organisationId   String
+  key              String
+  name             String
+  description      String?        @db.Text
+  unit             String
+  aggregation      KpiAggregation @default(SUM)
+  direction        KpiDirection   @default(HIGHER_IS_BETTER)
+  /// Calculator registry key (deterministic).
+  calculatorKey    String
+  measurementFreq  String?        // e.g. daily | weekly | monthly
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  targets      KpiTarget[]
+  snapshots    KpiSnapshot[]
+  opportunities BusinessOpportunity[]
+
+  @@unique([organisationId, key])
+  @@index([organisationId, calculatorKey])
+}
+
+model KpiTarget {
+  id               String              @id @default(cuid())
+  organisationId   String
+  goalId           String
+  kpiDefinitionId  String
+  comparator       KpiTargetComparator @default(GTE)
+  targetValue      Float
+  targetValueMax   Float?
+  baselineValue    Float?
+  unit             String
+  currency         String?
+  deadlineAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goal          Goal          @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  kpiDefinition KpiDefinition @relation(fields: [kpiDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, goalId])
+  @@index([organisationId, kpiDefinitionId])
+  @@unique([goalId, kpiDefinitionId])
+}
+
+model KpiSnapshot {
+  id                String   @id @default(cuid())
+  organisationId    String
+  kpiDefinitionId   String
+  value             Float
+  unit              String
+  observedAt        DateTime
+  source            String
+  sourceReference   String?
+  confidence        Float?
+  calculationVersion String  @default("1")
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+
+  organisation  Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  kpiDefinition KpiDefinition @relation(fields: [kpiDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, kpiDefinitionId, observedAt])
+  @@index([organisationId, observedAt])
+}
+
+model Initiative {
+  id             String           @id @default(cuid())
+  organisationId String
+  goalId         String?
+  name           String
+  description    String?          @db.Text
+  status         InitiativeStatus @default(DRAFT)
+  /// Optional links to existing domain objects (IDs only).
+  campaignId     String?
+  experimentId   String?
+  missionId      String?
+  automationRuleId String?
+  contentPieceId String?
+  opportunityId  String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goal         Goal?        @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, status])
+  @@index([organisationId, goalId])
+}
+
+/// Evidence-backed link from Goal/KPI to Mission/Opportunity/etc. — not automatic causation.
+model GoalLink {
+  id             String       @id @default(cuid())
+  organisationId String
+  goalId         String
+  kind           GoalLinkKind @default(RELATED_TO)
+  targetType     String
+  targetId       String
+  kpiDefinitionId String?
+  note           String?      @db.Text
+  createdAt      DateTime     @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goal         Goal         @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, kind, targetType, targetId])
+  @@index([organisationId, targetType, targetId])
+}
+
+// ─── Phase 13B — Business digital twin (relations over existing entities) ───
+
+enum BusinessClaimStatus {
+  CONFIRMED
+  OBSERVED
+  INFERRED
+  DISPUTED
+  STALE
+}
+
+enum ProductOfferingStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+model ProductOffering {
+  id             String                @id @default(cuid())
+  organisationId String
+  name           String
+  description    String?               @db.Text
+  category       String?
+  priceMinCents  Int?
+  priceMaxCents  Int?
+  currency       String?               @default("GBP")
+  status         ProductOfferingStatus @default(ACTIVE)
+  targetAudience String?               @db.Text
+  businessModel  String?
+  metadata       Json                  @default("{}")
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, status])
+}
+
+model AudienceSegment {
+  id             String   @id @default(cuid())
+  organisationId String
+  name           String
+  description    String?  @db.Text
+  /// Commercial attributes only — never protected/sensitive characteristics.
+  attributes     Json     @default("{}")
+  evidenceNote   String?  @db.Text
+  confidence     Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, name])
+}
+
+model EntityRelation {
+  id                String    @id @default(cuid())
+  organisationId    String
+  sourceType        String
+  sourceId          String
+  relationshipType  String
+  targetType        String
+  targetId          String
+  confidence        Float?
+  source            String
+  evidenceReference String?
+  validFrom         DateTime?
+  validUntil        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, sourceType, sourceId, relationshipType, targetType, targetId])
+  @@index([organisationId, relationshipType])
+  @@index([organisationId, targetType, targetId])
+}
+
+model BusinessClaim {
+  id             String              @id @default(cuid())
+  organisationId String
+  subjectType    String
+  subjectId      String
+  predicate      String
+  objectType     String?
+  objectId       String?
+  valueText      String?             @db.Text
+  valueJson      Json?
+  status         BusinessClaimStatus @default(OBSERVED)
+  confidence     Float?
+  source         String
+  evidenceReference String?
+  observedAt     DateTime            @default(now())
+  validFrom      DateTime?
+  validUntil     DateTime?
+  lastVerifiedAt DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, subjectType, subjectId, predicate])
+  @@index([organisationId, status, lastVerifiedAt])
+}
+
+// ─── Phase 13C — Opportunity graph (not CRM Deal) ───────────────────────────
+
+enum BusinessOpportunityType {
+  TREND
+  CONTENT_GAP
+  AUDIENCE_NEED
+  COMPETITOR_GAP
+  LEAD
+  DEAL_RISK
+  REACTIVATION
+  UPSELL
+  CROSS_SELL
+  CAMPAIGN
+  SEO
+  AUTOMATION
+  OPERATIONAL
+  RESEARCH
+  CUSTOM
+}
+
+enum BusinessOpportunityStatus {
+  DETECTED
+  REVIEWED
+  ACCEPTED
+  REJECTED
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+  DISMISSED
+}
+
+enum OpportunityConfidenceBand {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum OpportunityImpactBand {
+  LOW
+  MEDIUM
+  HIGH
+  VERY_HIGH
+}
+
+enum OpportunityUrgencyBand {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum OpportunityOutcomeResult {
+  SUCCESSFUL
+  UNSUCCESSFUL
+  INCONCLUSIVE
+  IGNORED
+}
+
+model BusinessOpportunity {
+  id                 String                     @id @default(cuid())
+  organisationId     String
+  type               BusinessOpportunityType
+  title              String
+  summary            String                     @db.Text
+  status             BusinessOpportunityStatus  @default(DETECTED)
+  impact             OpportunityImpactBand      @default(MEDIUM)
+  urgency            OpportunityUrgencyBand     @default(MEDIUM)
+  confidence         OpportunityConfidenceBand  @default(MEDIUM)
+  /// Deterministic priority score (higher = more important). Factors in metadata.
+  priorityScore      Float                      @default(0)
+  estimatedEffort    String?
+  estimatedValueCents Int?
+  currency           String?
+  goalId             String?
+  kpiDefinitionId    String?
+  ownerUserId        String?
+  createdByAgent     String?
+  createdByVersion   String?
+  source             String
+  /// Stable fingerprint for detector dedupe.
+  dedupeKey          String
+  detectedAt         DateTime                   @default(now())
+  expiresAt          DateTime?
+  reviewedAt         DateTime?
+  acceptedAt         DateTime?
+  rejectedAt         DateTime?
+  executedAt         DateTime?
+  completedAt        DateTime?
+  scoreFactors       Json                       @default("{}")
+  /// Phase 14F — quality gate (separate from lifecycle status).
+  qualityGateStatus  OpportunityQualityGate     @default(PENDING_VERIFICATION)
+  qualityAssessmentId String?
+  verificationBudget VerificationBudget         @default(STANDARD)
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  organisation  Organisation         @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  goal          Goal?                @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  kpiDefinition KpiDefinition?       @relation(fields: [kpiDefinitionId], references: [id], onDelete: SetNull)
+  evidences     OpportunityEvidence[]
+  outcome       OpportunityOutcome?
+  missions      AgentMission[]
+  qualityAssessment QualityAssessment? @relation(fields: [qualityAssessmentId], references: [id], onDelete: SetNull)
+
+  @@unique([organisationId, dedupeKey])
+  @@index([organisationId, status, priorityScore])
+  @@index([organisationId, type, status])
+  @@index([organisationId, expiresAt])
+  @@index([organisationId, qualityGateStatus])
+  @@index([goalId])
+}
+
+model OpportunityEvidence {
+  id             String   @id @default(cuid())
+  organisationId String
+  opportunityId  String
+  evidenceType   String
+  evidenceId     String?
+  label          String
+  detail         String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  opportunity  BusinessOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, opportunityId])
+  @@index([evidenceType, evidenceId])
+}
+
+model OpportunityOutcome {
+  id                String                   @id @default(cuid())
+  organisationId    String
+  opportunityId     String                   @unique
+  result            OpportunityOutcomeResult @default(INCONCLUSIVE)
+  summary           String?                  @db.Text
+  /// Measured impact only when evidenced — never AI-guessed £.
+  measuredValueCents Int?
+  currency          String?
+  kpiSnapshotBeforeId String?
+  kpiSnapshotAfterId  String?
+  userJudgement     String?
+  agentEvaluation   String?                  @db.Text
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  organisation Organisation        @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  opportunity  BusinessOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+}
+
+model OpportunityDetectorRun {
+  id               String   @id @default(cuid())
+  organisationId   String
+  detectorKey      String
+  detectorVersion  String
+  startedAt        DateTime @default(now())
+  finishedAt       DateTime?
+  createdCount     Int      @default(0)
+  updatedCount     Int      @default(0)
+  suppressedCount  Int      @default(0)
+  errorSummary     String?  @db.Text
+  metadata         Json     @default("{}")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, detectorKey, startedAt])
+}
+
+// ─── Phase 14 — Integration mesh / sync / skills ─────────────────────────────
+
+enum ConnectorCapabilityStatus {
+  AVAILABLE
+  CONNECTED
+  AUTH_REQUIRED
+  SCOPE_REQUIRED
+  APPROVAL_REQUIRED
+  RESTRICTED
+  DEGRADED
+  UNSUPPORTED
+  DISABLED
+}
+
+enum ConnectorConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  DEGRADED
+  REAUTH_REQUIRED
+  EXPIRED
+  REVOKED
+  ERROR
+  DISABLED
+}
+
+enum SyncRunKind {
+  FULL_INITIAL
+  INCREMENTAL
+  WEBHOOK
+  MANUAL
+  RECONCILIATION
+}
+
+enum SyncRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum CircuitState {
+  CLOSED
+  OPEN
+  HALF_OPEN
+}
+
+enum SkillDefinitionStatus {
+  DRAFT
+  ACTIVE
+  DEPRECATED
+  DISABLED
+}
+
+/// Per-org/capability status with provenance — not binary “connected”.
+model ConnectorCapabilityState {
+  id               String                     @id @default(cuid())
+  organisationId   String
+  providerKey      String
+  /// SocialConnection id / Integration id / env-scoped key.
+  connectionRef    String?
+  capability       String
+  status           ConnectorCapabilityStatus  @default(UNSUPPORTED)
+  /// Why Agent Desk believes this status (scopes, probe, policy, docs).
+  provenance       String
+  grantedScopes    String[]                   @default([])
+  missingScopes    String[]                   @default([])
+  detail           String?                    @db.Text
+  lastEvaluatedAt  DateTime                   @default(now())
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, providerKey, connectionRef, capability])
+  @@index([organisationId, providerKey, status])
+}
+
+/// Maps Agent Desk entities ↔ provider objects without duplicating payloads.
+model ExternalObjectMapping {
+  id               String    @id @default(cuid())
+  organisationId   String
+  providerKey      String
+  connectionRef    String?
+  externalType     String
+  externalId       String
+  internalType     String
+  internalId       String
+  externalUrl      String?
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  lastSyncedAt     DateTime?
+  externalUpdatedAt DateTime?
+  syncVersion      String?
+  metadata         Json      @default("{}")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, providerKey, externalType, externalId])
+  @@index([organisationId, internalType, internalId])
+  @@index([organisationId, providerKey, lastSyncedAt])
+}
+
+model SyncCursor {
+  id             String   @id @default(cuid())
+  organisationId String
+  providerKey    String
+  connectionRef  String?
+  resource       String
+  /// Opaque provider cursor / updatedSince / sync token.
+  cursorValue    String   @db.Text
+  cursorKind     String   @default("opaque")
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, providerKey, connectionRef, resource])
+  @@index([organisationId, providerKey])
+}
+
+model SyncRun {
+  id               String        @id @default(cuid())
+  organisationId   String
+  providerKey      String
+  connectionRef    String?
+  resource         String
+  kind             SyncRunKind   @default(INCREMENTAL)
+  status           SyncRunStatus @default(PENDING)
+  startedAt        DateTime      @default(now())
+  finishedAt       DateTime?
+  processedCount   Int           @default(0)
+  createdCount     Int           @default(0)
+  updatedCount     Int           @default(0)
+  failedCount      Int           @default(0)
+  cursorBefore     String?       @db.Text
+  cursorAfter      String?       @db.Text
+  errorSummary     String?       @db.Text
+  metadata         Json          @default("{}")
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, providerKey, startedAt])
+  @@index([organisationId, status, startedAt])
+}
+
+model ConnectorRateLimitState {
+  id             String    @id @default(cuid())
+  organisationId String
+  providerKey    String
+  connectionRef  String?
+  operationClass String    @default("default")
+  remaining      Int?
+  resetAt        DateTime?
+  backoffUntil   DateTime?
+  last429At      DateTime?
+  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime  @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, providerKey, connectionRef, operationClass])
+  @@index([organisationId, backoffUntil])
+}
+
+model ConnectorCircuitState {
+  id               String       @id @default(cuid())
+  organisationId   String
+  providerKey      String
+  connectionRef    String?
+  operationClass   String       @default("default")
+  state            CircuitState @default(CLOSED)
+  failureCount     Int          @default(0)
+  openedAt         DateTime?
+  halfOpenAt       DateTime?
+  lastFailureAt    DateTime?
+  lastSuccessAt    DateTime?
+  lastErrorSummary String?      @db.Text
+  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime     @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, providerKey, connectionRef, operationClass])
+  @@index([organisationId, state])
+}
+
+/// Bounded health history — do not ping providers continuously.
+model ProviderHealthEvent {
+  id             String   @id @default(cuid())
+  organisationId String
+  providerKey    String
+  connectionRef  String?
+  status         ConnectorConnectionStatus
+  source         String
+  latencyMs      Int?
+  errorCode      String?
+  summary        String?  @db.Text
+  observedAt     DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, providerKey, observedAt])
+}
+
+/// Built-in or org-scoped Skill definitions (versioned; not arbitrary customer code).
+model SkillDefinition {
+  id             String                @id @default(cuid())
+  organisationId String?
+  /// Null organisationId = system/built-in skill.
+  key            String
+  version        String
+  name           String
+  description    String                @db.Text
+  inputSchema    Json                  @default("{}")
+  outputSchema   Json                  @default("{}")
+  requiredTools  String[]              @default([])
+  optionalTools  String[]              @default([])
+  allowedAgents  String[]              @default([])
+  risk           String                @default("read")
+  budgetHintCents Int?
+  evalSuiteKey   String?
+  status         SkillDefinitionStatus @default(ACTIVE)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  executions   SkillExecution[]
+
+  @@unique([organisationId, key, version])
+  @@index([key, status])
+}
+
+model SkillExecution {
+  id               String   @id @default(cuid())
+  organisationId   String
+  skillDefinitionId String
+  skillKey         String
+  skillVersion     String
+  agentRunId       String?
+  missionId        String?
+  status           String   @default("COMPLETED")
+  inputSummary     String?  @db.Text
+  outputSummary    String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  organisation    Organisation    @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  skillDefinition SkillDefinition @relation(fields: [skillDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, skillKey, createdAt])
+  @@index([organisationId, agentRunId])
+}
+
+/// Bounded operation audit for connector actions (no secrets).
+model ConnectorOperationLog {
+  id             String   @id @default(cuid())
+  organisationId String
+  providerKey    String
+  connectionRef  String?
+  operation      String
+  toolName       String?
+  success        Boolean
+  latencyMs      Int?
+  errorCode      String?
+  errorSummary   String?  @db.Text
+  costCents      Int?
+  missionId      String?
+  toolCallId     String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, providerKey, createdAt])
+  @@index([organisationId, success, createdAt])
+}
+
+// ─── Phase 14F — Intelligence Quality & Verification ─────────────────────────
+
+enum VerificationBudget {
+  FAST
+  STANDARD
+  DEEP
+  MISSION_CRITICAL
+}
+
+/// Quality gate on material recommendations / opportunities (deterministic dimensions).
+enum OpportunityQualityGate {
+  PENDING_VERIFICATION
+  PASSED
+  NEEDS_MORE_RESEARCH
+  CONFLICTED
+  INSUFFICIENT_EVIDENCE
+  STALE
+  REJECTED
+}
+
+enum IntelligenceClaimStatus {
+  EXTRACTED
+  CORROBORATED
+  CONFLICTED
+  INSUFFICIENT
+  REJECTED
+}
+
+/// Atomic claim extracted from research / social / twin signals.
+model IntelligenceClaim {
+  id               String                  @id @default(cuid())
+  organisationId   String
+  researchJobId    String?
+  text             String                  @db.Text
+  /// Normalised fingerprint for dedupe (hash of normalised text + entity keys).
+  normalisedKey    String
+  claimKind        String                  @default("FACT")
+  status           IntelligenceClaimStatus @default(EXTRACTED)
+  /// Transparent dimension scores 0–1 — never LLM-invented percentages as truth.
+  authorityScore   Float?
+  freshnessScore   Float?
+  corroborationScore Float?
+  independenceScore Float?
+  audienceRelevanceScore Float?
+  platformRelevanceScore Float?
+  geoRelevanceScore Float?
+  sampleSizeScore  Float?
+  socialQualityScore Float?
+  survivorshipRisk Float?
+  negativeEvidenceScore Float?
+  dimensions       Json                    @default("{}")
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  organisation Organisation            @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  evidenceLinks ClaimEvidenceLink[]
+  assessments   QualityAssessmentClaim[]
+
+  @@unique([organisationId, normalisedKey])
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, researchJobId])
+}
+
+model ClaimEvidenceLink {
+  id                   String   @id @default(cuid())
+  organisationId       String
+  claimId              String
+  researchSourceId     String?
+  researchSnapshotId   String?
+  researchFindingId    String?
+  providerKey          String?
+  sourceUrl            String?
+  retrievedAt          DateTime?
+  lineageKey           String?
+  supports             Boolean  @default(true)
+  excerpt              String?  @db.Text
+  createdAt            DateTime @default(now())
+
+  claim IntelligenceClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@index([organisationId, lineageKey])
+  @@index([organisationId, researchSnapshotId])
+}
+
+model QualityAssessment {
+  id               String                  @id @default(cuid())
+  organisationId   String
+  subjectKind      String
+  subjectId        String
+  budget           VerificationBudget      @default(STANDARD)
+  gateStatus       OpportunityQualityGate  @default(PENDING_VERIFICATION)
+  /// Deterministic dimension breakdown — never treat as calibrated probability.
+  dimensions       Json                    @default("{}")
+  criticNotes      String?                 @db.Text
+  escalationReason String?                 @db.Text
+  consequenceLevel String                  @default("MEDIUM")
+  assessedAt       DateTime                @default(now())
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  organisation  Organisation             @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  claims        QualityAssessmentClaim[]
+  opportunities BusinessOpportunity[]
+
+  @@index([organisationId, subjectKind, subjectId])
+  @@index([organisationId, gateStatus, assessedAt])
+}
+
+model QualityAssessmentClaim {
+  id                   String @id @default(cuid())
+  qualityAssessmentId  String
+  claimId              String
+  role                 String @default("PRIMARY")
+
+  assessment QualityAssessment @relation(fields: [qualityAssessmentId], references: [id], onDelete: Cascade)
+  claim      IntelligenceClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@unique([qualityAssessmentId, claimId])
+  @@index([claimId])
+}
+
+// ─── Phase 16 — Continuous intelligence / Prediction Lab ─────────────────────
+
+enum PredictionEvaluationStatus {
+  PENDING
+  SCORED
+  EXPIRED
+  INVALID
+}
+
+model ContinuousCollectionRun {
+  id             String   @id @default(cuid())
+  organisationId String
+  kind           String
+  providerKey    String?
+  status         String   @default("COMPLETED")
+  observedAt     DateTime @default(now())
+  itemsCollected Int      @default(0)
+  errorSummary   String?  @db.Text
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, kind, observedAt])
+}
+
+/// Prediction Lab — record predictions for later scoring (no fake accuracy claims).
+model IntelligencePrediction {
+  id               String   @id @default(cuid())
+  organisationId   String
+  predictionType   String
+  statement        String   @db.Text
+  horizonAt        DateTime
+  features         Json     @default("{}")
+  modelVersion     String   @default("rules-v1")
+  /// Transparent band — not calibrated probability until Phase 17 has samples.
+  confidenceBand   String   @default("MEDIUM")
+  expectedOutcome  Json     @default("{}")
+  actualOutcome    Json?
+  evaluationStatus PredictionEvaluationStatus @default(PENDING)
+  trendClusterId   String?
+  qualityAssessmentId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  scoredAt         DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  evaluations  PredictionEvaluation[]
+
+  @@index([organisationId, predictionType, evaluationStatus])
+  @@index([organisationId, horizonAt])
+  @@index([organisationId, trendClusterId])
+}
+
+model PredictionEvaluation {
+  id             String   @id @default(cuid())
+  organisationId String
+  predictionId   String
+  /// Metrics only when ground truth exists — never fabricate.
+  directionCorrect Boolean?
+  precisionNote  String?  @db.Text
+  metrics        Json     @default("{}")
+  scorerVersion  String   @default("rules-v1")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation           @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  prediction   IntelligencePrediction @relation(fields: [predictionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, predictionId])
+}
+
+// ─── Phase 17 — Evaluation / calibration (extends learning-os) ───────────────
+
+model ConfidenceCalibrationSample {
+  id             String   @id @default(cuid())
+  organisationId String
+  subjectKind    String
+  subjectId      String
+  statedBand     String
+  wasCorrect     Boolean?
+  outcomeKind    String?
+  sampleCountHint Int?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, subjectKind, statedBand])
+  @@index([organisationId, createdAt])
+}
+
+model VersionPerformanceSnapshot {
+  id             String   @id @default(cuid())
+  organisationId String?
+  artifactKind   String
+  artifactKey    String
+  version        String
+  rolloutState   String   @default("CURRENT")
+  metrics        Json     @default("{}")
+  sampleSize     Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([artifactKind, artifactKey, version])
+  @@index([organisationId, artifactKind, createdAt])
+}
+
+// ─── Phase 18 — Enterprise ops / cost-outcome ────────────────────────────────
+
+model OperationalSloSnapshot {
+  id             String   @id @default(cuid())
+  organisationId String?
+  capturedAt     DateTime @default(now())
+  indicators     Json     @default("{}")
+  /// Never claim contractual SLO without production measurement.
+  maturityNote   String   @default("FOUNDATION")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation? @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, capturedAt])
+  @@index([capturedAt])
+}
+
+model CostOutcomeLink {
+  id             String   @id @default(cuid())
+  organisationId String
+  costCents      Int
+  costKind       String
+  outcomeKind    String
+  outcomeRef     String?
+  /// Attribution honesty — ESTIMATED | DIRECT | UNKNOWN
+  attribution    String   @default("UNKNOWN")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, outcomeKind, createdAt])
+  @@index([organisationId, costKind, createdAt])
 }
 

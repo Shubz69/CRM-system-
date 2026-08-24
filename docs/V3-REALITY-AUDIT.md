@@ -25,9 +25,9 @@ V2 delivered an AI-native **architecture**. Most capabilities are **WORKING**. H
 
 1. **No publish worker** — `PublishingJob` never calls `adapter.publish()` in `src/workers/**`
 2. **Embeddings default `none`** — lexical-only unless configured
-3. **No DomainEvent outbox / Goal / Mission tables**
-4. **SSRF-safe fetch / webhook timestamp replay** incomplete before Phase 11
-5. **No PRODUCTION_VERIFIED** capability
+3. **DomainEvent emit coverage incomplete** for CRM/messaging (improved for Deal won/lost/stage in Phase 14 — see [`DOMAIN-EVENT-COVERAGE.md`](./DOMAIN-EVENT-COVERAGE.md)); outbox **WORKING** not PRODUCTION_VERIFIED; Playwright skipped without E2E creds; no multi-worker soak; Phase 15 publish worker absent
+4. **SSRF-safe fetch / webhook timestamp replay** largely addressed in Phase 11
+5. **No PRODUCTION_VERIFIED** capability; connector maturity is **per-provider**
 
 ---
 
@@ -58,9 +58,11 @@ V2 delivered an AI-native **architecture**. Most capabilities are **WORKING**. H
 | Tenant isolation | organisationId everywhere | services | APIs | — | — | — | Automated tests (not a live provider) | **Strong** | Role matrix | — | Audit | — | org-isolation* | SECURITY | **WORKING** | Prod red-team / PRODUCTION_VERIFIED proof |
 | Audit logging | AuditLog | audit.ts | admin audit | Yes | — | — | No | Scope ORG/PLATFORM | audit:read | — | Itself | — | audit-scope | SECURITY | **WORKING** | Full coverage |
 | Secrets / crypto | IntegrationCredential | crypto AES-GCM | — | — | — | — | — | Encrypted at rest | — | — | Env warnings | — | — | SECURITY | **WORKING** → Phase 11 hardens | Rotation migration design |
-| Domain events / outbox | **Absent** | — | — | — | — | — | No | — | — | — | — | — | — | DATA-MODEL deferred | **FOUNDATION** | Phase 12B |
-| Goals / KPIs | **Absent** | — | — | — | — | — | No | — | — | — | — | — | — | DATA-MODEL deferred | **FOUNDATION** | Phase 13 |
-| Mission persistence | AgentMission/Task/Checkpoint/Artifact/Outcome | mission-runtime | — | — | resume via Postgres | — | Resilience tests | Org-scoped | Permission helper | State machine + idempotency | Checkpoints | Budget fields | mission-runtime | REDIS-COST / ROADMAP-V3 | **WORKING** | Wire Ask→Mission; LIVE worker proof; Goal link (13) |
+| Domain events / outbox | DomainEvent + Consumption | domain-events/* | `/api/admin/outbox` | AI Ops fields | Postgres sweep on worker | — | Outbox test matrix | Org-scoped | Platform admin retry/cancel | SKIP LOCKED claim + retry/DLQ | Outbox snapshot | — | domain-events-outbox | ROADMAP-V3 / REDIS-COST / DOMAIN-EVENT-COVERAGE | **WORKING** | Broader CRM emit coverage; multi-worker soak; Playwright when creds exist |
+| Goals / KPIs | Goal, KpiDefinition, KpiTarget, KpiSnapshot, Initiative, GoalLink | goals/* | `/api/goals` | `/goals` | KPI refresh sweep | — | phase13-business-intelligence | Org-scoped | insights:read / agent:manage | Evidence for ACHIEVED | AI Ops phase13 | — | phase13 tests | PHASE-13-BUSINESS-INTELLIGENCE | **WORKING** | Broader calculators; production soak |
+| Digital Twin | ProductOffering, AudienceSegment, EntityRelation, BusinessClaim | digital-twin/* | `/api/business-context` | `/business-context` | — | — | completeness + isolation tests | Org-scoped | insights:read / agent:manage | Freshness / temporal claims | Profile gaps | — | phase13 tests | PHASE-13 | **WORKING** | Onboarding UX; richer competitor ingest |
+| Business opportunities | BusinessOpportunity + Evidence + Outcome | opportunities/* | `/api/opportunities` | `/opportunities` | Detector sweep ~15m | — | detectors + priority + mission | Org-scoped | agent:manage | Dedupe + evidence required | Detector runs in AI Ops | — | phase13 tests | PHASE-13 | **WORKING** | Trend/content detectors when data continuous; LIVE_E2E N/A for internal |
+| Mission persistence | AgentMission/Task/Checkpoint/Artifact/Outcome + externalOutcome | mission-runtime | — | — | resume via Postgres; CAS claim; queue recovery sweep | — | Resilience + approval + crash outcome tests | Org-scoped | Approval identity | State machine + idempotency + no blind CONFIRMED replay | Checkpoints | Budget fields | mission-runtime | REDIS-COST / ROADMAP-V3 | **WORKING** | Ask→Mission wiring; LIVE worker proof |
 
 ---
 
@@ -77,4 +79,4 @@ Do **not** claim PRODUCTION_VERIFIED for:
 
 ## V3 phase order (next)
 
-See [`ROADMAP-V3.md`](./ROADMAP-V3.md). Start with **Phase 11 — Security & Secret Hardening**, then Mission runtime, outbox, goals, publish vertical slice, etc.
+See [`ROADMAP-V3.md`](./ROADMAP-V3.md). Phase 12–14 frameworks are **WORKING**. Next: **Phase 15 — Real content publish** (do not start until asked). Per-provider LIVE_E2E only with real provider proof.

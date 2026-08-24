@@ -2,6 +2,11 @@
  * Phase 9 — Learning & Experimentation.
  * Feedback is explicit. Eval scores and experiment winners only when real data exists.
  * AgentVersion promotion requires a passing EvalRun.
+ *
+ * Phase 17 — Evaluation hooks: prefer `@/services/evaluation` for datasets, scorers,
+ * shadow/canary, and calibration. Keep USER_PREFERENCE vs EMPIRICAL_PERFORMANCE separate —
+ * recommendationFeedback.signal is preference-oriented unless callers explicitly record
+ * measured outcomes (sampleSize / outcomeMetric). Learning must not self-edit production code.
  */
 
 import {
@@ -446,5 +451,25 @@ export async function getLearningDashboard(organisationId: string) {
     candidates,
     recentEvals,
     forecastBacktest: backtest,
+    /** Phase 17 — signal taxonomy for API/docs consumers */
+    signalKinds: {
+      USER_PREFERENCE: "Explicit ratings / thumbs — not causal performance proof",
+      EMPIRICAL_PERFORMANCE: "Measured outcomes with sample size — still not full causality",
+    } as const,
   };
 }
+
+/** Phase 17 evaluation platform re-exports (hooks from learning-os). */
+export {
+  runDeterministicEvalSuite,
+  evaluateThenShadow,
+  runShadowEvaluation,
+  recordConfidenceCalibrationSample,
+  getCalibrationHitRateByBand,
+  recordVersionPerformanceSnapshot,
+  transitionRolloutState,
+  shouldAutoPromoteFromSingleRun,
+  getLearningSafetyPolicy,
+  SIGNAL_USER_PREFERENCE,
+  SIGNAL_EMPIRICAL_PERFORMANCE,
+} from "@/services/evaluation";

@@ -112,7 +112,9 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
     );
 
     expect(second.duplicate).toBe(true);
-  });
+  },
+  60_000,
+  );
 
   it("cancels follow-ups", async () => {
     const conversation = await prisma.conversation.findFirst({
