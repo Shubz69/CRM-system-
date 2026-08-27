@@ -4,18 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronsLeft, ChevronsRight, ChevronDown, LogOut, Search } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, LogOut, Search } from "lucide-react";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { openCommandPalette } from "@/components/command-palette";
 import { NotificationsMenu } from "@/components/notifications-menu";
+import { SectionSubnav } from "@/components/section-subnav";
 import {
-  ADMIN_NAV,
-  PRIMARY_NAV,
+  ADMIN_ENTRY,
+  CORE_NAV,
   SETUP_NAV,
-  SECONDARY_NAV,
-  WORK_NAV,
   isNavActive,
   pageTitleFromPath,
+  sectionForPath,
+  type NavItem,
 } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -33,30 +34,47 @@ function NavLink({
   collapsed,
   onNavigate,
 }: {
-  item: (typeof PRIMARY_NAV)[number];
+  item: NavItem;
   pathname: string;
   collapsed: boolean;
   onNavigate: () => void;
 }) {
-  const active = isNavActive(pathname, item);
+  const active = isNavActive(pathname, item) || sectionActive(pathname, item);
   const Icon = item.icon;
   return (
     <Link
       href={item.href}
       title={collapsed ? item.label : undefined}
       onClick={onNavigate}
-      className={cn(
-        "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition duration-150",
+        className={cn(
+        "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition duration-150",
         active
           ? "bg-white/12 text-white shadow-[inset_3px_0_0_0_var(--accent)]"
-          : "text-white/65 hover:bg-white/8 hover:text-white",
+          : "text-white/60 hover:bg-white/7 hover:text-white/95",
         collapsed && "justify-center px-2",
       )}
+      aria-current={active ? "page" : undefined}
     >
-      <Icon size={17} className={cn(active ? "text-[var(--hero-mist)]" : "")} />
-      {!collapsed && <span>{item.label}</span>}
+      <Icon
+        size={18}
+        strokeWidth={active ? 2.25 : 1.75}
+        className={cn("shrink-0", active ? "text-[var(--hero-mist)]" : "text-white/55 group-hover:text-white/80")}
+        aria-hidden
+      />
+      {!collapsed && <span className="truncate">{item.label}</span>}
     </Link>
   );
+}
+
+/** Highlight CRM/Growth/Analytics hub when a leaf route in that section is active. */
+function sectionActive(pathname: string, item: NavItem): boolean {
+  const section = sectionForPath(pathname);
+  if (!section) return false;
+  if (item.href === "/crm" && section.id === "crm") return true;
+  if (item.href === "/growth" && section.id === "growth") return true;
+  if (item.href === "/analytics" && section.id === "analytics") return true;
+  if (item.href === "/admin" && section.id === "admin") return true;
+  return false;
 }
 
 export function AppShell({
@@ -70,7 +88,6 @@ export function AppShell({
   orgName?: string;
   userName?: string | null;
   isPlatformAdmin?: boolean;
-  /** When true (forced password change), hide app nav and only show the lock screen content. */
   navigationLocked?: boolean;
 }) {
   const pathname = usePathname();
@@ -78,12 +95,8 @@ export function AppShell({
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(() =>
-    [...SETUP_NAV, ...SECONDARY_NAV].some((item) => isNavActive(pathname, item)),
-  );
 
-  const locked =
-    navigationLocked || Boolean(session?.user?.mustChangePassword);
+  const locked = navigationLocked || Boolean(session?.user?.mustChangePassword);
 
   const isSuperAdmin =
     Boolean(isPlatformAdmin) ||
@@ -100,12 +113,6 @@ export function AppShell({
       })
       .catch(() => undefined);
   }, [session?.user?.organisationId, locked]);
-
-  useEffect(() => {
-    if ([...SETUP_NAV, ...SECONDARY_NAV].some((item) => isNavActive(pathname, item))) {
-      setToolsOpen(true);
-    }
-  }, [pathname]);
 
   async function switchOrg(organisationId: string) {
     try {
@@ -131,7 +138,12 @@ export function AppShell({
     "Workspace";
 
   const title = useMemo(() => pageTitleFromPath(pathname), [pathname]);
-  const isHome = pathname === "/ask";
+  const activeSection = useMemo(() => {
+    const section = sectionForPath(pathname);
+    if (section?.id === "admin" && !isSuperAdmin) return null;
+    return section;
+  }, [pathname, isSuperAdmin]);
+  const isHome = pathname === "/home";
 
   if (locked) {
     return (
@@ -159,8 +171,8 @@ export function AppShell({
       <aside
         className={cn(
           "relative z-20 border-r border-white/8 bg-[var(--sidebar)] text-[var(--sidebar-text)] transition-[width] duration-200 lg:min-h-screen",
-          collapsed ? "lg:w-[84px]" : "lg:w-[272px]",
-          mobileOpen ? "fixed inset-y-0 left-0 w-[272px]" : "hidden lg:flex lg:flex-col",
+          collapsed ? "lg:w-[84px]" : "lg:w-[248px]",
+          mobileOpen ? "fixed inset-y-0 left-0 w-[248px]" : "hidden lg:flex lg:flex-col",
         )}
       >
         <div className="border-b border-white/10 px-4 py-5">
@@ -170,9 +182,7 @@ export function AppShell({
                 {collapsed ? "AD" : "Agent Desk"}
               </p>
               {!collapsed && (
-                <p className="mt-1 truncate text-xs text-white/50">
-                  {activeName}
-                </p>
+                <p className="mt-1 truncate text-xs text-white/50">{activeName}</p>
               )}
             </div>
             <button
@@ -204,7 +214,12 @@ export function AppShell({
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {PRIMARY_NAV.map((item) => (
+          {!collapsed && (
+            <p className="mb-1 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">
+              Core
+            </p>
+          )}
+          {CORE_NAV.map((item) => (
             <NavLink
               key={item.href}
               item={item}
@@ -215,12 +230,12 @@ export function AppShell({
           ))}
 
           {!collapsed && (
-            <p className="mt-5 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/45">
-              Intelligence
+            <p className="mt-5 mb-1 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">
+              Setup
             </p>
           )}
           {collapsed && <div className="my-3 border-t border-white/10" />}
-          {WORK_NAV.map((item) => (
+          {SETUP_NAV.map((item) => (
             <NavLink
               key={item.href}
               item={item}
@@ -230,51 +245,20 @@ export function AppShell({
             />
           ))}
 
-          {!collapsed ? (
-            <button
-              type="button"
-              className="mt-4 flex w-full items-center justify-between rounded-xl px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-white/40 hover:bg-white/6 hover:text-white/75"
-              onClick={() => setToolsOpen((v) => !v)}
-              aria-expanded={toolsOpen}
-            >
-              <span>Setup & more</span>
-              <ChevronDown
-                size={14}
-                className={cn("transition-transform", toolsOpen && "rotate-180")}
-              />
-            </button>
-          ) : (
-            <div className="my-3 border-t border-white/10" />
-          )}
-
-          {(collapsed || toolsOpen) &&
-            [...SETUP_NAV, ...SECONDARY_NAV].map((item) => (
-              <NavLink
-                key={item.href}
-                item={item}
-                pathname={pathname}
-                collapsed={collapsed}
-                onNavigate={() => setMobileOpen(false)}
-              />
-            ))}
-
           {isSuperAdmin && (
             <>
               {!collapsed && (
-                <p className="mt-5 px-2 pb-2 text-[10px] uppercase tracking-[0.18em] text-white/35">
+                <p className="mt-5 mb-1 px-2 pb-1 text-[10px] uppercase tracking-[0.18em] text-white/35">
                   Admin
                 </p>
               )}
               {collapsed && <div className="my-3 border-t border-white/10" />}
-              {ADMIN_NAV.map((item) => (
-                <NavLink
-                  key={item.href}
-                  item={item}
-                  pathname={pathname}
-                  collapsed={collapsed}
-                  onNavigate={() => setMobileOpen(false)}
-                />
-              ))}
+              <NavLink
+                item={ADMIN_ENTRY}
+                pathname={pathname}
+                collapsed={collapsed}
+                onNavigate={() => setMobileOpen(false)}
+              />
             </>
           )}
         </nav>
@@ -324,27 +308,20 @@ export function AppShell({
               type="button"
               className="btn btn-secondary px-2.5 py-2 lg:hidden"
               onClick={() => setMobileOpen(true)}
+              aria-label="Open navigation menu"
             >
               Menu
             </button>
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
-                {activeName}
-              </p>
-              {isHome ? (
-                <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
-                  What do you need?
-                </h1>
-              ) : (
-                <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl text-[var(--foreground)] md:text-2xl">
-                  {title}
-                </h1>
-              )}
+              <p className="caption">{activeName}</p>
+              <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl tracking-tight text-[var(--foreground)] md:text-2xl">
+                {isHome ? "Today" : title}
+              </h1>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="relative w-full max-w-56 text-left md:w-56"
+                className="focus-ring relative hidden w-full max-w-64 text-left sm:block md:w-64"
                 onClick={() => openCommandPalette()}
                 aria-label="Open search (Ctrl or Cmd+K)"
               >
@@ -354,16 +331,27 @@ export function AppShell({
                   aria-hidden
                 />
                 <span className="input has-leading-icon flex w-full items-center py-2 text-sm text-[var(--muted)]">
-                  Search…
-                  <kbd className="ml-auto hidden rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)] sm:inline">
+                  Search Agent Desk…
+                  <kbd className="ml-auto hidden rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)] md:inline">
                     ⌘K
                   </kbd>
                 </span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary px-2.5 py-2 sm:hidden"
+                onClick={() => openCommandPalette()}
+                aria-label="Open search"
+              >
+                <Search size={16} />
               </button>
               <NotificationsMenu />
             </div>
           </div>
         </header>
+        {activeSection ? (
+          <SectionSubnav items={activeSection.items} label={activeSection.label} />
+        ) : null}
         <main className="animate-rise min-w-0 flex-1 p-4 md:p-6 lg:p-8">{children}</main>
       </div>
     </div>

@@ -10,7 +10,7 @@ export default async function AdminWebhooksPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const events = await prisma.webhookEvent.findMany({

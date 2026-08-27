@@ -1,13 +1,14 @@
+import { createHash } from "crypto";
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { HandlingMode, MessageDirection, MessageSenderType } from "@prisma/client";
+import { HandlingMode } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
-import { getMessagingAdapter } from "@/adapters/messaging";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
+import { dispatchOutboundMessage } from "@/services/messaging/outbound";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -74,6 +75,10 @@ const patchSchema = z.object({
   qualificationStatus: z.enum(["UNKNOWN", "QUALIFYING", "QUALIFIED", "DISQUALIFIED"]).optional(),
   stageId: z.string().optional(),
   reply: z.string().min(1).optional(),
+  /** Client idempotency key — survives double-click / browser retry. */
+  replyIdempotencyKey: z.string().min(8).max(128).optional(),
+  /** Optional activity version for replay protection (not mid-flight drift). */
+  expectedActivityVersion: z.number().int().nonnegative().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: Params) {
@@ -196,42 +201,62 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       }
 
       const identifier = conversation.contact.identifiers.find((i) => i.channel === "manychat");
-      const adapter = getMessagingAdapter(false);
-      const sendResult = await adapter.sendMessage({
+      const bodyHash = createHash("sha256").update(body.reply).digest("hex").slice(0, 16);
+      const idempotencyKey =
+        body.replyIdempotencyKey ??
+        `human-reply:${id}:${session.userId}:${bodyHash}`;
+
+      const sendResult = await dispatchOutboundMessage({
         organisationId: session.organisationId,
-        contactExternalId: identifier?.identifier.replace(/^manychat:/, "") || conversation.contactId,
-        text: body.reply,
+        conversationId: id,
+        contactId: conversation.contactId,
+        contactExternalId:
+          identifier?.identifier.replace(/^manychat:/, "") || conversation.contactId,
+        content: body.reply,
+        source: "HUMAN",
+        actorId: session.userId,
+        holder: `human:${session.userId}:${id}`,
+        idempotencyKey,
         threadId: conversation.externalThreadId ?? undefined,
+        expectedActivityVersion: body.expectedActivityVersion,
+        metadata: { path: "inbox_reply" },
       });
 
-      const outboundAt = new Date();
-      await prisma.message.create({
-        data: {
-          conversationId: id,
-          organisationId: session.organisationId,
-          externalId: sendResult.externalMessageId,
-          direction: MessageDirection.OUTBOUND,
-          senderType: MessageSenderType.HUMAN,
-          body: body.reply,
-          deliveryStatus: sendResult.ok ? "sent" : "failed",
-        },
-      });
-
-      await prisma.conversation.updateMany({
-        where: { id, organisationId: session.organisationId },
-        data: {
-          lastMessageAt: outboundAt,
-          lastMessagePreview: body.reply.slice(0, 140),
-          lastOutboundAt: outboundAt,
-          aiPaused: true,
-          handlingMode: HandlingMode.HUMAN,
-        },
-      });
+      if (!sendResult.ok && sendResult.code !== "ALREADY_CONFIRMED") {
+        if (sendResult.code === "RECONCILIATION_REQUIRED") {
+          return jsonError(
+            "Message may have been sent but confirmation was lost — manual review required",
+            409,
+          );
+        }
+        if (
+          sendResult.code === "CONTACT_OPTED_OUT" ||
+          sendResult.code === "CONTACT_SUPPRESSED" ||
+          sendResult.code === "DO_NOT_CONTACT" ||
+          sendResult.code === "CONVERSATION_CLOSED" ||
+          sendResult.code === "MESSAGING_WINDOW_CLOSED"
+        ) {
+          return jsonError(sendResult.code, 403);
+        }
+        if (sendResult.code === "STALE_CONTEXT") {
+          return jsonError("Stale conversation context — refresh and retry", 409);
+        }
+        return jsonError(sendResult.code || "Outbound send failed", 502);
+      }
 
       await cancelPendingFollowUps({
         organisationId: session.organisationId,
         conversationId: id,
         reason: "Human replied",
+      });
+
+      return Response.json({
+        ok: true,
+        outbound: {
+          code: sendResult.code,
+          dispatchId: sendResult.dispatch?.id,
+          messageId: sendResult.dispatch?.messageId ?? null,
+        },
       });
     }
 

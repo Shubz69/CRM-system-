@@ -128,6 +128,7 @@ export default function IntegrationsClient() {
   const [loading, setLoading] = useState(true);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showAdvancedMesh, setShowAdvancedMesh] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [aiReady, setAiReady] = useState(false);
@@ -336,80 +337,120 @@ export default function IntegrationsClient() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Paste credentials, test each connection, and see what still needs doing before going live." />
+      <PageHeader description="Connect channels, finish setup, and go live — advanced detail stays out of the way." />
+
+      <section className="surface space-y-4 p-5">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Connected channels</h2>
+        <p className="text-sm text-[var(--muted)]">
+          What is live for this workspace right now.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-xl border border-[var(--border)] p-4">
+            <p className="font-medium">Instagram (via ManyChat)</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">DM messaging into Inbox</p>
+            <p className="mt-3 text-sm">
+              {status?.connected ? (
+                <span className="badge badge-success">Connected</span>
+              ) : (
+                <span className="badge badge-warn">Needs setup</span>
+              )}
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] p-4">
+            <p className="font-medium">AI provider</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">Qualification, replies, analysis</p>
+            <p className="mt-3">
+              <Link href="/agent" className="btn btn-secondary text-xs">
+                Manage AI behaviour
+              </Link>
+            </p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] p-4">
+            <p className="font-medium">Booking</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">Meeting links and confirmed bookings</p>
+            <p className="mt-3">
+              <Link href="/agent" className="btn btn-secondary text-xs">
+                Configure booking
+              </Link>
+            </p>
+          </div>
+        </div>
+      </section>
 
       {mesh && (
-        <section className="surface space-y-4 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-semibold">Connector mesh</h2>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={async () => {
-                try {
-                  const res = await fetch("/api/integrations/mesh", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "refresh_capabilities" }),
-                  });
-                  const json = await res.json();
-                  if (!res.ok) throw new Error(json.error || "Refresh failed");
-                  toast.success("Capabilities refreshed from live connection state");
-                  await loadMesh();
-                } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Refresh failed");
-                }
-              }}
-            >
-              Refresh capabilities
-            </button>
-          </div>
-          <p className="text-sm text-[var(--muted)]">
-            Connected ≠ all capabilities available. Statuses come from credentials, scopes, and
-            provider restrictions — never invented.
-          </p>
-          <div className="space-y-3">
-            {mesh.connectors.map((c) => (
-              <div key={c.providerKey} className="rounded border border-border p-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="font-medium">{c.displayName}</h3>
-                  <span className="text-xs uppercase tracking-wide">{c.customerLabel}</span>
-                </div>
-                <p className="text-xs text-[var(--muted)]">
-                  {c.providerKey} · connection {c.connectionStatus}
-                </p>
-                <ul className="mt-2 space-y-1 text-sm">
-                  {c.capabilities.map((cap) => (
-                    <li key={cap.capability} className="flex flex-wrap gap-2">
-                      <span className="min-w-[10rem] font-medium">{cap.capability}</span>
-                      <span className="text-xs uppercase">{cap.status}</span>
-                      <span className="text-[var(--muted)]">{cap.provenance}</span>
-                      {cap.missingScopes?.length ? (
-                        <span className="text-xs">missing: {cap.missingScopes.join(", ")}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+        <section className="surface space-y-3 p-4">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-left"
+            onClick={() => setShowAdvancedMesh((v) => !v)}
+          >
+            <span>
+              <span className="font-semibold">Advanced connector details</span>
+              <span className="mt-0.5 block text-xs text-[var(--muted)]">
+                Capability matrix for operators — not required for day-to-day setup
+              </span>
+            </span>
+            <span className="text-xs text-[var(--muted)]">
+              {showAdvancedMesh ? "Hide" : "Show"}
+            </span>
+          </button>
+          {showAdvancedMesh ? (
+            <div className="space-y-4 border-t border-[var(--border)] pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-semibold">Connector mesh</h2>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    try {
+                      const res = await fetch("/api/integrations/mesh", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "refresh_capabilities" }),
+                      });
+                      const json = await res.json();
+                      if (!res.ok) throw new Error(json.error || "Refresh failed");
+                      toast.success("Capabilities refreshed from live connection state");
+                      await loadMesh();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Refresh failed");
+                    }
+                  }}
+                >
+                  Refresh capabilities
+                </button>
               </div>
-            ))}
-          </div>
-          {mesh.recentSyncs.length > 0 && (
-            <div>
-              <h3 className="mb-2 text-sm font-semibold">Recent syncs</h3>
-              <ul className="text-sm space-y-1">
-                {mesh.recentSyncs.slice(0, 5).map((s) => (
-                  <li key={s.id}>
-                    {s.providerKey}/{s.resource} · {s.status} · processed {s.processedCount}
-                  </li>
+              <p className="text-sm text-[var(--muted)]">
+                Connected ≠ all capabilities available. Statuses come from credentials, scopes, and
+                provider restrictions — never invented.
+              </p>
+              <div className="space-y-3">
+                {mesh.connectors.map((c) => (
+                  <div key={c.providerKey} className="rounded border border-border p-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <h3 className="font-medium">{c.displayName}</h3>
+                      <span className="text-xs uppercase tracking-wide">{c.customerLabel}</span>
+                    </div>
+                    <p className="text-xs text-[var(--muted)]">
+                      {c.providerKey} · connection {c.connectionStatus}
+                    </p>
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {c.capabilities.map((cap) => (
+                        <li key={cap.capability} className="flex flex-wrap gap-2">
+                          <span className="min-w-[10rem] font-medium">{cap.capability}</span>
+                          <span className="text-xs uppercase">{cap.status}</span>
+                          <span className="text-[var(--muted)]">{cap.provenance}</span>
+                          {cap.missingScopes?.length ? (
+                            <span className="text-xs">missing: {cap.missingScopes.join(", ")}</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
-          )}
-          <ul className="text-xs text-[var(--muted)] list-disc pl-4">
-            {mesh.limitations.map((l) => (
-              <li key={l}>{l}</li>
-            ))}
-          </ul>
+          ) : null}
         </section>
       )}
 

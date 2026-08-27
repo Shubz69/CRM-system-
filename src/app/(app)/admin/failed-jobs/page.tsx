@@ -10,7 +10,7 @@ export default async function AdminFailedJobsPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const jobs = await prisma.failedJob.findMany({

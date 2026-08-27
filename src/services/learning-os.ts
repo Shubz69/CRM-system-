@@ -93,6 +93,80 @@ export async function recordRecommendationFeedback(input: {
   });
 }
 
+/** Accept a recommendation — preference signal + RECOMMENDATION_ACCEPTED outbox event. */
+export async function acceptRecommendation(input: {
+  organisationId: string;
+  subjectKind: string;
+  subjectId: string;
+  rating?: number | null;
+  note?: string | null;
+  userId?: string | null;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const row = await tx.recommendationFeedback.create({
+      data: {
+        organisationId: input.organisationId,
+        subjectKind: input.subjectKind,
+        subjectId: input.subjectId,
+        signal: "accepted",
+        rating: input.rating ?? null,
+        note: input.note ?? null,
+        userId: input.userId ?? null,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "RECOMMENDATION_ACCEPTED",
+      aggregateType: input.subjectKind,
+      aggregateId: input.subjectId,
+      payload: {
+        subjectKind: input.subjectKind,
+        subjectId: input.subjectId,
+      },
+      dedupeKey: `RECOMMENDATION_ACCEPTED:${input.subjectKind}:${input.subjectId}:${row.id}`,
+    });
+    return row;
+  });
+}
+
+/** Reject a recommendation — preference signal + RECOMMENDATION_REJECTED outbox event. */
+export async function rejectRecommendation(input: {
+  organisationId: string;
+  subjectKind: string;
+  subjectId: string;
+  rating?: number | null;
+  note?: string | null;
+  userId?: string | null;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const row = await tx.recommendationFeedback.create({
+      data: {
+        organisationId: input.organisationId,
+        subjectKind: input.subjectKind,
+        subjectId: input.subjectId,
+        signal: "rejected",
+        rating: input.rating ?? null,
+        note: input.note ?? null,
+        userId: input.userId ?? null,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "RECOMMENDATION_REJECTED",
+      aggregateType: input.subjectKind,
+      aggregateId: input.subjectId,
+      payload: {
+        subjectKind: input.subjectKind,
+        subjectId: input.subjectId,
+      },
+      dedupeKey: `RECOMMENDATION_REJECTED:${input.subjectKind}:${input.subjectId}:${row.id}`,
+    });
+    return row;
+  });
+}
+
 export async function getFeedbackSummary(organisationId: string) {
   const rows = await prisma.recommendationFeedback.groupBy({
     by: ["signal"],

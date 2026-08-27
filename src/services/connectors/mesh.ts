@@ -66,8 +66,8 @@ export async function getIntegrationMeshSnapshot(organisationId: string) {
     })),
     recentOperations: opLogs,
     limitations: [
-      "Phase 15 live publishing worker not implemented",
-      "DomainEvent coverage still incomplete for some CRM mutations",
+      "Publishing dispatch runs via Postgres sweep (not a dedicated BullMQ worker)",
+      "Some CRM/messaging DomainEvent emitters still incomplete",
       "Playwright E2E skipped without credentials",
       "No production multi-worker soak",
       "Provider maturity is per-connector — not mesh-wide LIVE_E2E",

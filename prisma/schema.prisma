@@ -277,6 +277,28 @@ model Organisation {
   operationalSloSnapshots OperationalSloSnapshot[]
   costOutcomeLinks     CostOutcomeLink[]
   continuousCollectionRuns ContinuousCollectionRun[]
+  // Phase 20 — Differentiation intelligence
+  computeDecisions     ComputeDecision[]
+  computeAggregates    ComputeAggregate[]
+  stateSnapshots       StateSnapshot[]
+  stateTransitions     StateTransition[]
+  stateEvidenceLinks   StateEvidenceLink[]
+  evidenceDebtItems    EvidenceDebtItem[]
+  decisions            Decision[]
+  decisionAlternatives DecisionAlternative[]
+  decisionEvidenceLinks DecisionEvidenceLink[]
+  decisionOutcomes     DecisionOutcome[]
+  decisionStateRefs    DecisionStateReference[]
+  creativeFeatureSets  CreativeFeatureSet[]
+  creativePatterns     CreativePattern[]
+  processTransitionStats ProcessTransitionStat[]
+  automationOpportunities AutomationOpportunity[]
+  counterfactualRuns   CounterfactualRun[]
+  // Conversation Revenue Engine
+  contactSuppressions  ContactSuppression[]
+  conversationUnderstandings ConversationUnderstanding[]
+  outboundDispatches   OutboundDispatch[]
+  conversationSendLeases ConversationSendLease[]
 }
 
 model User {
@@ -600,6 +622,7 @@ model Contact {
   bookings         Booking[]
   followUps        FollowUp[]
   attributions     Attribution[]
+  suppressions     ContactSuppression[]
 
   @@index([organisationId, lastContactAt])
   @@index([organisationId, email])
@@ -643,6 +666,13 @@ model Conversation {
   summary                        String?      @db.Text
   intent                         String?
   sentiment                      String?
+  /// Monotonic activity version — bumped on material inbound/outbound/human actions.
+  activityVersion                Int          @default(0)
+  /// Transparent priority class (HOT_LEAD | REPLY_NEEDED | …) — not a fake 0–100 score.
+  priorityClass                  String?
+  closedAt                       DateTime?
+  closedReason                   String?
+  handoffPacket                  Json?
   metadata                       Json         @default("{}")
   createdAt                      DateTime     @default(now())
   updatedAt                      DateTime     @updatedAt
@@ -662,10 +692,14 @@ model Conversation {
   buyingSignals    BuyingSignal[]
   insights         ConversationInsight[]
   tags             ConversationTag[]
+  understandings   ConversationUnderstanding[]
+  outboundDispatches OutboundDispatch[]
+  sendLease        ConversationSendLease?
 
   @@unique([organisationId, externalThreadId])
   @@index([organisationId, lastMessageAt])
   @@index([organisationId, needsHumanReview])
+  @@index([organisationId, priorityClass])
   @@index([contactId])
 }
 
@@ -696,15 +730,24 @@ model Message {
   rawPayload       Json?
   aiMetadata       Json?
   deliveryStatus   String?
+  /// Provider-backed only — never invent from local API success.
+  deliveredAt      DateTime?
+  readAt           DateTime?
+  failureCode      String?
+  providerError    String?
+  inReplyToMessageId String?
+  agentVersion     String?
   sentAt           DateTime           @default(now())
   createdAt        DateTime           @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  outboundDispatches OutboundDispatch[]
 
   @@unique([conversationId, externalId])
   @@index([conversationId, sentAt])
   @@index([organisationId, sentAt])
   @@index([organisationId, origin])
+  @@index([organisationId, conversationId, sentAt])
 }
 
 model Pipeline {
@@ -1690,6 +1733,8 @@ model AgentMission {
   lastErrorMessage   String?       @db.Text
   /// Decision summary only — never chain-of-thought.
   decisionSummary    String?       @db.Text
+  /// Optional link to Phase 20 Decision ledger (choice ≠ execution authority).
+  decisionId         String?
   confidence         Float?
   startedAt          DateTime?
   finishedAt         DateTime?
@@ -1700,6 +1745,7 @@ model AgentMission {
   organisation         Organisation          @relation(fields: [organisationId], references: [id], onDelete: Cascade)
   goal                 Goal?                 @relation(fields: [goalId], references: [id], onDelete: SetNull)
   businessOpportunity  BusinessOpportunity?  @relation(fields: [businessOpportunityId], references: [id], onDelete: SetNull)
+  ledgerDecision       Decision?             @relation(fields: [decisionId], references: [id], onDelete: SetNull)
   tasks                MissionTask[]
   checkpoints          MissionCheckpoint[]
   artifacts            MissionArtifact[]
@@ -1710,6 +1756,7 @@ model AgentMission {
   @@index([organisationId, deadlineAt])
   @@index([goalId])
   @@index([businessOpportunityId])
+  @@index([decisionId])
 }
 
 model MissionTask {
@@ -3898,7 +3945,7 @@ model CostOutcomeLink {
   costKind       String
   outcomeKind    String
   outcomeRef     String?
-  /// Attribution honesty — ESTIMATED | DIRECT | UNKNOWN
+  /// Attribution honesty — ESTIMATED | DIRECT | UNKNOWN | CONTRIBUTED | CORRELATED
   attribution    String   @default("UNKNOWN")
   metadata       Json     @default("{}")
   createdAt      DateTime @default(now())
@@ -3908,4 +3955,640 @@ model CostOutcomeLink {
   @@index([organisationId, outcomeKind, createdAt])
   @@index([organisationId, costKind, createdAt])
 }
+
+// ─── Phase 20 — Differentiation intelligence layer ───────────────────────────
+
+enum ComputeExecutionMode {
+  DETERMINISTIC
+  CACHE
+  ECONOMY
+  STANDARD
+  ADVANCED
+  DEEP
+}
+
+enum ToolTrustStatus {
+  TRUSTED
+  LIMITED
+  REVIEW_REQUIRED
+  QUARANTINED
+  BLOCKED
+}
+
+enum DecisionStatus {
+  DRAFT
+  COMPARING
+  PENDING_APPROVAL
+  DECIDED
+  EXECUTING
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum CreativePatternMaturity {
+  INSUFFICIENT_DATA
+  EMERGING_PATTERN
+  SUPPORTED_PATTERN
+  STRONG_PATTERN
+}
+
+enum CounterfactualMaturity {
+  EVIDENCE_COMPARISON
+  HISTORICAL_SIMILARITY
+  CALIBRATED_ESTIMATION
+}
+
+enum EvidenceDebtStatus {
+  OPEN
+  RECOMMENDED
+  SCHEDULED
+  RESOLVED
+  DEPRECATED
+}
+
+enum AutomationOpportunityStatus {
+  DETECTED
+  REVIEWING
+  APPROVED
+  REJECTED
+  DISMISSED
+}
+
+/// Persist only non-trivial compute decisions (not every L0).
+model ComputeDecision {
+  id               String               @id @default(cuid())
+  organisationId   String
+  taskType         String
+  executionMode    ComputeExecutionMode
+  selectedModel    String?
+  selectedProvider String?
+  reasonCodes      String[]             @default([])
+  escalationReason String?
+  estimatedCostCents Int?
+  actualCostCents  Int?
+  qualityBudget    String?
+  cacheHit         Boolean              @default(false)
+  shadowLegacyTier String?
+  shadowLegacyModel String?
+  shadowMatch      Boolean?
+  aiExecutionId    String?
+  errorSummary     String?
+  metadata         Json                 @default("{}")
+  createdAt        DateTime             @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, createdAt])
+  @@index([organisationId, executionMode, createdAt])
+  @@index([organisationId, taskType, createdAt])
+}
+
+/// Aggregated L0 / high-volume deterministic resolutions.
+model ComputeAggregate {
+  id             String   @id @default(cuid())
+  organisationId String
+  windowStart    DateTime
+  windowEnd      DateTime
+  mode           ComputeExecutionMode
+  taskType       String   @default("*")
+  count          Int      @default(0)
+  metadata       Json     @default("{}")
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, windowStart, mode, taskType])
+  @@index([organisationId, windowStart])
+}
+
+model ToolTrustRecord {
+  id                   String          @id @default(cuid())
+  /// Organisation id, or "global" for first-party platform defaults (no FK — may be sentinel).
+  organisationId       String          @default("global")
+  toolKey              String
+  provider             String          @default("builtin")
+  origin               String          @default("first_party")
+  version              String
+  definitionHash       String
+  permissions          String[]        @default([])
+  dataClasses          String[]        @default([])
+  sideEffects          String[]        @default([])
+  externalDestinations String[]        @default([])
+  riskLevel            String          @default("read")
+  approvalRequired     Boolean         @default(false)
+  allowedAgentTypes    String[]        @default([])
+  status               ToolTrustStatus @default(TRUSTED)
+  lastInspectionAt     DateTime?
+  verificationNote     String?
+  metadata             Json            @default("{}")
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@unique([organisationId, toolKey])
+  @@index([toolKey, status])
+  @@index([status, updatedAt])
+}
+
+model StateDefinition {
+  id           String   @id @default(cuid())
+  entityType   String
+  dimension    String
+  label        String
+  description  String?
+  valueDomain  Json     @default("{}")
+  calculatorKey String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  snapshots StateSnapshot[]
+
+  @@unique([entityType, dimension])
+  @@index([entityType, active])
+}
+
+model StateSnapshot {
+  id               String   @id @default(cuid())
+  organisationId   String
+  entityType       String
+  entityId         String
+  dimension        String
+  stateDefinitionId String?
+  value            String
+  numericValue     Float?
+  reasonCode       String?
+  asOf             DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+
+  organisation    Organisation     @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  stateDefinition StateDefinition? @relation(fields: [stateDefinitionId], references: [id], onDelete: SetNull)
+  evidenceLinks   StateEvidenceLink[]
+  transitionsFrom StateTransition[] @relation("StateTransitionFrom")
+  transitionsTo   StateTransition[] @relation("StateTransitionTo")
+
+  @@unique([organisationId, entityType, entityId, dimension])
+  @@index([organisationId, entityType, dimension])
+  @@index([organisationId, asOf])
+}
+
+model StateTransition {
+  id             String   @id @default(cuid())
+  organisationId String
+  entityType     String
+  entityId       String
+  dimension      String
+  fromValue      String?
+  toValue        String
+  reasonCode     String?
+  fromSnapshotId String?
+  toSnapshotId   String?
+  triggeredByEventId String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  fromSnapshot StateSnapshot? @relation("StateTransitionFrom", fields: [fromSnapshotId], references: [id], onDelete: SetNull)
+  toSnapshot   StateSnapshot? @relation("StateTransitionTo", fields: [toSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, entityType, entityId, createdAt])
+  @@index([organisationId, dimension, createdAt])
+}
+
+model StateEvidenceLink {
+  id             String   @id @default(cuid())
+  organisationId String
+  snapshotId     String
+  evidenceKind   String
+  evidenceId     String
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation  @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  snapshot     StateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, evidenceKind, evidenceId])
+  @@index([organisationId, evidenceKind, evidenceId])
+}
+
+model EvidenceDebtItem {
+  id               String             @id @default(cuid())
+  organisationId   String
+  subjectKind      String
+  subjectId        String
+  title            String
+  importance       String             @default("MEDIUM")
+  freshnessBand    String?
+  confidenceBand   String?
+  independentSources Int              @default(0)
+  goalDependencyCount Int             @default(0)
+  opportunityDependencyCount Int      @default(0)
+  decisionDependencyCount Int         @default(0)
+  consequenceBand  String             @default("MEDIUM")
+  priorityScore    Float              @default(0)
+  status           EvidenceDebtStatus @default(OPEN)
+  recommendedAction String?
+  metadata         Json               @default("{}")
+  resolvedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, subjectKind, subjectId])
+  @@index([organisationId, status, priorityScore])
+  @@index([organisationId, updatedAt])
+}
+
+model Decision {
+  id                 String         @id @default(cuid())
+  organisationId     String
+  problemSummary     String         @db.Text
+  decisionType       String
+  status             DecisionStatus @default(DRAFT)
+  goalId             String?
+  kpiDefinitionId    String?
+  opportunityId      String?
+  riskBand           String?
+  confidenceBand     String?
+  uncertaintyBand    String?
+  expectedImpactDirection String?
+  estimatedCostCents Int?
+  ownerUserId        String?
+  agentVersion       String?
+  approvalRequestId  String?
+  selectedAlternativeId String?
+  decidedAt          DateTime?
+  missionId          String?
+  rationaleSummary   String?        @db.Text
+  metadata           Json           @default("{}")
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  organisation  Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  alternatives  DecisionAlternative[]
+  evidenceLinks DecisionEvidenceLink[]
+  outcomes      DecisionOutcome[]
+  stateRefs     DecisionStateReference[]
+  missions      AgentMission[]
+  counterfactualRuns CounterfactualRun[]
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, decisionType, createdAt])
+  @@index([goalId])
+  @@index([opportunityId])
+}
+
+model DecisionAlternative {
+  id                String   @id @default(cuid())
+  organisationId    String
+  decisionId        String
+  alternativeKey    String
+  label             String
+  summary           String?  @db.Text
+  expectedDirection String?
+  potentialValueBand String?
+  estimatedCostCents Int?
+  timeToImpactBand  String?
+  riskBand          String?
+  confidenceBand    String?
+  goalAlignment     Float?
+  processCapacityBand String?
+  selected          Boolean  @default(false)
+  rejected          Boolean  @default(false)
+  rejectionReason   String?
+  rankScore         Float?
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  decision     Decision     @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, alternativeKey])
+  @@index([organisationId, decisionId])
+}
+
+model DecisionEvidenceLink {
+  id             String   @id @default(cuid())
+  organisationId String
+  decisionId     String
+  evidenceKind   String
+  evidenceId     String
+  role           String   @default("supports")
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  decision     Decision     @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, evidenceKind, evidenceId, role])
+  @@index([organisationId, evidenceKind])
+}
+
+model DecisionOutcome {
+  id             String   @id @default(cuid())
+  organisationId String
+  decisionId     String
+  outcomeKind    String
+  outcomeRef     String?
+  kpiEffectDirection String?
+  attribution    String   @default("UNKNOWN")
+  measuredValue  Float?
+  notes          String?
+  recordedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  decision     Decision     @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, decisionId, recordedAt])
+  @@index([organisationId, outcomeKind, recordedAt])
+}
+
+model DecisionStateReference {
+  id             String   @id @default(cuid())
+  organisationId String
+  decisionId     String
+  entityType     String
+  entityId       String
+  dimension      String
+  value          String
+  asOf           DateTime
+  snapshotId     String?
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  decision     Decision     @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, decisionId])
+  @@index([decisionId, entityType, dimension])
+}
+
+model CreativeFeatureSet {
+  id               String   @id @default(cuid())
+  organisationId   String
+  contentPieceId   String?
+  socialContentId  String?
+  contentVersionId String?
+  extractorVersion String
+  platform         String?
+  format           String?
+  topic            String?
+  hookType         String?
+  angle            String?
+  lengthChars      Int?
+  ctaPresent       Boolean?
+  ctaType          String?
+  tone             String?
+  visualStructure  String?
+  postingWindow    String?
+  audienceKey      String?
+  campaignId       String?
+  goalId           String?
+  features         Json     @default("{}")
+  extractedAt      DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, contentPieceId, extractorVersion])
+  @@index([organisationId, platform, topic])
+  @@index([organisationId, extractorVersion])
+}
+
+model CreativePattern {
+  id             String                   @id @default(cuid())
+  organisationId String
+  patternKey     String
+  featureCombo   Json
+  sampleSize     Int                      @default(0)
+  maturity       CreativePatternMaturity  @default(INSUFFICIENT_DATA)
+  metrics        Json                     @default("{}")
+  updatedAt      DateTime                 @updatedAt
+  createdAt      DateTime                 @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, patternKey])
+  @@index([organisationId, maturity, sampleSize])
+}
+
+model ProcessDefinition {
+  id          String   @id @default(cuid())
+  processKey  String   @unique
+  label       String
+  description String?
+  stages      Json     @default("[]")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stats ProcessTransitionStat[]
+}
+
+model ProcessTransitionStat {
+  id             String   @id @default(cuid())
+  organisationId String
+  processKey     String
+  fromStage      String
+  toStage        String
+  windowStart    DateTime
+  windowEnd      DateTime
+  transitionCount Int     @default(0)
+  totalDurationMs BigInt  @default(0)
+  p50DurationMs  Int?
+  p90DurationMs  Int?
+  conversionRate Float?
+  dropOffRate    Float?
+  loopCount      Int      @default(0)
+  humanInterventionCount Int @default(0)
+  approvalDelayMs Int?
+  automationCoverage Float?
+  metadata       Json     @default("{}")
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  organisation Organisation      @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  definition   ProcessDefinition @relation(fields: [processKey], references: [processKey], onDelete: Cascade)
+
+  @@unique([organisationId, processKey, fromStage, toStage, windowStart])
+  @@index([organisationId, processKey, windowStart])
+}
+
+model AutomationOpportunity {
+  id             String                      @id @default(cuid())
+  organisationId String
+  processKey     String
+  fromStage      String
+  toStage        String
+  title          String
+  volume         Int                         @default(0)
+  stabilityScore Float?
+  delayMs        Int?
+  errorRate      Float?
+  riskBand       String                      @default("MEDIUM")
+  impactBand     String                      @default("MEDIUM")
+  confidenceBand String                      @default("LOW")
+  status         AutomationOpportunityStatus @default(DETECTED)
+  metadata       Json                        @default("{}")
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, status, createdAt])
+  @@index([organisationId, processKey])
+}
+
+model CounterfactualRun {
+  id             String                 @id @default(cuid())
+  organisationId String
+  decisionId     String?
+  goalId         String?
+  opportunityId  String?
+  maturity       CounterfactualMaturity @default(EVIDENCE_COMPARISON)
+  ranking        Json                   @default("[]")
+  explanationFactors Json               @default("[]")
+  insufficientEvidence Boolean          @default(false)
+  metadata       Json                   @default("{}")
+  createdAt      DateTime               @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  decision     Decision?    @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, createdAt])
+  @@index([decisionId])
+}
+
+// ─── Conversation Revenue Engine ─────────────────────────────────────────────
+
+enum MessagingExternalOutcome {
+  NOT_STARTED
+  PREPARED
+  DISPATCHING
+  CONFIRMED
+  FAILED
+  RECONCILIATION_REQUIRED
+}
+
+enum SuppressionReason {
+  OPT_OUT
+  COMPLAINT
+  HARD_BOUNCE
+  INVALID_CONTACT
+  MANUAL_BLOCK
+  LEGAL_RESTRICTION
+  PROVIDER_RESTRICTION
+}
+
+model ContactSuppression {
+  id             String            @id @default(cuid())
+  organisationId String
+  contactId      String
+  channel        String?
+  provider       String?
+  reason         SuppressionReason
+  source         String
+  createdByUserId String?
+  expiresAt      DateTime?
+  metadata       Json              @default("{}")
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, contactId])
+  @@index([organisationId, reason])
+  @@index([contactId, channel])
+}
+
+model ConversationUnderstanding {
+  id                 String   @id @default(cuid())
+  organisationId     String
+  conversationId     String
+  version            Int      @default(1)
+  intent             String?
+  objectionCategory  String?
+  buyingStage        String?
+  urgency            String?
+  qualificationHint  String?
+  customerNeed       String?
+  productInterest    String?
+  budgetSignal       String?
+  timelineSignal     String?
+  authoritySignal    String?
+  competitorMention  String?
+  meetingIntent      Boolean  @default(false)
+  noResponseRisk     String?
+  disengagementRisk  String?
+  confidenceBand     String   @default("LOW")
+  evidenceMessageIds String[] @default([])
+  extractorVersion   String   @default("understand-v1")
+  factors            Json     @default("{}")
+  observedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, conversationId, observedAt])
+  @@index([conversationId, version])
+}
+
+/// Durable outbound send attempt with idempotency + external outcome.
+model OutboundDispatch {
+  id                      String                   @id @default(cuid())
+  organisationId          String
+  conversationId          String
+  contactId               String
+  messageId               String?
+  provider                String
+  connectionRef           String?
+  idempotencyKey          String
+  externalOutcome         MessagingExternalOutcome @default(NOT_STARTED)
+  externalMessageId       String?
+  attemptCount            Int                      @default(0)
+  holder                  String
+  expectedLastMessageId   String?
+  expectedActivityVersion Int?
+  failureCode             String?
+  providerError           String?
+  preparedAt              DateTime                 @default(now())
+  dispatchedAt            DateTime?
+  confirmedAt             DateTime?
+  staleCancelled          Boolean                  @default(false)
+  metadata                Json                     @default("{}")
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([organisationId, idempotencyKey])
+  @@index([organisationId, externalOutcome, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([messageId])
+}
+
+/// Per-conversation lease preventing concurrent AI/automation/follow-up sends.
+model ConversationSendLease {
+  id                      String   @id @default(cuid())
+  organisationId          String
+  conversationId          String   @unique
+  holder                  String
+  expectedLastMessageId   String?
+  expectedActivityVersion Int
+  expiresAt               DateTime
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, expiresAt])
+}
+
 

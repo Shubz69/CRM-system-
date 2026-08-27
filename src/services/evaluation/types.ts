@@ -17,11 +17,12 @@ export type LearningSignalKind =
 
 /**
  * Canary / version rollout states persisted on VersionPerformanceSnapshot.rolloutState.
- * Promotion is explicit — never auto-promote from a single good eval run.
+ * SHADOW = observe-only (no production write). Promotion is explicit — never auto-promote.
  */
 export const ROLLOUT_STATES = [
   "CURRENT",
   "CANDIDATE",
+  "SHADOW",
   "CANARY",
   "PROMOTED",
   "ROLLED_BACK",

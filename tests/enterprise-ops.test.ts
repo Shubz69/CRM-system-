@@ -13,11 +13,14 @@ vi.mock("@/lib/db", () => {
   const domainEventCount = vi.fn();
   const domainEventFindFirst = vi.fn();
   const publishingJobCount = vi.fn();
+  const continuousCollectionRunCount = vi.fn();
+  const agentMissionCount = vi.fn();
   const agentStepCount = vi.fn();
   const auditLogCount = vi.fn();
   const failedJobCount = vi.fn();
   const calibrationCount = vi.fn();
   const retentionFindUnique = vi.fn();
+  const queryRaw = vi.fn(async () => [{ "?column?": 1 }]);
   return {
     prisma: {
       operationalSloSnapshot: { create: sloCreate, findFirst: sloFindFirst },
@@ -25,11 +28,14 @@ vi.mock("@/lib/db", () => {
       agentRun: { findFirst: agentRunFindFirst },
       domainEvent: { count: domainEventCount, findFirst: domainEventFindFirst },
       publishingJob: { count: publishingJobCount },
+      continuousCollectionRun: { count: continuousCollectionRunCount },
+      agentMission: { count: agentMissionCount },
       agentStep: { count: agentStepCount },
       auditLog: { count: auditLogCount, create: vi.fn() },
       failedJob: { count: failedJobCount },
       confidenceCalibrationSample: { count: calibrationCount },
       organisationAgentRetention: { findUnique: retentionFindUnique },
+      $queryRaw: queryRaw,
       __mocks: {
         sloCreate,
         costCreate,
@@ -37,11 +43,14 @@ vi.mock("@/lib/db", () => {
         domainEventCount,
         domainEventFindFirst,
         publishingJobCount,
+        continuousCollectionRunCount,
+        agentMissionCount,
         agentStepCount,
         auditLogCount,
         failedJobCount,
         calibrationCount,
         retentionFindUnique,
+        queryRaw,
       },
     },
   };
@@ -73,6 +82,7 @@ import {
   isSsoLive,
   SSO_SCIM_MATURITY,
   getEnterpriseOpsPanel,
+  getProductionHealth,
 } from "@/services/enterprise-ops";
 import { prisma } from "@/lib/db";
 import { writeAuditLog } from "@/services/audit";
@@ -84,6 +94,8 @@ type Mocks = {
   domainEventCount: ReturnType<typeof vi.fn>;
   domainEventFindFirst: ReturnType<typeof vi.fn>;
   publishingJobCount: ReturnType<typeof vi.fn>;
+  continuousCollectionRunCount: ReturnType<typeof vi.fn>;
+  agentMissionCount: ReturnType<typeof vi.fn>;
   agentStepCount: ReturnType<typeof vi.fn>;
   auditLogCount: ReturnType<typeof vi.fn>;
   failedJobCount: ReturnType<typeof vi.fn>;
@@ -100,6 +112,8 @@ describe("Phase 18 SLO", () => {
     mocks.domainEventCount.mockResolvedValue(0);
     mocks.domainEventFindFirst.mockResolvedValue(null);
     mocks.publishingJobCount.mockResolvedValue(0);
+    mocks.continuousCollectionRunCount.mockResolvedValue(0);
+    mocks.agentMissionCount.mockResolvedValue(0);
     mocks.sloCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
       id: "slo_1",
       ...data,
@@ -111,6 +125,9 @@ describe("Phase 18 SLO", () => {
     expect(snap.maturityNote).toBe(SLO_MATURITY_NOTE);
     expect(snap.contractualSlo).toBe(false);
     expect(snap.indicators.publishSuccessRate.rate).toBeNull();
+    expect(snap.indicators.continuousIntelRuns.count).toBe(0);
+    expect(snap.indicators.publishingDispatching.count).toBe(0);
+    expect(snap.indicators.missionWaitingApproval.count).toBe(0);
     expect(mocks.sloCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ maturityNote: "FOUNDATION" }),
@@ -121,7 +138,8 @@ describe("Phase 18 SLO", () => {
   it("reports publish rate only from real terminal counts", async () => {
     mocks.publishingJobCount
       .mockResolvedValueOnce(3) // published
-      .mockResolvedValueOnce(1); // failed
+      .mockResolvedValueOnce(1) // failed
+      .mockResolvedValueOnce(0); // dispatching
     const snap = await captureOperationalSloSnapshot({ organisationId: "org_1" });
     expect(snap.indicators.publishSuccessRate.rate).toBe(0.75);
   });
@@ -246,6 +264,8 @@ describe("Phase 18 enterprise ops panel", () => {
     mocks.domainEventCount.mockResolvedValue(1);
     mocks.domainEventFindFirst.mockResolvedValue(null);
     mocks.publishingJobCount.mockResolvedValue(0);
+    mocks.continuousCollectionRunCount.mockResolvedValue(0);
+    mocks.agentMissionCount.mockResolvedValue(2);
   });
 
   it("returns SLO FOUNDATION panel without fake charts", async () => {
@@ -254,5 +274,26 @@ describe("Phase 18 enterprise ops panel", () => {
     expect(panel.slo.contractualSlo).toBe(false);
     expect(panel.ssoScim.maturity).toBe("FOUNDATION");
     expect(panel.quality.publishHealth.rate).toBeNull();
+    expect(panel.slo.indicators.missionWaitingApproval.count).toBe(2);
+    expect(panel.productionHealth?.maturity).toBe("FOUNDATION");
+    expect(panel.productionHealth?.ok).toBe(true);
+  });
+});
+
+describe("Phase 18 production health", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.agentRunFindFirst.mockResolvedValue(null);
+    mocks.domainEventCount.mockResolvedValue(0);
+    mocks.domainEventFindFirst.mockResolvedValue(null);
+    mocks.publishingJobCount.mockResolvedValue(0);
+  });
+
+  it("reports FOUNDATION health without paid provider probes", async () => {
+    const health = await getProductionHealth();
+    expect(health.maturity).toBe("FOUNDATION");
+    expect(health.ok).toBe(true);
+    expect(health.database.ok).toBe(true);
+    expect(health.note).toMatch(/no paid provider/i);
   });
 });

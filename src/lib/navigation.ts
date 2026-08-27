@@ -22,6 +22,15 @@ import {
   Plug,
   Target,
   Lightbulb,
+  FileText,
+  CheckSquare,
+  Search,
+  Radio,
+  TrendingUp,
+  MessageSquare,
+  Briefcase,
+  BarChart3,
+  Zap,
 } from "lucide-react";
 
 export type NavItem = {
@@ -31,73 +40,67 @@ export type NavItem = {
   match?: "exact" | "prefix";
 };
 
-/** Always visible — daily work for a business owner. */
-export const PRIMARY_NAV: NavItem[] = [
-  { href: "/ask", label: "Home", icon: Home, match: "exact" },
+export type NavSection = {
+  id: string;
+  label: string;
+  hubHref: string;
+  items: NavItem[];
+  /** Path prefixes that activate this section's subnav (includes leaf routes). */
+  pathPrefixes: string[];
+};
+
+/** Short primary sidebar — daily use. */
+export const CORE_NAV: NavItem[] = [
+  { href: "/home", label: "Home", icon: Home, match: "exact" },
   { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/companies", label: "Companies", icon: Building2 },
-  { href: "/deals", label: "Deals", icon: FileBarChart },
+  { href: "/crm", label: "CRM", icon: Briefcase, match: "exact" },
+  { href: "/growth", label: "Growth", icon: TrendingUp, match: "exact" },
+  { href: "/automations", label: "Automations", icon: Workflow },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, match: "exact" },
 ];
 
-/**
- * Work tools — knowledge, intelligence, agent.
- * Grouped by outcome: Knowledge · Intelligence · Agent (not raw infra).
- */
-export const WORK_NAV: NavItem[] = [
-  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-  { href: "/goals", label: "Goals", icon: Target },
-  { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
-  { href: "/business-context", label: "Business context", icon: Building2 },
-  { href: "/insights", label: "Insights", icon: Sparkles },
-  { href: "/learning", label: "Learning", icon: FlaskConical },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
-  { href: "/agent", label: "AI Agent", icon: Bot },
-];
-
-/** Intelligence cluster — used by shell section label + command palette. */
-export const INTELLIGENCE_NAV: NavItem[] = [
-  { href: "/goals", label: "Goals", icon: Target },
-  { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
-  { href: "/business-context", label: "Business context", icon: Building2 },
-  { href: "/insights", label: "Insights", icon: Sparkles },
-  { href: "/learning", label: "Learning", icon: FlaskConical },
-  { href: "/reports", label: "Reports", icon: FileBarChart },
-  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
-];
-
-/** Setup and go-live. */
+/** Setup cluster in sidebar. */
 export const SETUP_NAV: NavItem[] = [
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings, match: "exact" },
-  { href: "/settings/go-live", label: "Go Live", icon: ListChecks },
-  { href: "/setup", label: "Setup Assistant", icon: ListChecks },
 ];
 
-/**
- * Power-user tools — kept, but behind secondary navigation so new users
- * are not drowning in setup screens on day one.
- */
-export const SECONDARY_NAV: NavItem[] = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
-  { href: "/autopilot", label: "Autopilot", icon: Sparkles },
-  { href: "/automations", label: "Automations", icon: Workflow },
-  { href: "/qualification", label: "Qualification", icon: ListChecks },
-  { href: "/simulator", label: "Simulator", icon: FlaskConical },
+/** Single Admin entry — nested tools via section subnav. */
+export const ADMIN_ENTRY: NavItem = {
+  href: "/admin",
+  label: "Admin",
+  icon: Shield,
+  match: "exact",
+};
+
+export const CRM_SUBNAV: NavItem[] = [
+  { href: "/crm", label: "Overview", icon: Briefcase, match: "exact" },
+  { href: "/contacts", label: "Contacts", icon: Users },
+  { href: "/companies", label: "Companies", icon: Building2 },
+  { href: "/deals", label: "Deals", icon: FileBarChart },
+  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
 ];
 
-/** @deprecated Prefer PRIMARY_NAV + WORK_NAV + SETUP_NAV + SECONDARY_NAV — kept for command palette. */
-export const WORKSPACE_NAV: NavItem[] = [
-  ...PRIMARY_NAV,
-  ...WORK_NAV,
-  ...SETUP_NAV,
-  ...SECONDARY_NAV,
+export const GROWTH_SUBNAV: NavItem[] = [
+  { href: "/growth", label: "Overview", icon: TrendingUp, match: "exact" },
+  { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
+  { href: "/research", label: "Research", icon: Search },
+  { href: "/business-context", label: "Business Profile", icon: Building2 },
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/content", label: "Content", icon: FileText },
+  { href: "/goals", label: "Goals", icon: Target },
+  { href: "/social-intelligence", label: "Social Trends", icon: Radio },
 ];
 
-export const ADMIN_NAV: NavItem[] = [
-  { href: "/admin", label: "Platform Overview", icon: Shield, match: "exact" },
+export const ANALYTICS_SUBNAV: NavItem[] = [
+  { href: "/analytics", label: "Overview", icon: BarChart3, match: "exact" },
+  { href: "/reports", label: "Reports", icon: FileBarChart },
+  { href: "/insights", label: "Insights", icon: Sparkles },
+  { href: "/learning", label: "Learning", icon: FlaskConical },
+];
+
+export const ADMIN_SUBNAV: NavItem[] = [
+  { href: "/admin", label: "Overview", icon: Shield, match: "exact" },
   { href: "/admin/ai-ops", label: "AI Ops", icon: Activity },
   { href: "/admin/workspaces", label: "Workspaces", icon: Building2 },
   { href: "/admin/users", label: "Users", icon: Users },
@@ -109,59 +112,164 @@ export const ADMIN_NAV: NavItem[] = [
   { href: "/admin/settings", label: "Global Settings", icon: Settings },
 ];
 
+export const NAV_SECTIONS: NavSection[] = [
+  {
+    id: "crm",
+    label: "CRM",
+    hubHref: "/crm",
+    items: CRM_SUBNAV,
+    pathPrefixes: ["/crm", "/contacts", "/companies", "/deals", "/pipeline"],
+  },
+  {
+    id: "growth",
+    label: "Growth",
+    hubHref: "/growth",
+    items: GROWTH_SUBNAV,
+    pathPrefixes: [
+      "/growth",
+      "/opportunities",
+      "/research",
+      "/business-context",
+      "/knowledge",
+      "/content",
+      "/goals",
+      "/social-intelligence",
+    ],
+  },
+  {
+    id: "analytics",
+    label: "Analytics",
+    hubHref: "/analytics",
+    items: ANALYTICS_SUBNAV,
+    pathPrefixes: ["/analytics", "/reports", "/insights", "/learning"],
+  },
+  {
+    id: "admin",
+    label: "Admin",
+    hubHref: "/admin",
+    items: ADMIN_SUBNAV,
+    pathPrefixes: ["/admin"],
+  },
+];
+
+/** Power tools — command palette / deep links only (not sidebar). */
+export const POWER_TOOLS_NAV: NavItem[] = [
+  { href: "/ask", label: "Ask AI", icon: MessageSquare },
+  { href: "/attention", label: "Needs Attention", icon: AlertTriangle },
+  { href: "/approvals", label: "Approvals", icon: CheckSquare },
+  { href: "/autopilot", label: "Autopilot", icon: Zap },
+  { href: "/qualification", label: "Qualification", icon: ListChecks },
+  { href: "/simulator", label: "Simulator", icon: FlaskConical },
+  { href: "/agent", label: "AI Behaviour", icon: Bot },
+  { href: "/settings/go-live", label: "Go-live checklist", icon: ListChecks },
+  { href: "/setup", label: "Setup Assistant", icon: ListChecks },
+  { href: "/dashboard", label: "Legacy overview", icon: LayoutDashboard },
+];
+
+/** Flat list for command palette search. */
+export const WORKSPACE_NAV: NavItem[] = [
+  ...CORE_NAV,
+  ...SETUP_NAV,
+  ...CRM_SUBNAV.filter((i) => i.href !== "/crm"),
+  ...GROWTH_SUBNAV.filter((i) => i.href !== "/growth"),
+  ...ANALYTICS_SUBNAV.filter((i) => i.href !== "/analytics"),
+  ...POWER_TOOLS_NAV,
+];
+
+/** @deprecated Alias — admin nested tools. */
+export const ADMIN_NAV = ADMIN_SUBNAV;
+
+/** Backward-compatible aliases used by older imports. */
+export const PRIMARY_NAV = CORE_NAV;
+export const WORK_NAV: NavItem[] = [];
+export const SECONDARY_NAV = POWER_TOOLS_NAV;
+export const INTELLIGENCE_NAV = GROWTH_SUBNAV;
+
 export type OutcomeCard = {
   id: string;
   title: string;
   hint: string;
-  /** Prefill for Ask, or href for a first useful action elsewhere. */
+  group: "Sales" | "Messaging" | "Research" | "Content" | "Reporting";
   prefill?: string;
   href?: string;
 };
 
-export const HOME_OUTCOME_CARDS: OutcomeCard[] = [
+/** Guided Ask examples — grouped by outcome. */
+export const ASK_OUTCOME_CARDS: OutcomeCard[] = [
+  {
+    id: "hot-leads",
+    title: "What needs my attention?",
+    hint: "Handoffs, hot leads, and stalled deals",
+    group: "Sales",
+    href: "/attention",
+  },
+  {
+    id: "pipeline",
+    title: "Summarise my pipeline",
+    hint: "Where deals are stuck and what to do next",
+    group: "Sales",
+    prefill: "Summarise my pipeline and flag stalled deals",
+  },
   {
     id: "dms",
-    title: "Handle my DMs",
-    hint: "Connect Instagram and let AI qualify conversations",
-    href: "/settings/go-live",
+    title: "Help me handle DMs",
+    hint: "Qualify conversations and suggest replies",
+    group: "Messaging",
+    prefill: "Help me respond to open Instagram conversations",
+  },
+  {
+    id: "objections",
+    title: "Common objections this week",
+    hint: "Patterns from live conversations",
+    group: "Messaging",
+    prefill: "What objections came up in recent conversations?",
   },
   {
     id: "research",
     title: "Research a topic",
-    hint: "Sourced brief with citations you can trust",
+    hint: "Sourced brief with citations",
+    group: "Research",
     prefill: "Research ",
   },
   {
     id: "trending",
     title: "What's trending",
-    hint: "Hooks, themes, and complaints from recent posts",
+    hint: "Hooks and themes from recent posts",
+    group: "Research",
     prefill: "Social listening on ",
-  },
-  {
-    id: "image",
-    title: "Make an image",
-    hint: "Upload a reference, edit the prompt, then generate",
-    prefill: "Make something like this reference: ",
   },
   {
     id: "content",
     title: "Write content",
-    hint: "Posts, emails, or scripts in your voice",
+    hint: "Posts or scripts in your voice",
+    group: "Content",
     prefill: "Write content about ",
   },
   {
-    id: "attention",
-    title: "What needs me",
-    hint: "Handoffs, hot leads, and failed jobs from live data",
-    href: "/attention",
+    id: "image",
+    title: "Make an image",
+    hint: "Generate from a reference or brief",
+    group: "Content",
+    prefill: "Make something like this reference: ",
   },
   {
     id: "reports",
-    title: "Show me reports",
-    hint: "Daily and weekly results from live data",
+    title: "Show me results",
+    hint: "Meetings, replies, and conversion",
+    group: "Reporting",
     href: "/reports",
   },
+  {
+    id: "weekly",
+    title: "Weekly performance",
+    hint: "What moved and what stalled",
+    group: "Reporting",
+    prefill: "Give me a weekly performance briefing",
+  },
 ];
+
+/** @deprecated Prefer ASK_OUTCOME_CARDS */
+export const HOME_OUTCOME_CARDS = ASK_OUTCOME_CARDS;
 
 export function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.match === "exact") return pathname === item.href;
@@ -169,8 +277,29 @@ export function isNavActive(pathname: string, item: NavItem): boolean {
   return pathname.startsWith(`${item.href}/`);
 }
 
+export function sectionForPath(pathname: string): NavSection | null {
+  return (
+    NAV_SECTIONS.find((section) =>
+      section.pathPrefixes.some(
+        (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+      ),
+    ) ?? null
+  );
+}
+
 export function pageTitleFromPath(pathname: string): string {
-  const all = [...PRIMARY_NAV, ...WORK_NAV, ...SETUP_NAV, ...SECONDARY_NAV, ...ADMIN_NAV];
+  if (pathname === "/home") return "Home";
+  if (pathname === "/ask") return "Ask";
+
+  const all = [
+    ...CORE_NAV,
+    ...SETUP_NAV,
+    ...CRM_SUBNAV,
+    ...GROWTH_SUBNAV,
+    ...ANALYTICS_SUBNAV,
+    ...ADMIN_SUBNAV,
+    ...POWER_TOOLS_NAV,
+  ];
   const exact = all.find((i) => i.href === pathname);
   if (exact) return exact.label;
   const nested = all

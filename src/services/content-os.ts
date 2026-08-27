@@ -196,6 +196,92 @@ export async function createBriefAndPiece(input: {
   return { briefId: brief.id, pieceId: piece.id };
 }
 
+/**
+ * Create a draft ContentPiece without an idea/brief chain.
+ * Requires whyEvidence.rationale plus at least one http sourceUrl (or agentRunId).
+ */
+export async function createDraftPiece(input: {
+  organisationId: string;
+  title: string;
+  body: string;
+  platform?: string | null;
+  rationale: string;
+  sourceUrl: string;
+  agentRunId?: string | null;
+}): Promise<{ pieceId: string }> {
+  const why = assertWhyEvidence({
+    rationale: input.rationale,
+    sourceUrls: [input.sourceUrl],
+    agentRunId: input.agentRunId ?? null,
+  });
+
+  const piece = await prisma.contentPiece.create({
+    data: {
+      organisationId: input.organisationId,
+      title: input.title.trim(),
+      body: input.body,
+      platform: input.platform ?? null,
+      status: ContentPieceStatus.DRAFT,
+      whyEvidence: why as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  await prisma.contentVersion.create({
+    data: {
+      organisationId: input.organisationId,
+      pieceId: piece.id,
+      version: 1,
+      title: piece.title,
+      body: piece.body,
+    },
+  });
+
+  return { pieceId: piece.id };
+}
+
+export async function updatePiece(input: {
+  organisationId: string;
+  pieceId: string;
+  title?: string;
+  body?: string;
+  platform?: string | null;
+}): Promise<void> {
+  const piece = await prisma.contentPiece.findFirst({
+    where: { id: input.pieceId, organisationId: input.organisationId },
+  });
+  if (!piece) throw new Error("Piece not found");
+  if (
+    piece.status === ContentPieceStatus.PUBLISHED ||
+    piece.status === ContentPieceStatus.ARCHIVED
+  ) {
+    throw new Error(`Cannot edit a ${piece.status} piece`);
+  }
+
+  const title = input.title?.trim() ?? piece.title;
+  const body = input.body ?? piece.body;
+  const platform =
+    input.platform !== undefined ? input.platform : piece.platform;
+
+  await prisma.contentPiece.updateMany({
+    where: { id: piece.id, organisationId: input.organisationId },
+    data: { title, body, platform },
+  });
+
+  const last = await prisma.contentVersion.findFirst({
+    where: { pieceId: piece.id, organisationId: input.organisationId },
+    orderBy: { version: "desc" },
+  });
+  await prisma.contentVersion.create({
+    data: {
+      organisationId: input.organisationId,
+      pieceId: piece.id,
+      version: (last?.version ?? 0) + 1,
+      title,
+      body,
+    },
+  });
+}
+
 export async function submitPieceForApproval(input: {
   organisationId: string;
   pieceId: string;

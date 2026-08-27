@@ -1,6 +1,8 @@
+import { MessagingExternalOutcome, SuppressionReason } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { writeAuditLog } from "@/services/audit";
+import { appendDomainEvent } from "@/services/domain-events/append";
 import { cancelFollowUpsOnOptOut } from "@/services/followups";
 
 const DEFAULT_OPT_OUT_KEYWORDS = [
@@ -25,17 +27,76 @@ export async function applyOptOut(input: {
   source: string;
   userId?: string;
   reason?: string;
+  conversationId?: string;
 }): Promise<void> {
-  await prisma.contact.updateMany({
-    where: { id: input.contactId, organisationId: input.organisationId },
-    data: {
-      optedOut: true,
-      optedOutAt: new Date(),
-      consentGiven: false,
-      metadata: {
-        optOutSource: input.source,
-        optOutReason: input.reason ?? null,
+  await prisma.$transaction(async (tx) => {
+    await tx.contact.updateMany({
+      where: { id: input.contactId, organisationId: input.organisationId },
+      data: {
+        optedOut: true,
+        optedOutAt: new Date(),
+        consentGiven: false,
+        metadata: {
+          optOutSource: input.source,
+          optOutReason: input.reason ?? null,
+        },
       },
+    });
+    await tx.contactSuppression.create({
+      data: {
+        organisationId: input.organisationId,
+        contactId: input.contactId,
+        reason: SuppressionReason.OPT_OUT,
+        source: input.source,
+        createdByUserId: input.userId,
+        metadata: { reason: input.reason ?? null },
+      },
+    });
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "CONTACT_OPTED_OUT",
+      aggregateType: "Contact",
+      aggregateId: input.contactId,
+      payload: {
+        contactId: input.contactId,
+      },
+      actorType: input.userId ? "USER" : "SYSTEM",
+      actorId: input.userId,
+      dedupeKey: `CONTACT_OPTED_OUT:${input.contactId}`,
+    });
+    if (input.conversationId) {
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "CONVERSATION_OPTED_OUT",
+        aggregateType: "Conversation",
+        aggregateId: input.conversationId,
+        payload: {
+          conversationId: input.conversationId,
+          contactId: input.contactId,
+        },
+        actorType: input.userId ? "USER" : "SYSTEM",
+        actorId: input.userId,
+        dedupeKey: `conversation-opted-out:${input.conversationId}`,
+      });
+    }
+  });
+
+  await prisma.outboundDispatch.updateMany({
+    where: {
+      organisationId: input.organisationId,
+      contactId: input.contactId,
+      externalOutcome: {
+        in: [
+          MessagingExternalOutcome.PREPARED,
+          MessagingExternalOutcome.DISPATCHING,
+          MessagingExternalOutcome.NOT_STARTED,
+        ],
+      },
+    },
+    data: {
+      externalOutcome: MessagingExternalOutcome.FAILED,
+      failureCode: "OPT_OUT",
+      staleCancelled: true,
     },
   });
 

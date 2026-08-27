@@ -9,18 +9,33 @@ import { z } from "zod";
 export const DOMAIN_EVENT_TYPES = [
   // CRM
   "CONTACT_CREATED",
+  "CONTACT_UPDATED",
+  "CONTACT_OPTED_OUT",
   "LEAD_CREATED",
   "LEAD_QUALIFIED",
   "LEAD_STAGE_CHANGED",
   "COMPANY_CREATED",
+  "COMPANY_UPDATED",
   "DEAL_CREATED",
   "DEAL_STAGE_CHANGED",
   "DEAL_WON",
   "DEAL_LOST",
   // Messaging
   "MESSAGE_RECEIVED",
+  "MESSAGE_SENT",
+  "MESSAGE_FAILED",
   "CONVERSATION_CREATED",
+  "CONVERSATION_ASSIGNED",
+  "CONVERSATION_STATE_CHANGED",
+  "CONVERSATION_CLOSED",
   "CONVERSATION_OPTED_OUT",
+  "QUALIFICATION_UPDATED",
+  "OBJECTION_DETECTED",
+  "MEETING_INTENT_DETECTED",
+  "FOLLOWUP_SCHEDULED",
+  "FOLLOWUP_SENT",
+  "HUMAN_HANDOFF_REQUESTED",
+  "HUMAN_HANDOFF_COMPLETED",
   // Booking (only where evidence exists in product)
   "MEETING_BOOKED",
   // Missions
@@ -40,9 +55,13 @@ export const DOMAIN_EVENT_TYPES = [
   "QUALITY_ASSESSMENT_COMPLETED",
   // Phase 16 — predictions (record only; never claim accuracy)
   "INTELLIGENCE_PREDICTION_RECORDED",
-  // Learning
+  "INTELLIGENCE_PREDICTION_EVALUATED",
+  // Learning / eval
   "RECOMMENDATION_ACCEPTED",
   "RECOMMENDATION_REJECTED",
+  "EVALUATION_COMPLETED",
+  "LEARNING_UPDATE_PROPOSED",
+  "LEARNING_UPDATE_PROMOTED",
   // Phase 13 — Goals / KPIs / Opportunities (emit only where mutations exist)
   "GOAL_CREATED",
   "GOAL_ACTIVATED",
@@ -61,6 +80,19 @@ export const DOMAIN_EVENT_TYPES = [
   "INTEGRATION_DEGRADED",
   "SYNC_COMPLETED",
   "SYNC_FAILED",
+  // Phase 20 — Differentiation intelligence
+  "STATE_CHANGED",
+  "EVIDENCE_DEBT_RAISED",
+  "EVIDENCE_DEBT_CLEARED",
+  "DECISION_CREATED",
+  "DECISION_MADE",
+  "DECISION_OUTCOME_RECORDED",
+  "PROCESS_BOTTLENECK_DETECTED",
+  "AUTOMATION_OPPORTUNITY_DETECTED",
+  "CREATIVE_FEATURES_EXTRACTED",
+  "CREATIVE_PATTERN_UPDATED",
+  "TOOL_TRUST_CHANGED",
+  "COUNTERFACTUAL_COMPARISON_COMPLETED",
 ] as const;
 
 export type DomainEventType = (typeof DOMAIN_EVENT_TYPES)[number];
@@ -70,6 +102,8 @@ const org = z.object({ organisationId: id });
 
 export const domainEventPayloadSchemas = {
   CONTACT_CREATED: org.extend({ contactId: id }),
+  CONTACT_UPDATED: org.extend({ contactId: id }),
+  CONTACT_OPTED_OUT: org.extend({ contactId: id }),
   LEAD_CREATED: org.extend({ leadId: id, contactId: id.optional() }),
   LEAD_QUALIFIED: org.extend({ leadId: id, contactId: id.optional(), score: z.number().optional() }),
   LEAD_STAGE_CHANGED: org.extend({
@@ -78,6 +112,7 @@ export const domainEventPayloadSchemas = {
     toStageSlug: z.string().min(1),
   }),
   COMPANY_CREATED: org.extend({ companyId: id }),
+  COMPANY_UPDATED: org.extend({ companyId: id }),
   DEAL_CREATED: org.extend({
     dealId: id,
     amountCents: z.number().int().nullable().optional(),
@@ -99,9 +134,56 @@ export const domainEventPayloadSchemas = {
     conversationId: id,
     contactId: id.optional(),
   }),
+  MESSAGE_SENT: org.extend({
+    messageId: id,
+    conversationId: id,
+    provider: z.string().min(1).optional(),
+  }),
+  MESSAGE_FAILED: org.extend({
+    conversationId: id,
+    failureCode: z.string().min(1).optional(),
+  }),
   CONVERSATION_CREATED: org.extend({ conversationId: id, contactId: id.optional() }),
+  CONVERSATION_ASSIGNED: org.extend({ conversationId: id, userId: id }),
+  CONVERSATION_STATE_CHANGED: org.extend({
+    conversationId: id,
+    field: z.string().min(1),
+    value: z.unknown().optional(),
+  }),
+  CONVERSATION_CLOSED: org.extend({
+    conversationId: id,
+    reason: z.string().max(500).optional(),
+  }),
   CONVERSATION_OPTED_OUT: org.extend({ conversationId: id, contactId: id.optional() }),
-  MEETING_BOOKED: org.extend({ bookingId: id, leadId: id.optional(), contactId: id.optional() }),
+  QUALIFICATION_UPDATED: org.extend({
+    leadId: id,
+    status: z.string().min(1),
+  }),
+  OBJECTION_DETECTED: org.extend({
+    conversationId: id,
+    category: z.string().min(1),
+    objectionId: id.optional(),
+  }),
+  MEETING_INTENT_DETECTED: org.extend({ conversationId: id }),
+  FOLLOWUP_SCHEDULED: org.extend({
+    conversationId: id,
+    count: z.number().int().nonnegative(),
+  }),
+  FOLLOWUP_SENT: org.extend({
+    followUpId: id,
+    conversationId: id.optional(),
+  }),
+  HUMAN_HANDOFF_REQUESTED: org.extend({
+    conversationId: id,
+    reason: z.string().max(500).optional(),
+  }),
+  HUMAN_HANDOFF_COMPLETED: org.extend({ conversationId: id }),
+  MEETING_BOOKED: org.extend({
+    bookingId: id,
+    conversationId: id.optional(),
+    leadId: id.optional(),
+    contactId: id.optional(),
+  }),
   MISSION_CREATED: org.extend({ missionId: id, title: z.string().max(500).optional() }),
   MISSION_STARTED: org.extend({ missionId: id }),
   MISSION_WAITING_APPROVAL: org.extend({ missionId: id, taskId: id.optional() }),
@@ -135,6 +217,11 @@ export const domainEventPayloadSchemas = {
     predictionId: id,
     predictionType: z.string().min(1),
   }),
+  INTELLIGENCE_PREDICTION_EVALUATED: org.extend({
+    predictionId: id,
+    evaluationStatus: z.string().min(1),
+    directionCorrect: z.boolean().nullable().optional(),
+  }),
   RECOMMENDATION_ACCEPTED: org.extend({
     subjectKind: z.string().min(1),
     subjectId: id,
@@ -142,6 +229,24 @@ export const domainEventPayloadSchemas = {
   RECOMMENDATION_REJECTED: org.extend({
     subjectKind: z.string().min(1),
     subjectId: id,
+  }),
+  EVALUATION_COMPLETED: org.extend({
+    evalRunId: id.optional(),
+    suiteKey: z.string().min(1),
+    caseCount: z.number().int().nonnegative().optional(),
+    passed: z.boolean().optional(),
+  }),
+  LEARNING_UPDATE_PROPOSED: org.extend({
+    artifactKind: z.string().min(1),
+    artifactKey: z.string().min(1),
+    version: z.string().min(1),
+    sampleSize: z.number().int().nonnegative().optional(),
+  }),
+  LEARNING_UPDATE_PROMOTED: org.extend({
+    artifactKind: z.string().min(1),
+    artifactKey: z.string().min(1),
+    version: z.string().min(1),
+    sampleSize: z.number().int().nonnegative().optional(),
   }),
   GOAL_CREATED: org.extend({
     goalId: id,
@@ -197,6 +302,70 @@ export const domainEventPayloadSchemas = {
     providerKey: z.string().min(1),
     resource: z.string().min(1),
     errorSummary: z.string().max(500).optional(),
+  }),
+  STATE_CHANGED: org.extend({
+    entityType: z.string().min(1),
+    entityId: id,
+    dimension: z.string().min(1),
+    fromValue: z.string().optional(),
+    toValue: z.string().min(1),
+  }),
+  EVIDENCE_DEBT_RAISED: org.extend({
+    debtItemId: id,
+    subjectKind: z.string().min(1),
+    subjectId: id,
+    priorityScore: z.number().optional(),
+  }),
+  EVIDENCE_DEBT_CLEARED: org.extend({
+    debtItemId: id,
+    subjectKind: z.string().min(1),
+    subjectId: id,
+  }),
+  DECISION_CREATED: org.extend({
+    decisionId: id,
+    decisionType: z.string().min(1),
+    opportunityId: id.optional(),
+    goalId: id.optional(),
+  }),
+  DECISION_MADE: org.extend({
+    decisionId: id,
+    selectedAlternativeKey: z.string().min(1).optional(),
+  }),
+  DECISION_OUTCOME_RECORDED: org.extend({
+    decisionId: id,
+    outcomeKind: z.string().min(1),
+    attribution: z.string().min(1),
+  }),
+  PROCESS_BOTTLENECK_DETECTED: org.extend({
+    processKey: z.string().min(1),
+    fromStage: z.string().min(1),
+    toStage: z.string().min(1),
+  }),
+  AUTOMATION_OPPORTUNITY_DETECTED: org.extend({
+    automationOpportunityId: id,
+    processKey: z.string().min(1),
+  }),
+  CREATIVE_FEATURES_EXTRACTED: org.extend({
+    featureSetId: id,
+    contentPieceId: id.optional(),
+    extractorVersion: z.string().min(1),
+  }),
+  CREATIVE_PATTERN_UPDATED: org.extend({
+    patternId: id,
+    patternKey: z.string().min(1),
+    maturity: z.string().min(1),
+    sampleSize: z.number().int().nonnegative(),
+  }),
+  TOOL_TRUST_CHANGED: org.extend({
+    toolKey: z.string().min(1),
+    status: z.string().min(1),
+    organisationIdScope: z.string().optional(),
+  }),
+  COUNTERFACTUAL_COMPARISON_COMPLETED: org.extend({
+    counterfactualRunId: id,
+    decisionId: id.optional(),
+    maturity: z.string().min(1),
+    insufficientEvidence: z.boolean().optional(),
   }),
 } as const satisfies Record<DomainEventType, z.ZodTypeAny>;
 

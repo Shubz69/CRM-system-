@@ -55,6 +55,11 @@ import {
 } from "@/services/opportunities";
 import { refreshKpiFromCalculator } from "@/services/goals";
 import { processDuePublishingJobs } from "@/workers/publishing-sweep";
+import { sweepContinuousIntelligence } from "@/services/continuous-intelligence";
+import {
+  ensureProcessDefinitions,
+  reconcileProcessWindow,
+} from "@/services/process-twin";
 
 try {
   assertProductionSecretsConfigured();
@@ -83,6 +88,14 @@ const OPPORTUNITY_DETECTOR_INTERVAL_MS = Number(
 const KPI_REFRESH_INTERVAL_MS = Number(process.env.KPI_REFRESH_INTERVAL_MS || 60 * 60_000);
 /** Phase 15 — publishing dispatch via Postgres sweep (no new BullMQ worker). */
 const PUBLISHING_SWEEP_INTERVAL_MS = Number(process.env.PUBLISHING_SWEEP_INTERVAL_MS || 30_000);
+/** Phase 16 — continuous intelligence metric sweep (no new BullMQ worker). */
+const CONTINUOUS_INTEL_SWEEP_INTERVAL_MS = Number(
+  process.env.CONTINUOUS_INTEL_SWEEP_INTERVAL_MS || 30 * 60_000,
+);
+/** Phase 20F — process twin reconciliation (low frequency; no new BullMQ worker). */
+const PROCESS_TWIN_RECONCILE_INTERVAL_MS = Number(
+  process.env.PROCESS_TWIN_RECONCILE_INTERVAL_MS || 6 * 60 * 60_000,
+);
 
 async function runDailyAggregationSweep() {
   const orgs = await prisma.organisation.findMany({
@@ -226,6 +239,61 @@ function startPublishingSweep() {
   );
 }
 
+/** Phase 16 — ContinuousCollectionRun + append-only snapshots from existing engagement. */
+function startContinuousIntelSweep() {
+  intervals.push(
+    setInterval(() => {
+      sweepContinuousIntelligence(50)
+        .then((result) => {
+          if (result.runsCreated > 0) {
+            logger.info("Continuous intelligence sweep complete", result);
+          }
+        })
+        .catch((error) =>
+          logger.error("Continuous intelligence sweep failed", {
+            message: error instanceof Error ? error.message : "unknown",
+          }),
+        );
+    }, CONTINUOUS_INTEL_SWEEP_INTERVAL_MS),
+  );
+}
+
+/** Phase 20F — low-frequency process twin rate repair (Postgres only). */
+function startProcessTwinReconcileSweep() {
+  intervals.push(
+    setInterval(() => {
+      void (async () => {
+        try {
+          await ensureProcessDefinitions();
+          const since = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+          const orgs = await prisma.organisation.findMany({
+            where: { deletedAt: null, isPlatform: false },
+            select: { id: true },
+            take: 100,
+            orderBy: { lastActivityAt: "desc" },
+          });
+          for (const org of orgs) {
+            for (const processKey of [
+              "lead_funnel",
+              "deal_funnel",
+              "content_lifecycle",
+              "opportunity_mission",
+              "publishing",
+              "approvals",
+            ]) {
+              await reconcileProcessWindow(org.id, processKey, since);
+            }
+          }
+        } catch (error) {
+          logger.error("Process twin reconcile sweep failed", {
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
+      })();
+    }, PROCESS_TWIN_RECONCILE_INTERVAL_MS),
+  );
+}
+
 async function startRedisWorkers() {
   assertRedisUrlAllowedForRuntime();
   const connection = getRedisConnection();
@@ -296,12 +364,14 @@ async function startRedisWorkers() {
   startOpportunityDetectorSweep();
   startKpiRefreshSweep();
   startPublishingSweep();
+  startContinuousIntelSweep();
+  startProcessTwinReconcileSweep();
   runDailyAggregationSweep().catch(() => undefined);
   pruneAgentArtifactsAllOrganisations().catch(() => undefined);
   void dispatchDomainEventBatch().catch(() => undefined);
 
   logger.info(
-    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention + outbox + mission-queue + opportunity detectors + KPI refresh + publishing via Postgres intervals",
+    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention + outbox + mission-queue + opportunity detectors + KPI refresh + publishing + continuous-intel + process-twin reconcile via Postgres intervals",
   );
 }
 

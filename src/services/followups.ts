@@ -2,22 +2,54 @@ import { FollowUpStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { writeAuditLog } from "@/services/audit";
+import { capabilityAllowsAuto, parseAutopilotConfig } from "@/services/autopilot";
+import {
+  planFollowUpSchedule,
+  type FollowUpPolicyInput,
+} from "@/services/messaging/followup-policy";
+
+const FOLLOW_UP_TEMPLATES = [
+  "Just checking in — would it help if I answered any questions or shared the next step?",
+  "Following up in case this got buried. I can clarify anything that is holding you back.",
+  "One last check-in from me. Reply whenever the timing is right and we can pick this back up.",
+];
 
 export async function scheduleFollowUps(input: {
   organisationId: string;
   contactId: string;
   conversationId: string;
   leadId?: string;
-  delaysMinutes: number[];
-  maxFollowUps: number;
+  delaysMinutes?: number[];
+  maxFollowUps?: number;
+  policyInputs?: FollowUpPolicyInput;
+  /** Alias retained for callers that name the policy object directly. */
+  policy?: FollowUpPolicyInput;
+  skipIfAutopilotDisabled?: boolean;
 }): Promise<number> {
+  if (input.skipIfAutopilotDisabled) {
+    const organisation = await prisma.organisation.findUnique({
+      where: { id: input.organisationId },
+      select: { autopilotConfig: true },
+    });
+    if (
+      !organisation ||
+      !capabilityAllowsAuto(parseAutopilotConfig(organisation.autopilotConfig), "followUps")
+    ) {
+      return 0;
+    }
+  }
+
   await cancelPendingFollowUps({
     organisationId: input.organisationId,
     conversationId: input.conversationId,
     reason: "Rescheduled after new activity",
   });
 
-  const delays = input.delaysMinutes.slice(0, input.maxFollowUps);
+  const policy = input.policyInputs ?? input.policy;
+  const plannedDelays = policy ? planFollowUpSchedule(policy) : (input.delaysMinutes ?? []);
+  const maxFollowUps = input.maxFollowUps ?? policy?.maxAttempts ?? plannedDelays.length;
+  const delays = plannedDelays.slice(0, Math.max(0, maxFollowUps));
+  const startingAttempt = policy ? Math.max(0, Math.floor(policy.attemptNumber)) : 0;
   const now = Date.now();
   let created = 0;
 
@@ -29,10 +61,12 @@ export async function scheduleFollowUps(input: {
         contactId: input.contactId,
         conversationId: input.conversationId,
         leadId: input.leadId,
-        attemptNumber: i + 1,
+        attemptNumber: startingAttempt + i + 1,
         scheduledFor: new Date(now + minutes * 60_000),
         status: FollowUpStatus.SCHEDULED,
-        messageBody: `Follow-up #${i + 1}: checking in after inactivity`,
+        messageBody:
+          FOLLOW_UP_TEMPLATES[Math.min(i, FOLLOW_UP_TEMPLATES.length - 1)] ??
+          FOLLOW_UP_TEMPLATES[0],
       },
     });
     created += 1;

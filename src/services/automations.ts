@@ -1,16 +1,21 @@
+import { createHash } from "crypto";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { createNotification, notifyOrganisationOwners } from "@/services/notifications";
 import { scheduleFollowUps, cancelPendingFollowUps } from "@/services/followups";
 import { getBookingProvider } from "@/adapters/booking";
-import { getMessagingAdapter } from "@/adapters/messaging";
-import { MessageDirection, MessageSenderType, NotificationType } from "@prisma/client";
+import { NotificationType } from "@prisma/client";
 import { writeAuditLog } from "@/services/audit";
 import {
   buildWorkflowSteps,
   createApprovalRequest,
   isOutboundAction,
 } from "@/services/automation-os";
+import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+
+function hashAutomationBody(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
 
 export type AutomationContext = {
   organisationId: string;
@@ -287,8 +292,12 @@ export async function executeAction(
       });
       if (!contact || contact.optedOut) break;
       const conversation = await prisma.conversation.findFirst({
-        where: { id: context.conversationId },
+        where: {
+          id: context.conversationId,
+          organisationId: context.organisationId,
+        },
       });
+      if (!conversation) break;
       const agent = await prisma.agentConfiguration.findFirst({
         where: { organisationId: context.organisationId, isActive: true },
       });
@@ -310,26 +319,18 @@ export async function executeAction(
           ? `You can book a call here: ${bookingUrl}`
           : "Just checking in — happy to help when you are ready.");
       const identifier = contact.identifiers.find((i) => i.channel === "manychat");
-      const adapter = getMessagingAdapter(Boolean(process.env.MANYCHAT_API_TOKEN));
-      const sendResult = await adapter.sendMessage({
+      await prepareAndSendOutbound({
         organisationId: context.organisationId,
-        contactExternalId: identifier?.identifier.replace(/^manychat:/, "") || contact.id,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        contactExternalId:
+          identifier?.identifier.replace(/^manychat:/, "") || contact.id,
         text,
-        threadId: conversation?.externalThreadId ?? undefined,
+        source: "AUTOMATION",
+        holder: `automation:${context.triggerType}:${conversation.id}`,
+        idempotencyKey: `automation:${context.triggerType}:${conversation.id}:${action.type}:${hashAutomationBody(text)}`,
+        threadId: conversation.externalThreadId ?? undefined,
       });
-      if (sendResult.ok && conversation) {
-        await prisma.message.create({
-          data: {
-            conversationId: conversation.id,
-            organisationId: context.organisationId,
-            externalId: sendResult.externalMessageId,
-            direction: MessageDirection.OUTBOUND,
-            senderType: MessageSenderType.SYSTEM,
-            body: text,
-            deliveryStatus: "sent",
-          },
-        });
-      }
       break;
     }
 

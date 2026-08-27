@@ -10,7 +10,7 @@ export default async function AdminUsersPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const users = await prisma.user.findMany({

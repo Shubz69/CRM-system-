@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { WORKSPACE_NAV, ADMIN_NAV } from "@/lib/navigation";
 import { useSession } from "next-auth/react";
@@ -13,9 +13,27 @@ export function openCommandPalette() {
 }
 
 type PaletteItem = {
+  id: string;
   label: string;
   href: string;
   hint?: string;
+  group: "Actions" | "Contacts" | "Companies" | "Deals" | "Conversations" | "Opportunities" | "Pages";
+};
+
+type EntityCache = {
+  contacts: Array<{ id: string; fullName: string; email?: string | null; instagramUsername?: string | null }>;
+  companies: Array<{ id: string; name: string; domain?: string | null }>;
+  deals: Array<{ id: string; name: string; status?: string; company?: { name?: string } | null }>;
+  conversations: Array<{ id: string; contactName: string; lastMessagePreview?: string | null }>;
+  opportunities: Array<{ id: string; title: string; status?: string }>;
+};
+
+const EMPTY_CACHE: EntityCache = {
+  contacts: [],
+  companies: [],
+  deals: [],
+  conversations: [],
+  opportunities: [],
 };
 
 export function CommandPalette() {
@@ -23,65 +41,197 @@ export function CommandPalette() {
   const { data: session } = useSession();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [entities, setEntities] = useState<EntityCache>(EMPTY_CACHE);
+  const [loadingEntities, setLoadingEntities] = useState(false);
+  const loadedRef = useRef(false);
+  const listRef = useRef<HTMLUListElement>(null);
 
   const isAdmin =
     session?.user?.isPlatformAdmin || session?.user?.role === "SUPER_ADMIN";
 
-  const items = useMemo(() => {
-    const base: PaletteItem[] = [...WORKSPACE_NAV, ...(isAdmin ? ADMIN_NAV : [])].map(
-      (i) => ({
-        label: i.label,
-        href: i.href,
-      }),
-    );
-    const actions: PaletteItem[] = [
-      { label: "Test conversation (Simulator)", href: "/simulator" },
-      { label: "Upload knowledge", href: "/knowledge" },
-      { label: "Create automation", href: "/automations" },
-      { label: "Open inbox", href: "/inbox" },
-      { label: "Needs attention", href: "/attention" },
-      { label: "Go-live checklist", href: "/settings/go-live" },
-      { label: "Setup Assistant", href: "/setup" },
-    ];
-    if (isAdmin) {
-      actions.push({ label: "AI Ops console", href: "/admin/ai-ops" });
+  const loadEntities = useCallback(async () => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    setLoadingEntities(true);
+    try {
+      const [contactsRes, companiesRes, dealsRes, convRes, oppRes] = await Promise.all([
+        fetch("/api/contacts"),
+        fetch("/api/companies"),
+        fetch("/api/deals"),
+        fetch("/api/conversations"),
+        fetch("/api/opportunities"),
+      ]);
+      const next: EntityCache = { ...EMPTY_CACHE };
+      if (contactsRes.ok) {
+        const j = await contactsRes.json();
+        next.contacts = (j.contacts || []).slice(0, 80);
+      }
+      if (companiesRes.ok) {
+        const j = await companiesRes.json();
+        next.companies = (j.companies || []).slice(0, 80);
+      }
+      if (dealsRes.ok) {
+        const j = await dealsRes.json();
+        next.deals = (j.deals || []).slice(0, 80);
+      }
+      if (convRes.ok) {
+        const j = await convRes.json();
+        next.conversations = (j.conversations || []).slice(0, 80);
+      }
+      if (oppRes.ok) {
+        const j = await oppRes.json();
+        next.opportunities = (j.opportunities || []).slice(0, 80);
+      }
+      setEntities(next);
+    } catch {
+      loadedRef.current = false;
+    } finally {
+      setLoadingEntities(false);
     }
+  }, []);
 
+  useEffect(() => {
+    if (open) {
+      void loadEntities();
+      setActiveIndex(0);
+    } else {
+      setQuery("");
+      setActiveIndex(0);
+    }
+  }, [open, loadEntities]);
+
+  const items = useMemo(() => {
     const q = query.trim();
     const qLower = q.toLowerCase();
+    const result: PaletteItem[] = [];
 
-    // Universal Ask: any query that looks like a question or starts with ask:
-    const askItems: PaletteItem[] = [];
+    const actions: PaletteItem[] = [
+      { id: "a-home", label: "Go to Home", href: "/home", group: "Actions", hint: "Command centre" },
+      { id: "a-inbox", label: "Go to Inbox", href: "/inbox", group: "Actions" },
+      { id: "a-ask", label: "Ask Agent Desk", href: "/ask", group: "Actions", hint: "Guided requests" },
+      { id: "a-crm", label: "Open CRM", href: "/crm", group: "Actions" },
+      { id: "a-growth", label: "Open Growth", href: "/growth", group: "Actions" },
+      { id: "a-attention", label: "Needs attention", href: "/attention", group: "Actions" },
+      { id: "a-integrations", label: "Integrations", href: "/integrations", group: "Actions" },
+      { id: "a-simulator", label: "Simulate a test conversation", href: "/simulator", group: "Actions" },
+    ];
+    if (isAdmin) {
+      actions.push({ id: "a-admin", label: "Admin overview", href: "/admin", group: "Actions" });
+    }
+
     if (q.length >= 2) {
       const askText = qLower.startsWith("ask:") ? q.slice(4).trim() : q;
       if (askText) {
-        askItems.push({
+        result.push({
+          id: `ask-${askText}`,
           label: `Ask: ${askText}`,
           href: `/ask?q=${encodeURIComponent(askText)}`,
-          hint: "Start on Home with this request",
+          hint: "Open Ask with this request",
+          group: "Actions",
         });
       }
-    } else {
-      askItems.push({
-        label: "Ask on Home…",
-        href: "/ask",
-        hint: "Type a request or navigate",
-      });
     }
 
-    const all = [...askItems, ...actions, ...base];
-    if (!qLower || qLower.startsWith("ask:")) {
-      return all.slice(0, 14);
+    const match = (text: string) => !qLower || text.toLowerCase().includes(qLower);
+
+    for (const a of actions) {
+      if (match(a.label) || a.label.startsWith("Ask:")) result.push(a);
     }
-    return all
-      .filter(
-        (i) =>
-          i.label.toLowerCase().includes(qLower) ||
-          i.href.toLowerCase().includes(qLower) ||
-          i.label.startsWith("Ask:"),
-      )
-      .slice(0, 14);
-  }, [isAdmin, query]);
+
+    for (const c of entities.contacts) {
+      const hay = `${c.fullName} ${c.email || ""} ${c.instagramUsername || ""}`;
+      if (match(hay)) {
+        result.push({
+          id: `contact-${c.id}`,
+          label: c.fullName || "Unnamed contact",
+          href: `/contacts/${c.id}`,
+          hint: c.email || c.instagramUsername || "Contact",
+          group: "Contacts",
+        });
+      }
+    }
+
+    for (const co of entities.companies) {
+      const hay = `${co.name} ${co.domain || ""}`;
+      if (match(hay)) {
+        result.push({
+          id: `company-${co.id}`,
+          label: co.name,
+          href: `/companies`,
+          hint: co.domain || "Company",
+          group: "Companies",
+        });
+      }
+    }
+
+    for (const d of entities.deals) {
+      const hay = `${d.name} ${d.company?.name || ""} ${d.status || ""}`;
+      if (match(hay)) {
+        result.push({
+          id: `deal-${d.id}`,
+          label: d.name,
+          href: `/deals`,
+          hint: d.company?.name || d.status || "Deal",
+          group: "Deals",
+        });
+      }
+    }
+
+    for (const conv of entities.conversations) {
+      const hay = `${conv.contactName} ${conv.lastMessagePreview || ""}`;
+      if (match(hay)) {
+        result.push({
+          id: `conv-${conv.id}`,
+          label: conv.contactName,
+          href: `/inbox?c=${conv.id}`,
+          hint: conv.lastMessagePreview?.slice(0, 80) || "Conversation",
+          group: "Conversations",
+        });
+      }
+    }
+
+    for (const o of entities.opportunities) {
+      if (match(`${o.title} ${o.status || ""}`)) {
+        result.push({
+          id: `opp-${o.id}`,
+          label: o.title,
+          href: `/opportunities`,
+          hint: o.status || "Opportunity",
+          group: "Opportunities",
+        });
+      }
+    }
+
+    const pages = [...WORKSPACE_NAV, ...(isAdmin ? ADMIN_NAV : [])].map(
+      (i): PaletteItem => ({
+        id: `page-${i.href}`,
+        label: i.label,
+        href: i.href,
+        group: "Pages",
+      }),
+    );
+    for (const p of pages) {
+      if (match(p.label) || match(p.href)) result.push(p);
+    }
+
+    // Deduplicate by id, keep first
+    const seen = new Set<string>();
+    const unique = result.filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+
+    if (!qLower) {
+      return unique.filter((i) => i.group === "Actions" || i.group === "Pages").slice(0, 14);
+    }
+    return unique.slice(0, 24);
+  }, [entities, isAdmin, query]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query, items.length]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -102,63 +252,102 @@ export function CommandPalette() {
     };
   }, []);
 
+  function go(item: PaletteItem) {
+    setOpen(false);
+    setQuery("");
+    router.push(item.href);
+  }
+
   if (!open) return null;
 
+  const grouped = items.reduce<Record<string, PaletteItem[]>>((acc, item) => {
+    (acc[item.group] ||= []).push(item);
+    return acc;
+  }, {});
+
+  const flat = items;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-[12vh] backdrop-blur-[2px]">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-[10vh] backdrop-blur-[2px]">
       <div
         className="surface w-full max-w-xl overflow-hidden p-0 shadow-2xl"
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-label="Search Agent Desk"
       >
         <input
           autoFocus
           className="input rounded-none border-0 border-b border-[var(--border)]"
-          placeholder="Ask something, or jump to a page…"
-          aria-label="Ask or search pages"
+          placeholder="Search Agent Desk…"
+          aria-label="Search contacts, deals, conversations, or pages"
+          aria-controls="command-palette-results"
+          aria-activedescendant={flat[activeIndex] ? `cmd-${flat[activeIndex].id}` : undefined}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && items[0]) {
+            if (e.key === "ArrowDown") {
               e.preventDefault();
-              setOpen(false);
-              setQuery("");
-              router.push(items[0].href);
+              setActiveIndex((i) => Math.min(i + 1, Math.max(flat.length - 1, 0)));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActiveIndex((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter" && flat[activeIndex]) {
+              e.preventDefault();
+              go(flat[activeIndex]);
             }
           }}
         />
-        <ul className="max-h-80 overflow-y-auto p-2">
-          {items.length === 0 && (
-            <li className="px-3 py-4 text-sm text-[var(--muted)]">No matches</li>
+        <ul
+          id="command-palette-results"
+          ref={listRef}
+          className="max-h-[min(28rem,55vh)] overflow-y-auto p-2"
+          role="listbox"
+        >
+          {flat.length === 0 && (
+            <li className="px-3 py-6 text-center text-sm text-[var(--muted)]">
+              {loadingEntities ? "Searching…" : "No matches. Try a name, deal, or Ask request."}
+            </li>
           )}
-          {items.map((item) => (
-            <li key={`${item.href}-${item.label}`}>
-              <button
-                type="button"
-                className="w-full rounded-xl px-3 py-2.5 text-left text-sm hover:bg-[var(--surface-2)]"
-                onClick={() => {
-                  setOpen(false);
-                  setQuery("");
-                  router.push(item.href);
-                }}
-              >
-                <span className="block font-medium">{item.label}</span>
-                {item.hint && (
-                  <span className="block text-xs text-[var(--muted)]">{item.hint}</span>
-                )}
-              </button>
+          {Object.entries(grouped).map(([group, groupItems]) => (
+            <li key={group} className="mb-1">
+              <p className="caption px-3 py-1.5">{group}</p>
+              <ul>
+                {groupItems.map((item) => {
+                  const idx = flat.indexOf(item);
+                  const active = idx === activeIndex;
+                  return (
+                    <li key={item.id} role="option" aria-selected={active} id={`cmd-${item.id}`}>
+                      <button
+                        type="button"
+                        className={`w-full rounded-xl px-3 py-2.5 text-left text-sm transition ${
+                          active ? "bg-[var(--accent-soft)]" : "hover:bg-[var(--surface-2)]"
+                        }`}
+                        onMouseEnter={() => setActiveIndex(idx)}
+                        onClick={() => go(item)}
+                      >
+                        <span className="block font-medium text-[var(--foreground)]">{item.label}</span>
+                        {item.hint ? (
+                          <span className="mt-0.5 block truncate text-xs text-[var(--muted)]">
+                            {item.hint}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </li>
           ))}
         </ul>
-        <p className="border-t border-[var(--border)] px-3 py-2 text-xs text-[var(--muted)]">
-          Esc to close · Enter opens top result · prefix with ask: for Home
-        </p>
+        <div className="flex items-center justify-between border-t border-[var(--border)] px-3 py-2 text-[11px] text-[var(--muted)]">
+          <span>↑↓ navigate · Enter open · Esc close</span>
+          <span>⌘K</span>
+        </div>
       </div>
       <button
         type="button"
-        className="absolute inset-0 -z-10 cursor-default"
-        aria-label="Close command palette"
+        className="absolute inset-0 -z-10"
+        aria-label="Close search"
         onClick={() => setOpen(false)}
       />
     </div>

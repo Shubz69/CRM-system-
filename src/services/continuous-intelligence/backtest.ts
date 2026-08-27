@@ -86,10 +86,20 @@ export async function setActualOutcomeAndScore(input: {
       : "Direction diverged from expectedOutcome.";
   }
 
+  /** FP: predicted positive, actual negative. FN: predicted negative, actual positive. */
+  let falsePositive: boolean | null = null;
+  let falseNegative: boolean | null = null;
+  if (expectedPositive != null && actualPositive != null) {
+    falsePositive = expectedPositive === true && actualPositive === false;
+    falseNegative = expectedPositive === false && actualPositive === true;
+  }
+
   const metrics: Record<string, unknown> = {
     expectedPositive,
     actualPositive,
     directionCorrect,
+    falsePositive,
+    falseNegative,
     horizonAt: prediction.horizonAt.toISOString(),
     confidenceBand: prediction.confidenceBand,
     modelVersion: prediction.modelVersion,
@@ -99,27 +109,52 @@ export async function setActualOutcomeAndScore(input: {
     metrics.metricValue = input.actualOutcome.metricValue;
   }
 
-  const updated = await prisma.intelligencePrediction.update({
-    where: { id: prediction.id },
-    data: {
-      actualOutcome: input.actualOutcome as Prisma.InputJsonValue,
-      evaluationStatus,
-      scoredAt: new Date(),
-    },
-  });
+  const { updated, evaluation } = await prisma.$transaction(async (tx) => {
+    const updatedPrediction = await tx.intelligencePrediction.update({
+      where: { id: prediction.id },
+      data: {
+        actualOutcome: input.actualOutcome as Prisma.InputJsonValue,
+        evaluationStatus,
+        scoredAt: new Date(),
+      },
+    });
 
-  const evaluation = await prisma.predictionEvaluation.create({
-    data: {
+    const evaluationRow = await tx.predictionEvaluation.create({
+      data: {
+        organisationId: input.organisationId,
+        predictionId: prediction.id,
+        directionCorrect,
+        precisionNote,
+        metrics: metrics as Prisma.InputJsonValue,
+        scorerVersion: input.scorerVersion ?? BACKTEST_SCORER_VERSION,
+      },
+    });
+
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
       organisationId: input.organisationId,
-      predictionId: prediction.id,
-      directionCorrect,
-      precisionNote,
-      metrics: metrics as Prisma.InputJsonValue,
-      scorerVersion: input.scorerVersion ?? BACKTEST_SCORER_VERSION,
-    },
+      eventType: "INTELLIGENCE_PREDICTION_EVALUATED",
+      aggregateType: "IntelligencePrediction",
+      aggregateId: prediction.id,
+      payload: {
+        predictionId: prediction.id,
+        evaluationStatus,
+        directionCorrect,
+      },
+      dedupeKey: `INTELLIGENCE_PREDICTION_EVALUATED:${evaluationRow.id}`,
+    });
+
+    return { updated: updatedPrediction, evaluation: evaluationRow };
   });
 
-  return { prediction: updated, evaluation, directionCorrect, precisionNote };
+  return {
+    prediction: updated,
+    evaluation,
+    directionCorrect,
+    precisionNote,
+    falsePositive,
+    falseNegative,
+  };
 }
 
 /**
@@ -152,6 +187,10 @@ export type PredictionBacktestSummary = {
   /** null when sampleSize === 0 — never invent accuracy. */
   directionAccuracy: number | null;
   scoredWithDirection: number;
+  /** Count of predicted-positive / actual-negative among scorable rows. */
+  falsePositiveCount: number;
+  /** Count of predicted-negative / actual-positive among scorable rows. */
+  falseNegativeCount: number;
   message: string;
   maturity: "FOUNDATION";
 };
@@ -175,6 +214,8 @@ export async function getPredictionBacktestSummary(input: {
       sampleSize: 0,
       directionAccuracy: null,
       scoredWithDirection: 0,
+      falsePositiveCount: 0,
+      falseNegativeCount: 0,
       message:
         "No scored predictions with direction ground truth yet — accuracy metrics are hidden until real samples exist.",
       maturity: "FOUNDATION",
@@ -182,10 +223,19 @@ export async function getPredictionBacktestSummary(input: {
   }
 
   const correct = rows.filter((r) => r.directionCorrect === true).length;
+  let falsePositiveCount = 0;
+  let falseNegativeCount = 0;
+  for (const r of rows) {
+    const m = (r.metrics ?? {}) as Record<string, unknown>;
+    if (m.falsePositive === true) falsePositiveCount += 1;
+    if (m.falseNegative === true) falseNegativeCount += 1;
+  }
   return {
     sampleSize: rows.length,
     directionAccuracy: correct / rows.length,
     scoredWithDirection: rows.length,
+    falsePositiveCount,
+    falseNegativeCount,
     message: `Based on ${rows.length} scored prediction${rows.length === 1 ? "" : "s"} with direction ground truth.`,
     maturity: "FOUNDATION",
   };

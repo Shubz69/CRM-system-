@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { statusLabel } from "@/lib/customer-labels";
 
 type Deal = {
   id: string;
@@ -104,14 +105,14 @@ export default function DealsPage() {
       toast.error(json.error || "Update failed");
       return;
     }
-    toast.success(`Marked ${status}`);
+    toast.success(`Marked ${statusLabel(status)}`);
     await load();
   }
 
   return (
     <div className="space-y-6">
       <PageHeader
-        description="Revenue opportunities alongside leads. Status changes write closedAt only when WON/LOST/ABANDONED."
+        description="Revenue opportunities alongside leads. Mark won or lost when the outcome is real."
         actions={
           <>
             <Link className="btn btn-secondary" href="/companies">
@@ -135,7 +136,7 @@ export default function DealsPage() {
           />
         </label>
         <label className="text-sm font-medium">
-          Amount (major units)
+          Amount
           <input
             className="input mt-1 w-full"
             type="number"
@@ -143,7 +144,7 @@ export default function DealsPage() {
             step="0.01"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            placeholder="optional"
+            placeholder="e.g. 2500"
           />
         </label>
         <label className="text-sm font-medium">
@@ -190,7 +191,7 @@ export default function DealsPage() {
         {deals.map((d) => (
           <article key={d.id} className="surface space-y-3 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="badge">{d.status}</span>
+              <span className="badge">{statusLabel(d.status)}</span>
               <p className="font-medium">{d.name}</p>
               <span className="text-sm text-[var(--muted)]">
                 {formatMoney(d.amountCents, d.currency)}
@@ -221,7 +222,7 @@ export default function DealsPage() {
                   className="btn btn-secondary text-xs"
                   onClick={() => void setStatus(d.id, s)}
                 >
-                  Mark {s}
+                  Mark {statusLabel(s)}
                 </button>
               ))}
             </div>

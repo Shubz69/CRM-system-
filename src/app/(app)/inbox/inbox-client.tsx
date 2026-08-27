@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { evaluateMessagingWindow, formatDurationRemaining } from "@/lib/messaging-window";
+import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageLoading } from "@/components/ui/page-state";
 
@@ -96,6 +97,9 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<Member[]>([]);
   const [note, setNote] = useState("");
+  const [queue, setQueue] = useState<
+    "all" | "needs_reply" | "hot" | "human" | "waiting"
+  >("all");
 
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -190,33 +194,73 @@ export default function InboxPage() {
     [items],
   );
 
+  const filtered = useMemo(() => {
+    return sorted.filter((c) => {
+      if (queue === "all") return true;
+      if (queue === "human") return c.needsHumanReview || c.aiPaused;
+      if (queue === "hot") return (c.lead?.score ?? 0) >= 70;
+      if (queue === "needs_reply") {
+        if (c.unreadCount > 0) return true;
+        if (!c.lastMessageAt) return false;
+        // Heuristic: inbound more recent than outbound when preview exists
+        return c.unreadCount > 0 || Boolean(c.lastMessagePreview);
+      }
+      if (queue === "waiting") {
+        return !c.needsHumanReview && !c.aiPaused && c.unreadCount === 0;
+      }
+      return true;
+    });
+  }, [queue, sorted]);
+
   if (loading) return <PageLoading label="Loading inbox" />;
 
   return (
     <div className="space-y-4">
-      <PageHeader description="Unified Instagram conversations with AI and human controls." />
+      <PageHeader description="Reply, qualify, and hand off — Agent Desk keeps safety rules on every send." />
 
       <div className="grid gap-4 xl:grid-cols-[320px_1fr_300px]" style={{ minHeight: "70vh" }}>
         <section className="surface overflow-hidden">
-          <div className="border-b border-[var(--border)] px-4 py-3 font-medium">Conversations</div>
+          <div className="border-b border-[var(--border)] px-4 py-3">
+            <p className="font-medium">Conversations</p>
+            <div className="filter-bar mt-2">
+              {(
+                [
+                  ["all", "All"],
+                  ["needs_reply", "Needs reply"],
+                  ["hot", "Hot leads"],
+                  ["human", "Human required"],
+                  ["waiting", "Waiting"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`badge ${queue === id ? "badge-success" : ""}`}
+                  onClick={() => setQueue(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="max-h-[70vh] overflow-y-auto">
-            {sorted.length === 0 && (
+            {filtered.length === 0 && sorted.length === 0 && (
               <div className="p-4">
-                <p className="font-[family-name:var(--font-fraunces)] text-xl">No conversations yet</p>
-                <p className="mt-2 text-sm text-[var(--muted)]">
-                  Connect Instagram, or send a test DM to see how AI handles a real chat.
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <a href="/settings/go-live" className="btn btn-primary">
-                    Connect Instagram
-                  </a>
-                  <a href="/simulator" className="btn btn-secondary">
-                    Send a test DM
-                  </a>
-                </div>
+                <EmptyState
+                  title="Your inbox is ready"
+                  body="Connect Instagram through ManyChat, or send a test DM to see how Agent Desk qualifies a real conversation."
+                  actions={[
+                    { href: "/integrations", label: "Connect Instagram", primary: true },
+                    { href: "/simulator", label: "Simulate a test DM" },
+                    { href: "/settings/go-live", label: "Setup progress" },
+                  ]}
+                />
               </div>
             )}
-            {sorted.map((c) => (
+            {filtered.length === 0 && sorted.length > 0 && (
+              <p className="p-4 text-sm text-[var(--muted)]">No conversations in this queue.</p>
+            )}
+            {filtered.map((c) => (
               <button
                 key={c.id}
                 type="button"
@@ -234,7 +278,13 @@ export default function InboxPage() {
                 <div className="mt-2 flex flex-wrap gap-1">
                   <span className="badge">Score {c.lead?.score ?? 0}</span>
                   <span className="badge">{c.lead?.stage || "New"}</span>
-                  <span className={c.aiPaused ? "badge badge-warn" : "badge"}>{c.handlingMode}</span>
+                  {c.lead?.qualificationStatus ? (
+                    <span className="badge">{c.lead.qualificationStatus.replace(/_/g, " ")}</span>
+                  ) : null}
+                  <span className={c.aiPaused ? "badge badge-warn" : "badge"}>
+                    {c.aiPaused ? "Human" : c.handlingMode === "AI" ? "AI" : c.handlingMode}
+                  </span>
+                  {c.needsHumanReview ? <span className="badge badge-warn">Handoff</span> : null}
                 </div>
               </button>
             ))}
@@ -287,6 +337,38 @@ export default function InboxPage() {
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                {detail.needsHumanReview || detail.objections.length > 0 || (lead && lead.qualificationStatus !== "QUALIFIED") ? (
+                  <div className="rounded-xl border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-[var(--accent-soft)]/40 p-3">
+                    <p className="caption">Agent Desk suggests</p>
+                    <p className="card-title mt-1">
+                      {detail.needsHumanReview
+                        ? "Hand this conversation to a human — review is required."
+                        : detail.objections.length > 0
+                          ? "Address the latest objection before pushing for a meeting."
+                          : "Ask one more qualification question before offering a booking."}
+                    </p>
+                    {detail.objections[0] ? (
+                      <p className="meta mt-1">Why: {detail.objections[0].text}</p>
+                    ) : lead?.scoreExplanation ? (
+                      <p className="meta mt-1">Why: {lead.scoreExplanation}</p>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-secondary text-xs"
+                        onClick={() =>
+                          patch({
+                            aiPaused: true,
+                            handlingMode: "PAUSED",
+                            needsHumanReview: true,
+                          })
+                        }
+                      >
+                        Hand to human
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 {detail.messages.map((m) => (
                   <div
                     key={m.id}
@@ -321,11 +403,20 @@ export default function InboxPage() {
 
         <section className="surface overflow-y-auto p-4">
           {!detail ? (
-            <p className="text-sm text-[var(--muted)]">Contact details appear here.</p>
+            <p className="text-sm text-[var(--muted)]">Customer intelligence appears when you select a conversation.</p>
           ) : (
             <div className="space-y-4 text-sm">
               <div>
-                <h3 className="font-semibold">Messaging window</h3>
+                <h3 className="caption">Customer</h3>
+                <p className="card-title mt-1">{detail.contact.fullName}</p>
+                <p className="meta">{detail.contact.email || "No email"}</p>
+                <p className="meta">{detail.contact.phone || "No phone"}</p>
+                <p className="meta">Source: {detail.contact.leadSource || "—"}</p>
+                {detail.contact.optedOut && <span className="badge badge-danger mt-1">Opted out</span>}
+              </div>
+
+              <div>
+                <h3 className="caption">Messaging window</h3>
                 {messagingWindow ? (
                   <ul className="mt-2 space-y-1 text-xs">
                     <li>
@@ -344,66 +435,75 @@ export default function InboxPage() {
                       {" · "}
                       {formatDurationRemaining(messagingWindow.humanMsRemaining)} left
                     </li>
-                    {messagingWindow.automatedBlockedReason && (
-                      <li className="text-[var(--danger)]">{messagingWindow.automatedBlockedReason}</li>
-                    )}
-                    {messagingWindow.humanBlockedReason && (
-                      <li className="text-[var(--muted)]">{messagingWindow.humanBlockedReason}</li>
-                    )}
                   </ul>
                 ) : (
-                  <p className="text-[var(--muted)]">No window data</p>
+                  <p className="meta">No window data</p>
                 )}
               </div>
+
               <div>
-                <h3 className="font-semibold">Contact</h3>
-                <p>{detail.contact.email || "No email"}</p>
-                <p>{detail.contact.phone || "No phone"}</p>
-                <p>Source: {detail.contact.leadSource || "—"}</p>
-                {detail.contact.optedOut && <span className="badge badge-danger">Opted out</span>}
+                <h3 className="caption">Qualification</h3>
+                <p className="mt-1">
+                  Score <span className="badge badge-success">{lead?.score ?? 0}</span>
+                  {" · "}
+                  <span className="badge">{(lead?.qualificationStatus || "UNQUALIFIED").replace(/_/g, " ")}</span>
+                </p>
+                <p className="meta mt-1">{lead?.stage?.name || detail.intent || "No stage yet"}</p>
               </div>
+
               <div>
-                <h3 className="font-semibold">Assignee</h3>
+                <h3 className="caption">Owner</h3>
                 <select className="input mt-2" value={detail.assignments?.[0]?.user.id || ""} onChange={(e) => patch({ assignUserId: e.target.value || null })}>
                   <option value="">Unassigned</option>
                   {members.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}
                 </select>
               </div>
+
+              <details open>
+                <summary className="caption cursor-pointer">Signals & follow-ups</summary>
+                <div className="mt-2 space-y-3">
+                  <div>
+                    <p className="card-title">Objections</p>
+                    <ul className="mt-1 space-y-1">
+                      {detail.objections.length === 0 && <li className="meta">None recorded</li>}
+                      {detail.objections.map((o) => (
+                        <li key={o.id}>
+                          <span className="badge">{o.category}</span> {o.text}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="card-title">Buying signals</p>
+                    <ul className="mt-1 space-y-1">
+                      {detail.buyingSignals.length === 0 && <li className="meta">None recorded</li>}
+                      {detail.buyingSignals.map((b) => (
+                        <li key={b.id}>{b.text}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="card-title">Follow-ups</p>
+                    <ul className="mt-1 space-y-1">
+                      {detail.followUps.length === 0 && <li className="meta">None scheduled</li>}
+                      {detail.followUps.map((f) => (
+                        <li key={f.id}>
+                          #{f.attemptNumber} {f.status} · {new Date(f.scheduledFor).toLocaleString()}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </details>
+
               <div>
-                <h3 className="font-semibold">Internal note</h3>
+                <h3 className="caption">Internal note</h3>
                 <textarea className="input mt-2 min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note" />
                 <button className="btn btn-secondary mt-2" type="button" onClick={() => { if (note.trim()) patch({ note }).then(() => setNote("")); }}>Save note</button>
               </div>
+
               <div>
-                <h3 className="font-semibold">Lead summary</h3>
-                <p className="text-[var(--muted)]">{detail.summary || "No summary yet"}</p>
-                <p className="mt-2">
-                  Score: <span className="badge badge-success">{lead?.score ?? 0}</span>
-                </p>
-                <p className="mt-1 text-xs text-[var(--muted)]">{lead?.scoreExplanation}</p>
-                {lead?.scoreEvents && lead.scoreEvents.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs text-[var(--muted)]">
-                    {lead.scoreEvents.slice(0, 5).map((ev) => (
-                      <li key={ev.id}>
-                        {ev.previousScore} → {ev.newScore} ({ev.delta >= 0 ? "+" : ""}
-                        {ev.delta}): {ev.reason}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {lead?.bookings && lead.bookings.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {lead.bookings.map((b) => (
-                      <li key={b.id}>
-                        Booking <span className="badge">{b.status}</span>
-                        {b.bookingUrl ? ` · ${b.bookingUrl}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div>
-                <h3 className="font-semibold">Pipeline stage</h3>
+                <h3 className="caption">Pipeline stage</h3>
                 <select
                   className="input mt-2"
                   value={lead?.stageId || ""}
@@ -418,45 +518,6 @@ export default function InboxPage() {
                     </option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <h3 className="font-semibold">Objections</h3>
-                <ul className="mt-1 space-y-1">
-                  {detail.objections.length === 0 && <li className="text-[var(--muted)]">None</li>}
-                  {detail.objections.map((o) => (
-                    <li key={o.id}>
-                      <span className="badge">{o.category}</span> {o.text}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h3 className="font-semibold">Questions</h3>
-                <ul className="mt-1 space-y-1">
-                  {detail.questions.length === 0 && <li className="text-[var(--muted)]">None</li>}
-                  {detail.questions.map((q) => (
-                    <li key={q.id}>{q.text}</li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h3 className="font-semibold">Buying signals</h3>
-                <ul className="mt-1 space-y-1">
-                  {detail.buyingSignals.length === 0 && <li className="text-[var(--muted)]">None</li>}
-                  {detail.buyingSignals.map((b) => (
-                    <li key={b.id}>{b.text}</li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h3 className="font-semibold">Follow-ups</h3>
-                <ul className="mt-1 space-y-1">
-                  {detail.followUps.map((f) => (
-                    <li key={f.id}>
-                      #{f.attemptNumber} {f.status} · {new Date(f.scheduledFor).toLocaleString()}
-                    </li>
-                  ))}
-                </ul>
               </div>
             </div>
           )}

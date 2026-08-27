@@ -70,7 +70,7 @@ export default function LearningPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        description="Recommendation feedback, experiments, eval gates, and honest forecast backtests — no invented scores."
+        description="What Agent Desk is learning about your business — only patterns with enough evidence."
         actions={
           <button
             className="btn btn-secondary"
@@ -83,17 +83,19 @@ export default function LearningPage() {
                   body: "{}",
                 });
                 const json = await res.json();
-                if (!res.ok) throw new Error(json.error || "Eval failed");
+                if (!res.ok) throw new Error(json.error || "Check failed");
                 toast.success(
-                  json.evalRun?.passed ? "Eval suite passed" : "Eval suite failed — see recent runs",
+                  json.evalRun?.passed
+                    ? "Quality checks passed"
+                    : "Quality checks found issues — see recent runs",
                 );
                 await load();
               } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Eval failed");
+                toast.error(e instanceof Error ? e.message : "Check failed");
               }
             }}
           >
-            Run regression evals
+            Run quality checks
           </button>
         }
       />

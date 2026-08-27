@@ -9,7 +9,7 @@ export default async function AdminAuditPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const logs = await prisma.auditLog.findMany({

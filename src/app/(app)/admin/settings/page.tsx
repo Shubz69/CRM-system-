@@ -10,7 +10,7 @@ export default async function AdminSettingsPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const settings = await prisma.systemSetting.findMany({ orderBy: { key: "asc" } });

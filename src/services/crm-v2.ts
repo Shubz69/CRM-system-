@@ -120,27 +120,50 @@ export async function upsertCompany(input: {
     },
   });
   if (existing) {
-    await prisma.company.update({
-      where: { id: existing.id },
-      data: {
-        domain: input.domain ?? existing.domain,
-        website: input.website ?? existing.website,
-        industry: input.industry ?? existing.industry,
-        sizeBand: input.sizeBand ?? existing.sizeBand,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.company.update({
+        where: { id: existing.id },
+        data: {
+          domain: input.domain ?? existing.domain,
+          website: input.website ?? existing.website,
+          industry: input.industry ?? existing.industry,
+          sizeBand: input.sizeBand ?? existing.sizeBand,
+        },
+      });
+      const { appendDomainEvent } = await import("@/services/domain-events/append");
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "COMPANY_UPDATED",
+        aggregateType: "Company",
+        aggregateId: existing.id,
+        payload: { companyId: existing.id },
+        dedupeKey: `COMPANY_UPDATED:${existing.id}:${Date.now()}`,
+      });
     });
     return existing.id;
   }
 
-  const row = await prisma.company.create({
-    data: {
+  const row = await prisma.$transaction(async (tx) => {
+    const company = await tx.company.create({
+      data: {
+        organisationId: input.organisationId,
+        name,
+        domain: input.domain ?? null,
+        website: input.website ?? null,
+        industry: input.industry ?? null,
+        sizeBand: input.sizeBand ?? null,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
       organisationId: input.organisationId,
-      name,
-      domain: input.domain ?? null,
-      website: input.website ?? null,
-      industry: input.industry ?? null,
-      sizeBand: input.sizeBand ?? null,
-    },
+      eventType: "COMPANY_CREATED",
+      aggregateType: "Company",
+      aggregateId: company.id,
+      payload: { companyId: company.id },
+      dedupeKey: `COMPANY_CREATED:${company.id}`,
+    });
+    return company;
   });
   return row.id;
 }

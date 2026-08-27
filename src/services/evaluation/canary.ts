@@ -20,12 +20,85 @@ export type VersionArtifactRef = {
 };
 
 const ALLOWED_TRANSITIONS: Record<RolloutState, readonly RolloutState[]> = {
-  CURRENT: ["CANDIDATE"],
-  CANDIDATE: ["CANARY", "ROLLED_BACK", "CURRENT"],
-  CANARY: ["PROMOTED", "ROLLED_BACK", "CANDIDATE"],
+  CURRENT: ["CANDIDATE", "SHADOW"],
+  CANDIDATE: ["SHADOW", "CANARY", "ROLLED_BACK", "CURRENT"],
+  /** Observe-only — same role as shadow when callers use CANDIDATE historically. */
+  SHADOW: ["CANDIDATE", "CANARY", "ROLLED_BACK"],
+  CANARY: ["PROMOTED", "ROLLED_BACK", "CANDIDATE", "SHADOW"],
   PROMOTED: ["CURRENT", "ROLLED_BACK"],
-  ROLLED_BACK: ["CANDIDATE", "CURRENT"],
+  ROLLED_BACK: ["CANDIDATE", "SHADOW", "CURRENT"],
 };
+
+export type PromoteEligibilityConfig = {
+  minSampleSize?: number;
+  minScore?: number;
+  maxRegression?: number;
+};
+
+export const DEFAULT_PROMOTE_ELIGIBILITY: Required<PromoteEligibilityConfig> = {
+  minSampleSize: 20,
+  minScore: 0.7,
+  maxRegression: 0.05,
+};
+
+export type PromoteEligibilityInput = {
+  sampleSize: number;
+  /** Aggregate score 0–1 when measured; null/undefined treated as ineligible. */
+  score?: number | null;
+  /**
+   * How much worse than baseline (0 = no regression). Null when unknown → ineligible
+   * unless sample/score alone already fail (unknown regression blocks promote).
+   */
+  regression?: number | null;
+  config?: PromoteEligibilityConfig;
+};
+
+export type PromoteEligibilityResult = {
+  eligible: boolean;
+  reasons: string[];
+  thresholds: Required<PromoteEligibilityConfig>;
+};
+
+/**
+ * Hard gates for PROMOTED — never auto-promote from a single good run.
+ */
+export function shouldPromoteEligibility(
+  input: PromoteEligibilityInput,
+): PromoteEligibilityResult {
+  const thresholds: Required<PromoteEligibilityConfig> = {
+    minSampleSize:
+      input.config?.minSampleSize ?? DEFAULT_PROMOTE_ELIGIBILITY.minSampleSize,
+    minScore: input.config?.minScore ?? DEFAULT_PROMOTE_ELIGIBILITY.minScore,
+    maxRegression:
+      input.config?.maxRegression ?? DEFAULT_PROMOTE_ELIGIBILITY.maxRegression,
+  };
+  const reasons: string[] = [];
+  const sampleSize = Math.max(0, Math.floor(input.sampleSize));
+
+  if (sampleSize < thresholds.minSampleSize) {
+    reasons.push(
+      `sampleSize ${sampleSize} < minSampleSize ${thresholds.minSampleSize}`,
+    );
+  }
+  if (input.score == null || !Number.isFinite(input.score)) {
+    reasons.push("score missing — cannot promote without measured score");
+  } else if (input.score < thresholds.minScore) {
+    reasons.push(`score ${input.score} < minScore ${thresholds.minScore}`);
+  }
+  if (input.regression == null || !Number.isFinite(input.regression)) {
+    reasons.push("regression unknown — refuse to assume zero regression");
+  } else if (input.regression > thresholds.maxRegression) {
+    reasons.push(
+      `regression ${input.regression} > maxRegression ${thresholds.maxRegression}`,
+    );
+  }
+
+  return {
+    eligible: reasons.length === 0,
+    reasons,
+    thresholds,
+  };
+}
 
 export function assertRolloutTransition(from: RolloutState, to: RolloutState): void {
   if (from === to) return;
@@ -35,14 +108,39 @@ export function assertRolloutTransition(from: RolloutState, to: RolloutState): v
   }
 }
 
+function readScoreFromMetrics(metrics: unknown): number | null {
+  if (!metrics || typeof metrics !== "object") return null;
+  const m = metrics as Record<string, unknown>;
+  if (typeof m.score === "number" && Number.isFinite(m.score)) return m.score;
+  if (typeof m.aggregateScore === "number" && Number.isFinite(m.aggregateScore)) {
+    return m.aggregateScore;
+  }
+  return null;
+}
+
+function readRegressionFromMetrics(metrics: unknown): number | null {
+  if (!metrics || typeof metrics !== "object") return null;
+  const m = metrics as Record<string, unknown>;
+  if (typeof m.regression === "number" && Number.isFinite(m.regression)) {
+    return m.regression;
+  }
+  if (typeof m.scoreDelta === "number" && Number.isFinite(m.scoreDelta)) {
+    // Negative delta = regression magnitude
+    return m.scoreDelta < 0 ? Math.abs(m.scoreDelta) : 0;
+  }
+  return null;
+}
+
 /**
  * Record a performance snapshot. sampleSize 0 → metrics stay empty/null honesty.
  * Does NOT promote — promotion is a separate explicit call.
+ * CANDIDATE/SHADOW snapshots may emit LEARNING_UPDATE_PROPOSED when org-scoped.
  */
 export async function recordVersionPerformanceSnapshot(input: VersionArtifactRef & {
   rolloutState?: RolloutState;
   metrics?: Record<string, unknown>;
   sampleSize?: number;
+  emitProposedEvent?: boolean;
 }) {
   assertLearningWriteAllowed("versioned_config");
   const sampleSize = Math.max(0, Math.floor(input.sampleSize ?? 0));
@@ -59,16 +157,42 @@ export async function recordVersionPerformanceSnapshot(input: VersionArtifactRef
         }
       : (input.metrics ?? {});
 
-  return prisma.versionPerformanceSnapshot.create({
-    data: {
-      organisationId: input.organisationId ?? null,
-      artifactKind: input.artifactKind,
-      artifactKey: input.artifactKey,
-      version: input.version,
-      rolloutState,
-      metrics: metrics as Prisma.InputJsonValue,
-      sampleSize,
-    },
+  return prisma.$transaction(async (tx) => {
+    const row = await tx.versionPerformanceSnapshot.create({
+      data: {
+        organisationId: input.organisationId ?? null,
+        artifactKind: input.artifactKind,
+        artifactKey: input.artifactKey,
+        version: input.version,
+        rolloutState,
+        metrics: metrics as Prisma.InputJsonValue,
+        sampleSize,
+      },
+    });
+
+    const propose =
+      input.emitProposedEvent !== false &&
+      Boolean(input.organisationId) &&
+      (rolloutState === "CANDIDATE" || rolloutState === "SHADOW");
+
+    if (propose && input.organisationId) {
+      const { appendDomainEvent } = await import("@/services/domain-events/append");
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "LEARNING_UPDATE_PROPOSED",
+        aggregateType: input.artifactKind,
+        aggregateId: input.artifactKey,
+        payload: {
+          artifactKind: input.artifactKind,
+          artifactKey: input.artifactKey,
+          version: input.version,
+          sampleSize,
+        },
+        dedupeKey: `LEARNING_UPDATE_PROPOSED:${input.artifactKind}:${input.artifactKey}:${input.version}:${row.id}`,
+      });
+    }
+
+    return row;
   });
 }
 
@@ -93,6 +217,7 @@ export async function getLatestVersionSnapshot(input: {
 
 /**
  * Explicit canary advance. Never auto-called from a single eval pass.
+ * Transition to PROMOTED requires shouldPromoteEligibility OR throws.
  */
 export async function transitionRolloutState(input: VersionArtifactRef & {
   to: RolloutState;
@@ -100,6 +225,10 @@ export async function transitionRolloutState(input: VersionArtifactRef & {
   reason?: string;
   /** Must be true to enter PROMOTED — blocks accidental one-shot promote */
   confirmPromote?: boolean;
+  eligibilityConfig?: PromoteEligibilityConfig;
+  /** Override score/regression from latest metrics when provided */
+  score?: number | null;
+  regression?: number | null;
 }) {
   assertLearningWriteAllowed("versioned_config");
   if (!isRolloutState(input.to)) {
@@ -119,6 +248,8 @@ export async function transitionRolloutState(input: VersionArtifactRef & {
 
   assertRolloutTransition(from, input.to);
 
+  let eligibility: PromoteEligibilityResult | null = null;
+
   if (input.to === "PROMOTED") {
     if (!input.confirmPromote) {
       throw new Error(
@@ -126,29 +257,70 @@ export async function transitionRolloutState(input: VersionArtifactRef & {
       );
     }
     const sampleSize = latest?.sampleSize ?? 0;
-    if (sampleSize < 1 && from === "CANARY") {
-      // Allow explicit promote only with confirm + documented reason; still warn via metrics
+    const score =
+      input.score !== undefined
+        ? input.score
+        : readScoreFromMetrics(latest?.metrics);
+    const regression =
+      input.regression !== undefined
+        ? input.regression
+        : readRegressionFromMetrics(latest?.metrics);
+
+    eligibility = shouldPromoteEligibility({
+      sampleSize,
+      score,
+      regression,
+      config: input.eligibilityConfig,
+    });
+    if (!eligibility.eligible) {
+      throw new Error(
+        `Promotion blocked: eligibility failed — ${eligibility.reasons.join("; ")}`,
+      );
     }
   }
 
-  const row = await prisma.versionPerformanceSnapshot.create({
-    data: {
-      organisationId: input.organisationId ?? null,
-      artifactKind: input.artifactKind,
-      artifactKey: input.artifactKey,
-      version: input.version,
-      rolloutState: input.to,
-      sampleSize: latest?.sampleSize ?? 0,
-      metrics: {
-        previousState: from,
-        transitionReason: input.reason ?? null,
-        confirmPromote: input.confirmPromote === true,
-        note:
-          input.to === "PROMOTED"
-            ? "Explicit promotion — not auto-promoted from a single eval run."
-            : null,
-      } as Prisma.InputJsonValue,
-    },
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.versionPerformanceSnapshot.create({
+      data: {
+        organisationId: input.organisationId ?? null,
+        artifactKind: input.artifactKind,
+        artifactKey: input.artifactKey,
+        version: input.version,
+        rolloutState: input.to,
+        sampleSize: latest?.sampleSize ?? 0,
+        metrics: {
+          previousState: from,
+          transitionReason: input.reason ?? null,
+          confirmPromote: input.confirmPromote === true,
+          eligibility,
+          note:
+            input.to === "PROMOTED"
+              ? "Explicit promotion after eligibility gates — not auto-promoted from a single eval run."
+              : input.to === "SHADOW"
+                ? "SHADOW observe-only — no production config write."
+                : null,
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    if (input.to === "PROMOTED" && input.organisationId) {
+      const { appendDomainEvent } = await import("@/services/domain-events/append");
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "LEARNING_UPDATE_PROMOTED",
+        aggregateType: input.artifactKind,
+        aggregateId: input.artifactKey,
+        payload: {
+          artifactKind: input.artifactKind,
+          artifactKey: input.artifactKey,
+          version: input.version,
+          sampleSize: latest?.sampleSize ?? 0,
+        },
+        dedupeKey: `LEARNING_UPDATE_PROMOTED:${input.artifactKind}:${input.artifactKey}:${input.version}:${created.id}`,
+      });
+    }
+
+    return created;
   });
 
   if (input.organisationId && (input.to === "PROMOTED" || input.to === "ROLLED_BACK")) {
@@ -166,6 +338,7 @@ export async function transitionRolloutState(input: VersionArtifactRef & {
         from,
         to: input.to,
         reason: input.reason ?? null,
+        eligibility,
       },
     });
   }

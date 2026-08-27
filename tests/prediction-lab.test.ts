@@ -21,7 +21,8 @@ describe("prediction confidence bands", () => {
   it("marks sparse features INSUFFICIENT — never claims virality", () => {
     const band = deriveConfidenceBand({ sampleSize: 1, mentionCount: 1 });
     expect(band.band).toBe("INSUFFICIENT");
-    expect(PREDICTION_LAB_DISCLAIMER).toMatch(/do not claim accurate virality/i);
+    expect(PREDICTION_LAB_DISCLAIMER).toMatch(/virality/i);
+    expect(PREDICTION_LAB_DISCLAIMER).toMatch(/FOUNDATION/i);
   });
 
   it("uses transparent LOW/MEDIUM/HIGH from observables", () => {

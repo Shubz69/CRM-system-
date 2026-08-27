@@ -22,7 +22,7 @@ export default async function AdminUsagePage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const since = new Date();

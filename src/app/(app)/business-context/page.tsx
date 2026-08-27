@@ -42,7 +42,7 @@ export default function BusinessContextPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader description="Evidence-backed business context — missing data is shown honestly." />
+      <PageHeader description="Your business profile — who you are, what you sell, and evidence behind it." />
 
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Context completeness</h2>

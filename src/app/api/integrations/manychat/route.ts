@@ -9,8 +9,11 @@ import {
   maskSecret,
   regenerateOrganisationManyChatSecret,
 } from "@/services/manychat-secrets";
-import { getMessagingAdapter } from "@/adapters/messaging";
+import { getMessagingAdapterForOrganisation } from "@/adapters/messaging";
 import { processInboundMessage } from "@/services/inbound-pipeline";
+import {
+  getOrganisationManyChatApiToken,
+} from "@/services/messaging/credentials";
 
 export async function GET() {
   try {
@@ -25,7 +28,8 @@ export async function GET() {
 
     const orgSecret = await getOrganisationManyChatSecret(session.organisationId);
     const secretConfigured = Boolean(orgSecret || env.MANYCHAT_WEBHOOK_SECRET);
-    const apiTokenConfigured = Boolean(env.MANYCHAT_API_TOKEN);
+    const orgApiToken = await getOrganisationManyChatApiToken(session.organisationId);
+    const apiTokenConfigured = Boolean(orgApiToken || env.MANYCHAT_API_TOKEN);
     const connected = channels.some((c) => c.isActive) && secretConfigured;
 
     const recentEvents = await prisma.webhookEvent.findMany({
@@ -53,6 +57,7 @@ export async function GET() {
       secretSource: orgSecret ? "organisation" : "environment",
       apiTokenConfigured,
       apiTokenMasked: apiTokenConfigured ? "•••• configured" : "not set",
+      apiTokenSource: orgApiToken ? "organisation" : env.MANYCHAT_API_TOKEN ? "environment" : "none",
       channels,
       connected,
       lastInboundEvent: lastInbound
@@ -161,7 +166,9 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, result });
     }
 
-    const adapter = getMessagingAdapter();
+    // Administrative integration probe — not a conversation message.
+    // Uses org credential resolver; does not create OutboundDispatch (no conversation).
+    const adapter = await getMessagingAdapterForOrganisation(session.organisationId);
     const send = await adapter.sendMessage({
       organisationId: session.organisationId,
       contactExternalId: body.contactExternalId || "test_contact",

@@ -31,6 +31,11 @@ type EnterpriseOpsPanel = {
     };
   };
   ssoScim?: { maturity?: string };
+  productionHealth?: {
+    maturity?: string;
+    ok?: boolean;
+    outboxLag?: { pendingCount?: number; deadLetterCount?: number };
+  } | null;
 };
 
 type Snapshot = {
@@ -88,6 +93,9 @@ export default function AdminAiOpsPage() {
           <div className="flex flex-wrap gap-2">
             <Link className="btn btn-secondary" href="/admin/health">
               System Health
+            </Link>
+            <Link className="btn btn-secondary" href="/api/admin/production-health">
+              Production health
             </Link>
             <Link className="btn btn-secondary" href="/admin/failed-jobs">
               Failed Jobs
@@ -204,6 +212,32 @@ export default function AdminAiOpsPage() {
                   </p>
                   <Link className="text-xs underline" href="/learning">
                     Open Learning
+                  </Link>
+                </article>
+                <article className="surface p-4 text-sm space-y-1">
+                  <p className="font-medium">Production health</p>
+                  <span className="badge">
+                    {data.enterpriseOps.productionHealth?.maturity ?? "FOUNDATION"}
+                  </span>
+                  <ul className="text-[var(--muted)] mt-1 space-y-0.5">
+                    <li>
+                      OK:{" "}
+                      {data.enterpriseOps.productionHealth?.ok == null
+                        ? "—"
+                        : String(data.enterpriseOps.productionHealth.ok)}
+                    </li>
+                    <li>
+                      Outbox pending:{" "}
+                      {data.enterpriseOps.productionHealth?.outboxLag?.pendingCount ?? "—"}
+                    </li>
+                    <li>
+                      Outbox DLQ:{" "}
+                      {data.enterpriseOps.productionHealth?.outboxLag?.deadLetterCount ??
+                        "—"}
+                    </li>
+                  </ul>
+                  <Link className="text-xs underline" href="/api/admin/production-health">
+                    Full health JSON
                   </Link>
                 </article>
               </div>

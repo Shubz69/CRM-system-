@@ -1,10 +1,12 @@
-import { FollowUpStatus, MessageDirection, MessageSenderType } from "@prisma/client";
+import { FollowUpStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
-import { getMessagingAdapter } from "@/adapters/messaging";
 import { writeAuditLog } from "@/services/audit";
 import { recordFailedJob } from "@/services/failed-jobs";
+import { assertContactable } from "@/services/messaging/contactability";
+import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+import { isContactSuppressed } from "@/services/messaging/suppression";
 
 // Re-export enqueue from jobs layer (no-op — Postgres sweep is authoritative).
 export { enqueueFollowUpCheck } from "@/jobs/follow-ups";
@@ -25,13 +27,50 @@ export async function processDueFollowUps(): Promise<number> {
   });
 
   let sent = 0;
-  const adapter = getMessagingAdapter(false);
 
   for (const followUp of due) {
-    if (!followUp.conversation || followUp.conversation.aiPaused) {
+    if (
+      !followUp.conversation ||
+      followUp.conversation.aiPaused ||
+      followUp.conversation.closedAt
+    ) {
       await prisma.followUp.update({
         where: { id: followUp.id },
-        data: { status: FollowUpStatus.CANCELLED, cancelReason: "AI paused or missing conversation" },
+        data: {
+          status: FollowUpStatus.CANCELLED,
+          cancelReason: followUp.conversation?.closedAt
+            ? "Conversation closed"
+            : "AI paused or missing conversation",
+        },
+      });
+      continue;
+    }
+
+    try {
+      if (
+        await isContactSuppressed(
+          followUp.organisationId,
+          followUp.contactId,
+          "manychat",
+        )
+      ) {
+        throw new Error("Contact is actively suppressed");
+      }
+      await assertContactable({
+        organisationId: followUp.organisationId,
+        contactId: followUp.contactId,
+        conversationId: followUp.conversationId ?? undefined,
+        channel: "manychat",
+        actionType: "FOLLOW_UP",
+      });
+    } catch (error) {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: {
+          status: FollowUpStatus.CANCELLED,
+          cancelReason:
+            error instanceof Error ? error.message : "Contact is not contactable",
+        },
       });
       continue;
     }
@@ -69,14 +108,30 @@ export async function processDueFollowUps(): Promise<number> {
       followUp.messageBody ||
       "Just checking in — happy to answer any questions or share a booking link when you are ready.";
 
-    const result = await adapter.sendMessage({
+    const sendResult = await prepareAndSendOutbound({
       organisationId: followUp.organisationId,
+      conversationId: followUp.conversationId!,
+      contactId: followUp.contactId,
       contactExternalId: externalId,
       text: body,
+      source: "FOLLOW_UP",
+      holder: `followup:${followUp.id}`,
+      idempotencyKey: `followup:${followUp.id}`,
       threadId: followUp.conversation.externalThreadId ?? undefined,
     });
 
-    if (!result.ok) {
+    if (!sendResult.ok) {
+      if (sendResult.code === "STALE_CONTEXT") {
+        await prisma.followUp.update({
+          where: { id: followUp.id },
+          data: {
+            status: FollowUpStatus.CANCELLED,
+            cancelReason: "STALE_CONTEXT",
+          },
+        });
+        continue;
+      }
+
       await prisma.followUp.update({
         where: { id: followUp.id },
         data: { status: FollowUpStatus.FAILED },
@@ -86,37 +141,19 @@ export async function processDueFollowUps(): Promise<number> {
         queue: "follow-ups",
         jobName: "send-followup",
         payload: { followUpId: followUp.id },
-        error: result.error || "Outbound send failed",
+        error:
+          typeof sendResult.code === "string"
+            ? sendResult.code
+            : "Outbound send failed",
       });
       continue;
     }
 
     const outboundAt = new Date();
-    await prisma.$transaction([
-      prisma.followUp.update({
-        where: { id: followUp.id },
-        data: { status: FollowUpStatus.SENT, sentAt: outboundAt },
-      }),
-      prisma.message.create({
-        data: {
-          conversationId: followUp.conversationId!,
-          organisationId: followUp.organisationId,
-          externalId: result.externalMessageId,
-          direction: MessageDirection.OUTBOUND,
-          senderType: MessageSenderType.SYSTEM,
-          body,
-          deliveryStatus: "sent",
-        },
-      }),
-      prisma.conversation.update({
-        where: { id: followUp.conversationId! },
-        data: {
-          lastMessageAt: outboundAt,
-          lastMessagePreview: body.slice(0, 140),
-          lastOutboundAt: outboundAt,
-        },
-      }),
-    ]);
+    await prisma.followUp.update({
+      where: { id: followUp.id },
+      data: { status: FollowUpStatus.SENT, sentAt: outboundAt },
+    });
 
     await writeAuditLog({
       organisationId: followUp.organisationId,

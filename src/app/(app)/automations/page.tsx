@@ -144,7 +144,41 @@ export default function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="NL compiles to a visible workflow first. Outbound actions need approval. Workers run rules — not the browser." />
+      <PageHeader
+        description="Live rules, approvals, and safety — advanced builders stay below."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <a href="/approvals" className="btn btn-secondary">
+              Approvals
+            </a>
+            <a href="/autopilot" className="btn btn-secondary">
+              Autopilot
+            </a>
+            <a href="/qualification" className="btn btn-secondary">
+              Qualification
+            </a>
+          </div>
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="surface p-4">
+          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Live</p>
+          <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">
+            {rules.filter((r) => r.isActive).length}
+          </p>
+        </div>
+        <div className="surface p-4">
+          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Pending approval</p>
+          <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">
+            {approvals.filter((a) => a.status === "PENDING").length}
+          </p>
+        </div>
+        <div className="surface p-4">
+          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Total rules</p>
+          <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">{rules.length}</p>
+        </div>
+      </div>
 
       <form className="surface space-y-3 p-4" onSubmit={compileNl}>
         <label className="block text-sm font-medium">

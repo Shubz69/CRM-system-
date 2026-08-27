@@ -192,3 +192,172 @@ export async function runContinuousCollectionPass(input: {
 
   return { run, ...appendResult };
 }
+
+/**
+ * Postgres sweep: for each org, record a scheduled ContinuousCollectionRun and
+ * append snapshots from latest PostPerformance / SocialContent engagement when present.
+ * Never invents metrics — skips content with no observed engagement fields.
+ */
+export async function sweepContinuousIntelligence(
+  limitOrgs = 50,
+  options?: { organisationIds?: string[] },
+): Promise<{
+  orgsProcessed: number;
+  runsCreated: number;
+  snapshotsAppended: number;
+}> {
+  const orgs = options?.organisationIds?.length
+    ? await prisma.organisation.findMany({
+        where: {
+          id: { in: options.organisationIds },
+          deletedAt: null,
+          isPlatform: false,
+        },
+        select: { id: true },
+      })
+    : await prisma.organisation.findMany({
+        where: { deletedAt: null, isPlatform: false },
+        select: { id: true },
+        take: Math.max(1, Math.min(limitOrgs, 200)),
+        orderBy: { lastActivityAt: "desc" },
+      });
+
+  let runsCreated = 0;
+  let snapshotsAppended = 0;
+
+  for (const org of orgs) {
+    try {
+      const contents = await prisma.socialContent.findMany({
+        where: { organisationId: org.id },
+        select: { id: true, platform: true },
+        take: 40,
+        orderBy: { lastSeenAt: "desc" },
+      });
+
+      const observations: MetricObservation[] = [];
+      const providerKeys = new Set<string>();
+
+      for (const content of contents) {
+        providerKeys.add(content.platform);
+
+        const latestSnap = await prisma.socialMetricSnapshot.findFirst({
+          where: { organisationId: org.id, socialContentId: content.id },
+          orderBy: { capturedAt: "desc" },
+          select: {
+            views: true,
+            likes: true,
+            comments: true,
+            shares: true,
+            score: true,
+            capturedAt: true,
+          },
+        });
+
+        const latestPerf =
+          latestSnap == null
+            ? await prisma.postPerformance.findFirst({
+                where: {
+                  organisationId: org.id,
+                  socialContentId: content.id,
+                },
+                orderBy: { capturedAt: "desc" },
+                select: {
+                  views: true,
+                  likes: true,
+                  comments: true,
+                  shares: true,
+                  capturedAt: true,
+                },
+              })
+            : null;
+
+        const source = latestSnap ?? latestPerf;
+        if (!source) continue;
+
+        const views = source.views ?? null;
+        const likes = source.likes ?? null;
+        const comments = source.comments ?? null;
+        const shares = source.shares ?? null;
+        const score =
+          latestSnap && "score" in latestSnap ? (latestSnap.score ?? null) : null;
+
+        if (
+          views == null &&
+          likes == null &&
+          comments == null &&
+          shares == null &&
+          score == null
+        ) {
+          continue;
+        }
+
+        observations.push({
+          socialContentId: content.id,
+          capturedAt: new Date(),
+          views,
+          likes,
+          comments,
+          shares,
+          score,
+          raw: {
+            sweepSource: latestSnap ? "SocialMetricSnapshot" : "PostPerformance",
+            priorCapturedAt: source.capturedAt.toISOString(),
+          },
+        });
+      }
+
+      const providerKey =
+        providerKeys.size === 1
+          ? [...providerKeys][0]
+          : providerKeys.size > 1
+            ? "multi"
+            : null;
+
+      if (observations.length === 0) {
+        await recordContinuousCollectionRun({
+          organisationId: org.id,
+          kind: "scheduled_sweep",
+          providerKey,
+          status: "COMPLETED",
+          itemsCollected: 0,
+          metadata: {
+            note: "No existing PostPerformance/SocialContent engagement to snapshot — nothing invented.",
+          },
+        });
+        runsCreated += 1;
+        continue;
+      }
+
+      const byProvider = new Map<string, MetricObservation[]>();
+      for (const obs of observations) {
+        const content = contents.find((c) => c.id === obs.socialContentId);
+        const key = content?.platform ?? "unknown";
+        const list = byProvider.get(key) ?? [];
+        list.push(obs);
+        byProvider.set(key, list);
+      }
+
+      for (const [key, obsList] of byProvider) {
+        const result = await runContinuousCollectionPass({
+          organisationId: org.id,
+          kind: "scheduled_sweep",
+          providerKey: key,
+          observations: obsList,
+          metadata: { sweep: true, honesty: "Copied from existing engagement only." },
+        });
+        runsCreated += 1;
+        snapshotsAppended += result.appended;
+      }
+    } catch {
+      // Skip orgs deleted mid-sweep (parallel tests / hard purge) — never invent metrics.
+      continue;
+    }
+  }
+
+  return {
+    orgsProcessed: orgs.length,
+    runsCreated,
+    snapshotsAppended,
+  };
+}
+

@@ -1,6 +1,6 @@
 /**
- * Prediction Lab — record feature-derived forecasts with transparent confidence bands.
- * FOUNDATION maturity for accuracy: never claim calibrated virality prediction.
+ * Prediction Lab — WORKING for create/list/score-when-outcome-present path.
+ * Accuracy / calibrated hit-rate remains FOUNDATION until scored sample volume exists.
  */
 
 import { Prisma, PredictionEvaluationStatus } from "@prisma/client";
@@ -10,8 +10,8 @@ import { assessTrendQualityBridge } from "@/services/continuous-intelligence/qua
 export const PREDICTION_LAB_MODEL_VERSION = "rules-v1";
 
 export const PREDICTION_LAB_DISCLAIMER =
-  "FOUNDATION — predictions are feature-derived heuristics with transparent confidence bands. " +
-  "They do not claim accurate virality or calibrated probability until Phase 17 has scored samples.";
+  "WORKING recording path; FOUNDATION accuracy — feature-derived heuristics with transparent confidence bands. " +
+  "Do not claim accurate virality or calibrated probability without scored backtest samples.";
 
 export type ConfidenceBand = "LOW" | "MEDIUM" | "HIGH" | "INSUFFICIENT";
 
@@ -98,23 +98,38 @@ export async function createIntelligencePrediction(input: {
     qualityAssessmentId = quality.qualityAssessmentId;
   }
 
-  const row = await prisma.intelligencePrediction.create({
-    data: {
+  const row = await prisma.$transaction(async (tx) => {
+    const prediction = await tx.intelligencePrediction.create({
+      data: {
+        organisationId: input.organisationId,
+        predictionType: input.predictionType,
+        statement: input.statement.slice(0, 8_000),
+        horizonAt: input.horizonAt,
+        features: features as Prisma.InputJsonValue,
+        modelVersion: input.modelVersion ?? PREDICTION_LAB_MODEL_VERSION,
+        confidenceBand: band.band,
+        expectedOutcome: (input.expectedOutcome ?? {
+          direction: "positive",
+          note: "Heuristic expected direction — not a virality guarantee",
+        }) as Prisma.InputJsonValue,
+        evaluationStatus: PredictionEvaluationStatus.PENDING,
+        trendClusterId: input.trendClusterId ?? null,
+        qualityAssessmentId,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
       organisationId: input.organisationId,
-      predictionType: input.predictionType,
-      statement: input.statement.slice(0, 8_000),
-      horizonAt: input.horizonAt,
-      features: features as Prisma.InputJsonValue,
-      modelVersion: input.modelVersion ?? PREDICTION_LAB_MODEL_VERSION,
-      confidenceBand: band.band,
-      expectedOutcome: (input.expectedOutcome ?? {
-        direction: "positive",
-        note: "Heuristic expected direction — not a virality guarantee",
-      }) as Prisma.InputJsonValue,
-      evaluationStatus: PredictionEvaluationStatus.PENDING,
-      trendClusterId: input.trendClusterId ?? null,
-      qualityAssessmentId,
-    },
+      eventType: "INTELLIGENCE_PREDICTION_RECORDED",
+      aggregateType: "IntelligencePrediction",
+      aggregateId: prediction.id,
+      payload: {
+        predictionId: prediction.id,
+        predictionType: prediction.predictionType,
+      },
+      dedupeKey: `INTELLIGENCE_PREDICTION_RECORDED:${prediction.id}`,
+    });
+    return prediction;
   });
 
   return {
@@ -123,6 +138,19 @@ export async function createIntelligencePrediction(input: {
     confidenceReasons: band.reasons,
     disclaimer: PREDICTION_LAB_DISCLAIMER,
   };
+}
+
+/** Alias — attach ground truth and score (see backtest.setActualOutcomeAndScore). */
+export async function attachActualOutcome(input: {
+  organisationId: string;
+  predictionId: string;
+  actualOutcome: import("@/services/continuous-intelligence/backtest").ActualOutcomePayload;
+  scorerVersion?: string;
+}) {
+  const { setActualOutcomeAndScore } = await import(
+    "@/services/continuous-intelligence/backtest"
+  );
+  return setActualOutcomeAndScore(input);
 }
 
 export async function getPrediction(input: {

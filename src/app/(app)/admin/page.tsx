@@ -11,7 +11,7 @@ export default async function AdminOverviewPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const startOfDay = new Date();

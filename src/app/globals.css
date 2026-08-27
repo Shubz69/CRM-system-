@@ -36,8 +36,20 @@
   --color-muted: var(--muted);
   --color-sidebar: var(--sidebar);
   --color-sidebar-text: var(--sidebar-text);
+  --color-muted-foreground: var(--muted);
+  --color-destructive: var(--danger);
   --font-sans: var(--font-manrope);
   --font-display: var(--font-fraunces);
+}
+
+/* Spacing / type scale used across hubs */
+:root {
+  --page-max: 72rem;
+  --page-pad: 1.5rem;
+  --section-gap: 1.5rem;
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --shadow-card: 0 1px 0 rgba(11, 18, 32, 0.04);
 }
 
 * {
@@ -268,4 +280,100 @@ a {
     linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: radial-gradient(ellipse at 70% 55%, black 20%, transparent 72%);
+}
+
+.page-shell {
+  margin-inline: auto;
+  width: 100%;
+  max-width: var(--page-max);
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-gap);
+}
+
+.section-title {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.125rem;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.card-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.caption {
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, white);
+  vertical-align: middle;
+}
+
+.data-table tbody tr {
+  transition: background 120ms ease;
+}
+
+.data-table tbody tr:hover {
+  background: color-mix(in oklab, var(--surface-2) 55%, white);
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-rise-delay,
+  .animate-rise-delay-2,
+  .animate-drift,
+  .animate-pulse-soft,
+  .skeleton,
+  .surface-interactive,
+  .btn {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .surface-interactive:hover,
+  .btn:hover {
+    transform: none;
+  }
 }

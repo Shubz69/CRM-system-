@@ -5,7 +5,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { toast } from "sonner";
-import { HOME_OUTCOME_CARDS } from "@/lib/navigation";
+import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 
 type Progress = {
@@ -240,17 +240,6 @@ export default function AskPage() {
   const [uploading, setUploading] = useState(false);
   const [editablePrompt, setEditablePrompt] = useState("");
   const [wantImageUpload, setWantImageUpload] = useState(false);
-  const [briefing, setBriefing] = useState<{
-    items: Array<{
-      id: string;
-      title: string;
-      detail: string;
-      href: string;
-      severity: string;
-    }>;
-    nextActions: Array<{ label: string; href: string }>;
-    setupNeeded: boolean;
-  } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -342,21 +331,7 @@ export default function AskPage() {
     }
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/chief-of-staff")
-      .then(async (r) => {
-        const j = await r.json();
-        if (!r.ok) return;
-        if (!cancelled) setBriefing(j);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  function applyOutcome(card: (typeof HOME_OUTCOME_CARDS)[number]) {
+  function applyOutcome(card: (typeof ASK_OUTCOME_CARDS)[number]) {
     if (card.href) {
       router.push(card.href);
       return;
@@ -662,64 +637,20 @@ export default function AskPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8">
-      {showHomeCards && briefing && (briefing.setupNeeded || briefing.items.length > 0) && (
-        <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold tracking-wide text-[var(--foreground)]">
-              Needs your attention
-            </h2>
-            <Link href="/attention" className="text-xs text-[var(--muted)] underline">
-              Full list
-            </Link>
-          </div>
-          {briefing.setupNeeded && (
-            <p className="text-sm text-[var(--muted)]">
-              No active agent config yet.{" "}
-              <Link href="/setup" className="underline">
-                Run Setup Assistant
-              </Link>{" "}
-              or check{" "}
-              <Link href="/settings/go-live" className="underline">
-                Go Live
-              </Link>
-              .
-            </p>
-          )}
-          <ul className="space-y-2">
-            {briefing.items.slice(0, 4).map((item) => (
-              <li key={item.id}>
-                <Link
-                  href={item.href}
-                  className="block rounded-lg px-2 py-1.5 text-sm hover:bg-[var(--surface-2)]"
-                >
-                  <span className="font-medium">{item.title}</span>
-                  <span className="mt-0.5 block text-xs text-[var(--muted)]">{item.detail}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-          {briefing.nextActions.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {briefing.nextActions.map((a) => (
-                <Link key={a.href + a.label} href={a.href} className="btn btn-secondary text-xs">
-                  {a.label}
-                </Link>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
       {showHomeCards && (
-        <p className="text-[var(--muted)]">
-          Describe the outcome in plain English. You never pick an agent, model, or tier — we route
-          that for you.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-[var(--muted)]">
+            Ask for an outcome in plain English — sales, messaging, research, content, or reporting.
+          </p>
+          <Link href="/home" className="text-xs text-[var(--muted)] underline">
+            Back to Home
+          </Link>
+        </div>
       )}
 
       <form onSubmit={onSubmit} className="space-y-3">
         <label htmlFor="ask-request" className="text-sm font-medium text-[var(--foreground)]">
-          What do you need?
+          What should Agent Desk do?
         </label>
         <textarea
           ref={inputRef}
@@ -781,18 +712,33 @@ export default function AskPage() {
       </form>
 
       {showHomeCards && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {HOME_OUTCOME_CARDS.map((card) => (
-            <button
-              key={card.id}
-              type="button"
-              onClick={() => applyOutcome(card)}
-              className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition"
-            >
-              <p className="font-medium text-[var(--foreground)]">{card.title}</p>
-              <p className="mt-1 text-sm text-[var(--muted)]">{card.hint}</p>
-            </button>
-          ))}
+        <div className="space-y-6">
+          {(
+            ["Sales", "Messaging", "Research", "Content", "Reporting"] as const
+          ).map((group) => {
+            const cards = ASK_OUTCOME_CARDS.filter((c) => c.group === group);
+            if (cards.length === 0) return null;
+            return (
+              <div key={group}>
+                <p className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                  {group}
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {cards.map((card) => (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => applyOutcome(card)}
+                      className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition"
+                    >
+                      <p className="font-medium text-[var(--foreground)]">{card.title}</p>
+                      <p className="mt-1 text-sm text-[var(--muted)]">{card.hint}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 

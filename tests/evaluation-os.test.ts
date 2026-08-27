@@ -44,6 +44,7 @@ import {
   scoreTenantCorrectness,
   scoreCitationCoverage,
   shouldAutoPromoteFromSingleRun,
+  shouldPromoteEligibility,
   assertRolloutTransition,
   transitionRolloutState,
   recordVersionPerformanceSnapshot,
@@ -126,8 +127,8 @@ describe("Phase 17 deterministic scorers", () => {
     expect(partial.passed).toBe(false);
   });
 
-  it("deterministic suite passes builtin fixtures", () => {
-    const result = runDeterministicEvalSuite();
+  it("deterministic suite passes builtin fixtures", async () => {
+    const result = await runDeterministicEvalSuite();
     expect(result.passed).toBe(true);
     expect(result.maturity).toBe("WORKING");
     expect(result.signalKindsDocumented).toContain(SIGNAL_USER_PREFERENCE);
@@ -168,7 +169,8 @@ describe("Phase 17 canary / promote safety", () => {
   it("requires confirmPromote for PROMOTED", async () => {
     mocks.versionFindFirst.mockResolvedValue({
       rolloutState: "CANARY",
-      sampleSize: 5,
+      sampleSize: 25,
+      metrics: { score: 0.9, regression: 0.01 },
     });
     await expect(
       transitionRolloutState({
@@ -181,32 +183,69 @@ describe("Phase 17 canary / promote safety", () => {
     ).rejects.toThrow(/confirmPromote/);
   });
 
+  it("blocks PROMOTED when eligibility fails even with confirmPromote", async () => {
+    mocks.versionFindFirst.mockResolvedValue({
+      rolloutState: "CANARY",
+      sampleSize: 5,
+      metrics: { score: 0.9, regression: 0 },
+    });
+    await expect(
+      transitionRolloutState({
+        organisationId: "org_1",
+        artifactKind: "agent_prompt",
+        artifactKey: "default",
+        version: "2",
+        to: "PROMOTED",
+        confirmPromote: true,
+      }),
+    ).rejects.toThrow(/eligibility failed/);
+  });
+
   it("records snapshot without promoting", async () => {
     mocks.versionCreate.mockResolvedValue({
       id: "snap_1",
       rolloutState: "CANDIDATE",
       sampleSize: 0,
     });
+    // recordVersionPerformanceSnapshot now uses $transaction — mock lightly
+    const { prisma: p } = await import("@/lib/db");
+    (p as unknown as { $transaction?: ReturnType<typeof vi.fn> }).$transaction = vi.fn(
+      async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          versionPerformanceSnapshot: { create: mocks.versionCreate },
+          domainEvent: { create: vi.fn(), findFirst: vi.fn().mockResolvedValue(null) },
+        }),
+    );
     const row = await recordVersionPerformanceSnapshot({
       organisationId: "org_1",
       artifactKind: "agent_prompt",
       artifactKey: "default",
       version: "2",
       sampleSize: 0,
+      emitProposedEvent: false,
     });
     expect(row.rolloutState).toBe("CANDIDATE");
     expect(mocks.versionCreate).toHaveBeenCalled();
   });
 
-  it("audits explicit promote", async () => {
+  it("audits explicit promote when eligible", async () => {
     mocks.versionFindFirst.mockResolvedValue({
       rolloutState: "CANARY",
-      sampleSize: 10,
+      sampleSize: 25,
+      metrics: { score: 0.85, regression: 0.01 },
     });
     mocks.versionCreate.mockResolvedValue({
       id: "snap_2",
       rolloutState: "PROMOTED",
     });
+    const { prisma: p } = await import("@/lib/db");
+    (p as unknown as { $transaction?: ReturnType<typeof vi.fn> }).$transaction = vi.fn(
+      async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          versionPerformanceSnapshot: { create: mocks.versionCreate },
+          domainEvent: { create: vi.fn(), findFirst: vi.fn().mockResolvedValue(null) },
+        }),
+    );
     await transitionRolloutState({
       organisationId: "org_1",
       artifactKind: "agent_prompt",
@@ -219,6 +258,23 @@ describe("Phase 17 canary / promote safety", () => {
     expect(writeAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "evaluation.version.promoted" }),
     );
+  });
+
+  it("shouldPromoteEligibility enforces defaults", () => {
+    expect(
+      shouldPromoteEligibility({
+        sampleSize: 10,
+        score: 0.9,
+        regression: 0,
+      }).eligible,
+    ).toBe(false);
+    expect(
+      shouldPromoteEligibility({
+        sampleSize: 20,
+        score: 0.7,
+        regression: 0.05,
+      }).eligible,
+    ).toBe(true);
   });
 });
 

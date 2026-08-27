@@ -115,16 +115,31 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        description="Business, AI operator, team, and connections — keep it simple."
+        description="Workspace, team, AI behaviour, messaging, and security — keep controls clear."
         actions={
           <Link href="/settings/go-live" className="btn btn-primary">
-            Go Live checklist
+            Setup progress
           </Link>
         }
       />
 
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">Business</h2>
+      <nav className="filter-bar" aria-label="Settings categories">
+        {[
+          ["workspace", "Workspace"],
+          ["ai", "AI behaviour"],
+          ["messaging", "Messaging"],
+          ["team", "Team"],
+          ["security", "Security"],
+          ["advanced", "Advanced"],
+        ].map(([id, label]) => (
+          <a key={id} href={`#settings-${id}`} className="badge hover:badge-success">
+            {label}
+          </a>
+        ))}
+      </nav>
+
+      <section id="settings-workspace" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Workspace</h2>
         <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
           <div>
             <dt className="text-[var(--muted)]">Business name</dt>
@@ -137,18 +152,21 @@ export default function SettingsPage() {
         </dl>
       </section>
 
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">AI Operator</h2>
+      <section id="settings-ai" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">AI behaviour</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Autopilot runs your pipeline. Tune tone and goals in AI Agent when needed.
+          How much Agent Desk can do automatically, tone, and when to hand off to humans.
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <StatusChip ok={Boolean(aiReady)} label={aiReady ? "Claude Ready" : "Claude Needs Setup"} />
+          <StatusChip ok={Boolean(aiReady)} label={aiReady ? "AI ready" : "AI needs setup"} />
           <Link href="/autopilot" className="btn btn-secondary">
-            Autopilot
+            Automation level
           </Link>
           <Link href="/agent" className="btn btn-secondary">
             Tone & goals
+          </Link>
+          <Link href="/qualification" className="btn btn-secondary">
+            Qualification
           </Link>
           <Link href="/setup" className="btn btn-secondary">
             Setup Assistant
@@ -156,8 +174,8 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">Connections</h2>
+      <section id="settings-messaging" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Messaging & connections</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
@@ -168,7 +186,7 @@ export default function SettingsPage() {
               />
             </div>
             <p className="mt-2 text-sm text-[var(--muted)]">
-              Connect via ManyChat so Autopilot can reply to DMs.
+              Connect via ManyChat so Agent Desk can reply to DMs.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -178,6 +196,9 @@ export default function SettingsPage() {
               >
                 Connect
               </button>
+              <Link href="/integrations" className="btn btn-secondary">
+                Integrations
+              </Link>
               <Link href="/simulator" className="btn btn-secondary">
                 Test
               </Link>
@@ -204,9 +225,6 @@ export default function SettingsPage() {
                 placeholder="Your booking page URL"
               />
             </label>
-            <p className="mt-2 text-xs text-[var(--muted)]">
-              Set the default booking URL in AI Agent for this workspace.
-            </p>
             <Link href="/agent" className="btn btn-secondary mt-3">
               Manage
             </Link>
@@ -214,14 +232,14 @@ export default function SettingsPage() {
 
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-semibold">AI Operator</h3>
+              <h3 className="font-semibold">AI provider</h3>
               <StatusChip
                 ok={Boolean(aiReady)}
-                label={aiReady ? "Claude Connected" : "Claude Needs Setup"}
+                label={aiReady ? "Connected" : "Needs setup"}
               />
             </div>
-            <p className="mt-2 text-sm text-[var(--muted)]">Powered by Anthropic Claude.</p>
-            <Link href="/agent" className="btn btn-secondary mt-3">
+            <p className="mt-2 text-sm text-[var(--muted)]">Powers replies, research, and Ask.</p>
+            <Link href="/integrations" className="btn btn-secondary mt-3">
               Manage
             </Link>
           </div>
@@ -241,8 +259,8 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">Team</h2>
+      <section id="settings-team" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Team</h2>
         <ul className="mt-3 space-y-2 text-sm">
           {members.map((m) => (
             <li key={m.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-2">
@@ -256,8 +274,8 @@ export default function SettingsPage() {
         </ul>
       </section>
 
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">Security</h2>
+      <section id="settings-security" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Security</h2>
         <div className="mt-3 flex flex-wrap gap-3">
           <Link href="/account/change-password" className="btn btn-secondary">
             Change password
@@ -265,73 +283,71 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {(showAdvanced || channels.length > 0) && (
-        <section className="surface p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="h-display text-2xl">Advanced · Instagram channel</h2>
-            <button
-              type="button"
-              className="text-sm text-[var(--accent)] hover:underline"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              {showAdvanced ? "Hide" : "Show"}
-            </button>
-          </div>
-          {showAdvanced && (
-            <>
-              <p className="mt-1 text-sm text-[var(--muted)]">
-                Paste the Instagram channel identifier from your ManyChat connection wizard.
-              </p>
-              <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-3">
-                <label className="text-sm font-medium">
-                  Channel ID
-                  <input
-                    className="input mt-2"
-                    value={externalId}
-                    onChange={(e) => setExternalId(e.target.value)}
-                    required
-                    placeholder="Your Instagram channel"
-                  />
-                </label>
-                <label className="text-sm font-medium">
-                  Display name
-                  <input
-                    className="input mt-2"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Main Instagram"
-                  />
-                </label>
-                <div className="flex items-end">
-                  <button className="btn btn-primary w-full" type="submit">
-                    Save
-                  </button>
-                </div>
-              </form>
-              <ul className="mt-4 space-y-2 text-sm">
-                {channels.map((channel) => (
-                  <li
-                    key={channel.id}
-                    className="flex justify-between gap-3 border-b border-[var(--border)] py-2"
-                  >
-                    <span>
-                      {channel.displayName}
-                      <span className="block text-xs text-[var(--muted)]">
-                        {channel.externalId}
-                      </span>
+      <section id="settings-advanced" className="surface scroll-mt-24 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="section-title">Advanced · Instagram channel</h2>
+          <button
+            type="button"
+            className="text-sm text-[var(--accent)] hover:underline"
+            onClick={() => setShowAdvanced((v) => !v)}
+          >
+            {showAdvanced ? "Hide" : "Show"}
+          </button>
+        </div>
+        {(showAdvanced || channels.length > 0) && (
+          <>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Paste the Instagram channel identifier from your ManyChat connection wizard.
+            </p>
+            <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-3">
+              <label className="text-sm font-medium">
+                Channel ID
+                <input
+                  className="input mt-2"
+                  value={externalId}
+                  onChange={(e) => setExternalId(e.target.value)}
+                  required
+                  placeholder="Your Instagram channel"
+                />
+              </label>
+              <label className="text-sm font-medium">
+                Display name
+                <input
+                  className="input mt-2"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Main Instagram"
+                />
+              </label>
+              <div className="flex items-end">
+                <button className="btn btn-primary w-full" type="submit">
+                  Save
+                </button>
+              </div>
+            </form>
+            <ul className="mt-4 space-y-2 text-sm">
+              {channels.map((channel) => (
+                <li
+                  key={channel.id}
+                  className="flex justify-between gap-3 border-b border-[var(--border)] py-2"
+                >
+                  <span>
+                    {channel.displayName}
+                    <span className="block text-xs text-[var(--muted)]">
+                      {channel.externalId}
                     </span>
-                    <span className="badge">{channel.isActive ? "Active" : "Inactive"}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </section>
-      )}
+                  </span>
+                  <span className="badge">{channel.isActive ? "Active" : "Inactive"}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
 
       {integrations.length > 0 && (
         <section className="surface p-5">
-          <h2 className="h-display text-2xl">Saved integrations</h2>
+          <h2 className="section-title">Saved integrations</h2>
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             {integrations.map((i) => (
               <div key={i.id} className="rounded-xl border border-[var(--border)] p-4">

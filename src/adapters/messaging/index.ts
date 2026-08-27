@@ -3,6 +3,7 @@ import type { MessagingAdapter, OutboundMessage, OutboundResult } from "@/adapte
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { allowMockTransports, isProductionRuntime } from "@/lib/runtime";
+import { resolveMessagingSendCredential } from "@/services/messaging/credentials";
 
 /**
  * Live ManyChat adapter.
@@ -13,7 +14,8 @@ export class ManyChatAdapter implements MessagingAdapter {
 
   async sendMessage(message: OutboundMessage): Promise<OutboundResult> {
     const env = getEnv();
-    if (!env.MANYCHAT_API_TOKEN) {
+    const apiToken = message.apiToken ?? env.MANYCHAT_API_TOKEN;
+    if (!apiToken) {
       if (isProductionRuntime() || !allowMockTransports()) {
         return {
           ok: false,
@@ -31,7 +33,7 @@ export class ManyChatAdapter implements MessagingAdapter {
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${env.MANYCHAT_API_TOKEN}`,
+          Authorization: `Bearer ${apiToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -69,6 +71,7 @@ export class ManyChatAdapter implements MessagingAdapter {
         ok: false,
         provider: this.name,
         error: error instanceof Error ? error.message : "ManyChat send error",
+        deliveryUncertain: true,
       };
     }
   }
@@ -103,6 +106,22 @@ export function getMessagingAdapter(preferLive?: boolean): MessagingAdapter {
   return new ManyChatAdapter();
 }
 
+export async function getMessagingAdapterForOrganisation(
+  organisationId: string,
+  preferLive?: boolean,
+): Promise<MessagingAdapter> {
+  const credential = await resolveMessagingSendCredential(organisationId);
+  if (!credential.token) return getMessagingAdapter(preferLive);
+
+  const live = new ManyChatAdapter();
+  return {
+    name: live.name,
+    sendMessage(message) {
+      return live.sendMessage({ ...message, apiToken: message.apiToken ?? credential.token! });
+    },
+  };
+}
+
 class NotConfiguredMessagingAdapter implements MessagingAdapter {
   readonly name: string;
   constructor(name: string) {
@@ -119,4 +138,13 @@ class NotConfiguredMessagingAdapter implements MessagingAdapter {
 }
 
 export { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";
-export { clearMockOutboundLog, mockOutboundLog } from "@/adapters/messaging/types";
+export {
+  clearMockOutboundLog,
+  mockOutboundLog,
+  type MessagingAdapter,
+  type MessagingAdapterCapabilities,
+  type MessagingProviderAdapter,
+  type NormalizedInboundMessage,
+  type OutboundMessage,
+  type OutboundResult,
+} from "@/adapters/messaging/types";

@@ -4,17 +4,21 @@ import { requirePermission, jsonError } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import {
   createBriefAndPiece,
+  createDraftPiece,
   createIdeaFromOpportunity,
   createOpportunityFromResearch,
   decidePieceApproval,
   requestPublish,
   submitPieceForApproval,
+  updatePiece,
 } from "@/services/content-os";
+import { cancelPublishingJob } from "@/services/publishing";
+import { listSocialConnections } from "@/services/social-connections";
 
 export async function GET() {
   try {
     const session = await requirePermission("ask:use");
-    const [opportunities, pieces, jobs] = await Promise.all([
+    const [opportunities, pieces, jobs, connections] = await Promise.all([
       prisma.contentOpportunity.findMany({
         where: { organisationId: session.organisationId },
         orderBy: { createdAt: "desc" },
@@ -27,7 +31,7 @@ export async function GET() {
         take: 40,
         include: {
           variants: true,
-          publishingJobs: { orderBy: { createdAt: "desc" }, take: 3 },
+          publishingJobs: { orderBy: { createdAt: "desc" }, take: 5 },
         },
       }),
       prisma.publishingJob.findMany({
@@ -35,8 +39,20 @@ export async function GET() {
         orderBy: { createdAt: "desc" },
         take: 30,
       }),
+      listSocialConnections(session.organisationId),
     ]);
-    return Response.json({ opportunities, pieces, publishingJobs: jobs });
+    return Response.json({
+      opportunities,
+      pieces,
+      publishingJobs: jobs,
+      socialConnections: connections.map((c) => ({
+        id: c.id,
+        platform: c.platform,
+        displayName: c.displayName,
+        status: c.status,
+        externalAccountId: c.externalAccountId,
+      })),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -72,6 +88,22 @@ const postSchema = z.discriminatedUnion("action", [
     platform: z.string().max(40).optional(),
   }),
   z.object({
+    action: z.literal("create_draft_piece"),
+    title: z.string().min(1).max(200),
+    body: z.string().min(1).max(50_000),
+    rationale: z.string().min(1).max(4000),
+    sourceUrl: z.string().url(),
+    platform: z.string().max(40).optional(),
+    agentRunId: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal("update_piece"),
+    pieceId: z.string().min(1),
+    title: z.string().min(1).max(200).optional(),
+    body: z.string().min(1).max(50_000).optional(),
+    platform: z.string().max(40).nullable().optional(),
+  }),
+  z.object({
     action: z.literal("submit_approval"),
     pieceId: z.string().min(1),
   }),
@@ -87,6 +119,20 @@ const postSchema = z.discriminatedUnion("action", [
     platform: z.string().min(1).max(40),
     socialConnectionId: z.string().optional(),
     variantId: z.string().optional(),
+    scheduledAt: z.string().datetime().optional(),
+  }),
+  z.object({
+    action: z.literal("schedule_publish"),
+    pieceId: z.string().min(1),
+    platform: z.string().min(1).max(40),
+    socialConnectionId: z.string().optional(),
+    variantId: z.string().optional(),
+    scheduledAt: z.string().datetime(),
+  }),
+  z.object({
+    action: z.literal("cancel_publish_job"),
+    jobId: z.string().min(1),
+    reason: z.string().max(2000).optional(),
   }),
 ]);
 
@@ -123,6 +169,31 @@ export async function POST(req: NextRequest) {
         });
         return Response.json(ids);
       }
+      case "create_draft_piece": {
+        if (!body.sourceUrl.startsWith("http")) {
+          return jsonError("sourceUrl must be an http(s) URL", 400);
+        }
+        const result = await createDraftPiece({
+          organisationId: session.organisationId,
+          title: body.title,
+          body: body.body,
+          rationale: body.rationale,
+          sourceUrl: body.sourceUrl,
+          platform: body.platform,
+          agentRunId: body.agentRunId,
+        });
+        return Response.json(result);
+      }
+      case "update_piece": {
+        await updatePiece({
+          organisationId: session.organisationId,
+          pieceId: body.pieceId,
+          title: body.title,
+          body: body.body,
+          platform: body.platform,
+        });
+        return Response.json({ ok: true });
+      }
       case "submit_approval": {
         const approvalId = await submitPieceForApproval({
           organisationId: session.organisationId,
@@ -140,15 +211,30 @@ export async function POST(req: NextRequest) {
         });
         return Response.json({ ok: true });
       }
-      case "request_publish": {
+      case "request_publish":
+      case "schedule_publish": {
+        const scheduledAt =
+          body.scheduledAt != null ? new Date(body.scheduledAt) : null;
+        if (body.action === "schedule_publish" && (!scheduledAt || Number.isNaN(scheduledAt.getTime()))) {
+          return jsonError("scheduledAt is required for schedule_publish", 400);
+        }
         const result = await requestPublish({
           organisationId: session.organisationId,
           pieceId: body.pieceId,
           platform: body.platform,
           socialConnectionId: body.socialConnectionId,
           variantId: body.variantId,
+          scheduledAt,
         });
         return Response.json(result);
+      }
+      case "cancel_publish_job": {
+        await cancelPublishingJob({
+          organisationId: session.organisationId,
+          jobId: body.jobId,
+          reason: body.reason,
+        });
+        return Response.json({ ok: true });
       }
       default:
         return jsonError("Unknown action", 400);

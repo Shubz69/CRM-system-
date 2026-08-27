@@ -3,7 +3,12 @@
  * MaturityNote is always FOUNDATION — no contractual SLO claims.
  */
 
-import { DomainEventStatus, Prisma, PublishingJobStatus } from "@prisma/client";
+import {
+  DomainEventStatus,
+  MissionStatus,
+  Prisma,
+  PublishingJobStatus,
+} from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { pingRedis } from "@/jobs/redis";
 
@@ -33,6 +38,19 @@ export type SloIndicators = {
     windowHours: number;
     note: string;
   };
+  continuousIntelRuns: {
+    count: number;
+    windowHours: number;
+    note: string;
+  };
+  publishingDispatching: {
+    count: number;
+    note: string;
+  };
+  missionWaitingApproval: {
+    count: number;
+    note: string;
+  };
 };
 
 async function buildIndicators(organisationId?: string | null): Promise<SloIndicators> {
@@ -50,6 +68,9 @@ async function buildIndicators(organisationId?: string | null): Promise<SloIndic
     oldestPending,
     publishedCount,
     failedCount,
+    continuousIntelRuns,
+    publishingDispatching,
+    missionWaitingApproval,
   ] = await Promise.all([
     prisma.agentRun.findFirst({
       where: {
@@ -91,6 +112,24 @@ async function buildIndicators(organisationId?: string | null): Promise<SloIndic
         updatedAt: { gte: since },
       },
     }),
+    prisma.continuousCollectionRun.count({
+      where: {
+        ...whereOrg,
+        observedAt: { gte: since },
+      },
+    }),
+    prisma.publishingJob.count({
+      where: {
+        ...whereOrg,
+        status: PublishingJobStatus.DISPATCHING,
+      },
+    }),
+    prisma.agentMission.count({
+      where: {
+        ...whereOrg,
+        status: MissionStatus.WAITING_APPROVAL,
+      },
+    }),
   ]);
 
   const terminal = publishedCount + failedCount;
@@ -123,6 +162,19 @@ async function buildIndicators(organisationId?: string | null): Promise<SloIndic
         publishRate == null
           ? "No terminal publish jobs in window — rate stays null (not invented)."
           : "Derived from PublishingJob statuses only — not a contractual publish SLO.",
+    },
+    continuousIntelRuns: {
+      count: continuousIntelRuns,
+      windowHours,
+      note: "ContinuousCollectionRun count in window — FOUNDATION indicator.",
+    },
+    publishingDispatching: {
+      count: publishingDispatching,
+      note: "Jobs currently DISPATCHING — not a success rate.",
+    },
+    missionWaitingApproval: {
+      count: missionWaitingApproval,
+      note: "Missions in WAITING_APPROVAL — ops backlog indicator only.",
     },
   };
 }

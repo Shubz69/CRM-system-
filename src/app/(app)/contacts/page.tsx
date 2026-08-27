@@ -68,35 +68,39 @@ export default function ContactsPage() {
       />
 
       <div className="surface overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--border)] text-[var(--muted)]">
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Source</th>
-              <th className="px-4 py-3">Score</th>
-              <th className="px-4 py-3">Stage</th>
-              <th className="px-4 py-3">Activity</th>
-              <th className="px-4 py-3">Consent</th>
+              <th>Name</th>
+              <th>Source</th>
+              <th>Score</th>
+              <th>Stage</th>
+              <th>Activity</th>
+              <th>Consent</th>
             </tr>
           </thead>
           <tbody>
             {contacts.length === 0 && (
               <tr>
-                <td className="px-4 py-6" colSpan={6}>
-                  <EmptyState
-                    title="No contacts yet"
-                    body="People appear here after they message you on Instagram. Connect your account to start collecting leads."
-                    actionHref="/settings/go-live"
-                    actionLabel="Connect Instagram"
-                  />
+                <td colSpan={6}>
+                  <div className="p-4">
+                    <EmptyState
+                      title="No contacts yet"
+                      body="People appear here after they message you on Instagram. Connect your account to start collecting leads."
+                      actions={[
+                        { href: "/integrations", label: "Connect Instagram", primary: true },
+                        { href: "/settings/go-live", label: "Setup progress" },
+                      ]}
+                    />
+                  </div>
                 </td>
               </tr>
             )}
             {contacts.map((c) => (
-              <tr key={c.id} className="border-b border-[var(--border)]">
-                <td className="px-4 py-3">
+              <tr key={c.id} className="cursor-pointer">
+                <td>
                   <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.fullName || "Unknown"}</Link>
-                  <div className="text-xs text-[var(--muted)]">
+                  <div className="meta">
                     @{c.instagramUsername || "—"} · {c.email || "no email"}
                   </div>
                 </td>

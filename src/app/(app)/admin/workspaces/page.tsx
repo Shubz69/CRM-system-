@@ -11,7 +11,7 @@ export default async function AdminWorkspacesPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const orgs = await prisma.organisation.findMany({

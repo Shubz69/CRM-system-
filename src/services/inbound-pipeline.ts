@@ -9,7 +9,6 @@ import {
 } from "@prisma/client";
 import { buildAgentSystemPrompt } from "@/adapters/ai";
 import { getBookingProvider } from "@/adapters/booking";
-import { getMessagingAdapter } from "@/adapters/messaging";
 import { hashForIdempotency } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -38,6 +37,15 @@ import {
   isAutopilotOperating,
   parseAutopilotConfig,
 } from "@/services/autopilot";
+import { isIntelligenceFlagEnabled } from "@/services/intelligence-flags";
+import { decideNextBestAction } from "@/services/messaging/nba";
+import { recordObjection } from "@/services/messaging/objections";
+import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+import {
+  classifyInboundL0,
+  persistUnderstanding,
+  runUnderstandingShadow,
+} from "@/services/messaging/understanding";
 import { NotificationType } from "@prisma/client";
 
 function mapQualificationStatus(status: string): QualificationStatus {
@@ -225,6 +233,8 @@ export async function processInboundMessage(
         });
       }
 
+      let contactCreated = false;
+      let contactUpdated = false;
       if (!contact) {
         contact = await tx.contact.create({
           data: {
@@ -254,6 +264,7 @@ export async function processInboundMessage(
             },
           },
         });
+        contactCreated = true;
       } else {
         contact = await tx.contact.update({
           where: { id: contact.id },
@@ -266,16 +277,39 @@ export async function processInboundMessage(
             campaignSource: input.campaignSource || contact.campaignSource,
           },
         });
+        contactUpdated = true;
 
         if (!contactIdentifier) {
-          await tx.contactIdentifier.create({
-            data: {
-              organisationId: input.organisationId,
-              contactId: contact.id,
-              channel: "manychat",
-              identifier: identifierValue,
-            },
-          });
+          try {
+            await tx.contactIdentifier.create({
+              data: {
+                organisationId: input.organisationId,
+                contactId: contact.id,
+                channel: "manychat",
+                identifier: identifierValue,
+              },
+            });
+          } catch (error) {
+            if (
+              !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+              error.code !== "P2002"
+            ) {
+              throw error;
+            }
+            const raced = await tx.contactIdentifier.findUnique({
+              where: {
+                organisationId_channel_identifier: {
+                  organisationId: input.organisationId,
+                  channel: "manychat",
+                  identifier: identifierValue,
+                },
+              },
+              include: { contact: true },
+            });
+            if (raced?.contact) {
+              contact = raced.contact;
+            }
+          }
         }
       }
 
@@ -288,29 +322,51 @@ export async function processInboundMessage(
         orderBy: { updatedAt: "desc" },
       });
 
+      let conversationCreated = false;
       if (!conversation) {
         const windows = openMessagingWindows();
-        conversation = await tx.conversation.create({
-          data: {
-            organisationId: input.organisationId,
-            contactId: contact.id,
-            messagingChannelId: channel.id,
-            externalThreadId: threadKey,
-            handlingMode: HandlingMode.AI,
-            unreadCount: 1,
-            lastMessageAt: windows.lastInboundAt,
-            lastMessagePreview: input.message.text.slice(0, 140),
-            lastInboundAt: windows.lastInboundAt,
-            messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
-            humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
-          },
-        });
-      } else {
+        try {
+          conversation = await tx.conversation.create({
+            data: {
+              organisationId: input.organisationId,
+              contactId: contact.id,
+              messagingChannelId: channel.id,
+              externalThreadId: threadKey,
+              handlingMode: HandlingMode.AI,
+              unreadCount: 1,
+              lastMessageAt: windows.lastInboundAt,
+              lastMessagePreview: input.message.text.slice(0, 140),
+              lastInboundAt: windows.lastInboundAt,
+              messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
+              humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
+            },
+          });
+          conversationCreated = true;
+        } catch (error) {
+          if (
+            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+            error.code !== "P2002"
+          ) {
+            throw error;
+          }
+          conversation = await tx.conversation.findUnique({
+            where: {
+              organisationId_externalThreadId: {
+                organisationId: input.organisationId,
+                externalThreadId: threadKey,
+              },
+            },
+          });
+          if (!conversation) throw error;
+        }
+      }
+      if (!conversationCreated && conversation) {
         const windows = openMessagingWindows();
         conversation = await tx.conversation.update({
           where: { id: conversation.id },
           data: {
             unreadCount: { increment: 1 },
+            activityVersion: { increment: 1 },
             lastMessageAt: windows.lastInboundAt,
             lastMessagePreview: input.message.text.slice(0, 140),
             externalThreadId: conversation.externalThreadId || threadKey,
@@ -321,19 +377,68 @@ export async function processInboundMessage(
         });
       }
 
-      const inboundMessage = await tx.message.create({
-        data: {
-          conversationId: conversation.id,
-          organisationId: input.organisationId,
-          externalId: input.message.externalId || `in_${idempotencyKey.slice(0, 24)}`,
-          direction: MessageDirection.INBOUND,
-          senderType: MessageSenderType.CONTACT,
-          body: input.message.text,
-          origin: provider,
-          rawPayload: (options?.rawPayload as object) ?? undefined,
-          sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
-        },
-      });
+      if (!conversation) {
+        throw new Error("Conversation could not be created or resolved");
+      }
+
+      const externalId =
+        input.message.externalId || `in_${idempotencyKey.slice(0, 24)}`;
+      let inboundMessage;
+      if (input.message.externalId) {
+        inboundMessage = await tx.message.upsert({
+          where: {
+            conversationId_externalId: {
+              conversationId: conversation.id,
+              externalId,
+            },
+          },
+          create: {
+            conversationId: conversation.id,
+            organisationId: input.organisationId,
+            externalId,
+            direction: MessageDirection.INBOUND,
+            senderType: MessageSenderType.CONTACT,
+            body: input.message.text,
+            origin: provider,
+            rawPayload: (options?.rawPayload as object) ?? undefined,
+            sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
+          },
+          update: {},
+        });
+      } else {
+        try {
+          inboundMessage = await tx.message.create({
+            data: {
+              conversationId: conversation.id,
+              organisationId: input.organisationId,
+              externalId,
+              direction: MessageDirection.INBOUND,
+              senderType: MessageSenderType.CONTACT,
+              body: input.message.text,
+              origin: provider,
+              rawPayload: (options?.rawPayload as object) ?? undefined,
+              sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
+            },
+          });
+        } catch (error) {
+          if (
+            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+            error.code !== "P2002"
+          ) {
+            throw error;
+          }
+          const existingMessage = await tx.message.findUnique({
+            where: {
+              conversationId_externalId: {
+                conversationId: conversation.id,
+                externalId,
+              },
+            },
+          });
+          if (!existingMessage) throw error;
+          inboundMessage = existingMessage;
+        }
+      }
 
       const pipeline = await tx.pipeline.findFirst({
         where: { organisationId: input.organisationId, isDefault: true },
@@ -351,6 +456,7 @@ export async function processInboundMessage(
         },
       });
 
+      let leadCreated = false;
       if (!lead) {
         lead = await tx.lead.create({
           data: {
@@ -361,6 +467,60 @@ export async function processInboundMessage(
             stageId: newStage?.id,
             qualificationStatus: QualificationStatus.UNKNOWN,
           },
+        });
+        leadCreated = true;
+      }
+
+      const { appendDomainEvent } = await import("@/services/domain-events/append");
+      if (contactCreated) {
+        await appendDomainEvent(tx, {
+          organisationId: input.organisationId,
+          eventType: "CONTACT_CREATED",
+          aggregateType: "Contact",
+          aggregateId: contact.id,
+          payload: { contactId: contact.id },
+          dedupeKey: `CONTACT_CREATED:${contact.id}`,
+        });
+      } else if (contactUpdated) {
+        await appendDomainEvent(tx, {
+          organisationId: input.organisationId,
+          eventType: "CONTACT_UPDATED",
+          aggregateType: "Contact",
+          aggregateId: contact.id,
+          payload: { contactId: contact.id },
+          dedupeKey: `CONTACT_UPDATED:${contact.id}:${inboundMessage.id}`,
+        });
+      }
+      if (conversationCreated) {
+        await appendDomainEvent(tx, {
+          organisationId: input.organisationId,
+          eventType: "CONVERSATION_CREATED",
+          aggregateType: "Conversation",
+          aggregateId: conversation.id,
+          payload: { conversationId: conversation.id, contactId: contact.id },
+          dedupeKey: `CONVERSATION_CREATED:${conversation.id}`,
+        });
+      }
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "MESSAGE_RECEIVED",
+        aggregateType: "Message",
+        aggregateId: inboundMessage.id,
+        payload: {
+          messageId: inboundMessage.id,
+          conversationId: conversation.id,
+          contactId: contact.id,
+        },
+        dedupeKey: `MESSAGE_RECEIVED:${inboundMessage.id}`,
+      });
+      if (leadCreated) {
+        await appendDomainEvent(tx, {
+          organisationId: input.organisationId,
+          eventType: "LEAD_CREATED",
+          aggregateType: "Lead",
+          aggregateId: lead.id,
+          payload: { leadId: lead.id, contactId: contact.id },
+          dedupeKey: `LEAD_CREATED:${lead.id}`,
         });
       }
 
@@ -376,13 +536,66 @@ export async function processInboundMessage(
       ? (agentConfig.optOutKeywords as string[])
       : DEFAULT_OPT_OUT_KEYWORDS;
 
-    if (detectOptOut(input.message.text, optOutKeywords) || result.contact.optedOut) {
+    const l0 = classifyInboundL0(input.message.text);
+
+    if (await isIntelligenceFlagEnabled(input.organisationId, "messagingUnderstandingShadow")) {
+      await runUnderstandingShadow({
+        organisationId: input.organisationId,
+        text: input.message.text,
+      }).catch((error) => {
+        logger.warn("Understanding shadow failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }
+
+    if (await isIntelligenceFlagEnabled(input.organisationId, "messagingNbaShadow")) {
+      // Shadow only — never drive outbound sends from NBA.
+      void decideNextBestAction({
+        optedOut: l0.optedOut || result.contact.optedOut,
+        meetingIntent: l0.meetingIntent,
+        priceObjection: l0.objectionCategory === "PRICE",
+        objectionCategory: l0.objectionCategory,
+        qualificationStatus: result.lead.qualificationStatus,
+        qualified: result.lead.qualificationStatus === QualificationStatus.QUALIFIED,
+      });
+    }
+
+    if (l0.objectionCategory === "PRICE") {
+      await recordObjection({
+        organisationId: input.organisationId,
+        conversationId: result.conversation.id,
+        category: "PRICE",
+        evidenceMessageId: result.inboundMessage.id,
+        text: input.message.text.slice(0, 280),
+      }).catch((error) => {
+        logger.warn("Failed to record price objection", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }
+
+    if (l0.meetingIntent) {
+      await persistUnderstanding({
+        organisationId: input.organisationId,
+        conversationId: result.conversation.id,
+        understanding: l0,
+        evidenceMessageIds: [result.inboundMessage.id],
+      }).catch((error) => {
+        logger.warn("Failed to persist meeting understanding", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }
+
+    if (detectOptOut(input.message.text, optOutKeywords) || l0.optedOut || result.contact.optedOut) {
       if (!result.contact.optedOut) {
         await applyOptOut({
           organisationId: input.organisationId,
           contactId: result.contact.id,
           source: "inbound_keyword",
           reason: input.message.text.slice(0, 200),
+          conversationId: result.conversation.id,
         });
       } else {
         await cancelFollowUpsOnOptOut({
@@ -469,7 +682,7 @@ export async function processInboundMessage(
     const recentMessages = await prisma.message.findMany({
       where: { conversationId: result.conversation.id },
       orderBy: { sentAt: "asc" },
-      take: 30,
+      take: 20,
     });
 
     const transcript = recentMessages.map((m) => `${m.senderType}: ${m.body}`).join("\n");
@@ -913,25 +1126,26 @@ export async function processInboundMessage(
         }
       }
 
-      const adapter = getMessagingAdapter();
-      const sendResult = await adapter.sendMessage({
+      const sendResult = await prepareAndSendOutbound({
         organisationId: input.organisationId,
+        conversationId: result.conversation.id,
+        contactId: result.contact.id,
         contactExternalId: input.contact.externalId,
         text: reply,
+        source: "AI",
+        holder: `ai:${result.conversation.id}`,
+        idempotencyKey: `ai-reply:${result.inboundMessage.id}`,
         threadId: result.conversation.externalThreadId ?? undefined,
+        agentVersion: routed.model,
       });
 
-      if (sendResult.ok) {
-        const outboundAt = new Date();
-        const outbound = await prisma.message.create({
+      if (sendResult.ok && sendResult.dispatch?.messageId) {
+        outboundMessageId = sendResult.dispatch.messageId;
+        aiReplySent = true;
+
+        await prisma.message.update({
+          where: { id: sendResult.dispatch.messageId },
           data: {
-            conversationId: result.conversation.id,
-            organisationId: input.organisationId,
-            externalId: sendResult.externalMessageId,
-            direction: MessageDirection.OUTBOUND,
-            senderType: MessageSenderType.AI,
-            body: reply,
-            origin: provider,
             aiMetadata: {
               provider: routed.provider,
               model: routed.model,
@@ -943,40 +1157,38 @@ export async function processInboundMessage(
               knowledgeDocuments: knowledge.documentTitles,
               latencyMs: analysisLatencyMs,
             },
-            deliveryStatus: "sent",
           },
-        });
-        outboundMessageId = outbound.id;
-        aiReplySent = true;
-
-        await prisma.conversation.update({
-          where: { id: result.conversation.id },
-          data: {
-            lastMessageAt: outboundAt,
-            lastMessagePreview: reply.slice(0, 140),
-            lastOutboundAt: outboundAt,
-          },
-        });
+        }).catch(() => undefined);
 
         await recordUsage({
           organisationId: input.organisationId,
           feature: "ai_reply",
           provider: routed.provider,
-          metadata: { conversationId: result.conversation.id, messageId: outbound.id },
+          metadata: {
+            conversationId: result.conversation.id,
+            messageId: sendResult.dispatch.messageId,
+          },
         });
-      } else {
-        logger.error("Failed to send AI reply", { error: sendResult.error });
-        await prisma.conversation.update({
-          where: { id: result.conversation.id },
-          data: { needsHumanReview: true },
+      } else if (!sendResult.ok) {
+        logger.error("Failed to send AI reply", {
+          code: "code" in sendResult ? sendResult.code : "UNKNOWN",
         });
-        await notifyOrganisationOwners({
-          organisationId: input.organisationId,
-          type: NotificationType.AI_FAILURE,
-          title: "Message delivery failed",
-          body: sendResult.error || "Outbound send failed",
-          metadata: { conversationId: result.conversation.id },
-        });
+        if (sendResult.code !== "STALE_CONTEXT") {
+          await prisma.conversation.update({
+            where: { id: result.conversation.id },
+            data: { needsHumanReview: true },
+          });
+          await notifyOrganisationOwners({
+            organisationId: input.organisationId,
+            type: NotificationType.AI_FAILURE,
+            title: "Message delivery failed",
+            body:
+              typeof sendResult.code === "string"
+                ? sendResult.code
+                : "Outbound send failed",
+            metadata: { conversationId: result.conversation.id },
+          });
+        }
       }
 
       const delays = Array.isArray(agentConfig?.followUpDelaysMinutes)
@@ -990,6 +1202,16 @@ export async function processInboundMessage(
         leadId: result.lead.id,
         delaysMinutes: delays,
         maxFollowUps: agentConfig?.maxFollowUps ?? 3,
+        skipIfAutopilotDisabled: true,
+        policyInputs: {
+          intent: analysis.intent || l0.intent,
+          qualificationStatus: analysis.qualification_status || result.lead.qualificationStatus,
+          attemptNumber: 0,
+          maxAttempts: agentConfig?.maxFollowUps ?? 3,
+          meetingBooked: analysis.recommended_next_action === "send_booking_link",
+          optedOut: false,
+          lastInboundAt: result.conversation.lastInboundAt,
+        },
       });
       }
     } else {

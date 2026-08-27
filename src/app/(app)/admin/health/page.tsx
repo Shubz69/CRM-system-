@@ -26,7 +26,7 @@ export default async function AdminHealthPage() {
   try {
     await requirePlatformAccess();
   } catch {
-    redirect("/dashboard");
+    redirect("/home");
   }
 
   const env = getEnv();

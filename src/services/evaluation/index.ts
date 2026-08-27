@@ -47,8 +47,23 @@ export {
   getLatestVersionSnapshot,
   transitionRolloutState,
   shouldAutoPromoteFromSingleRun,
+  shouldPromoteEligibility,
+  shouldPromoteEligibility as evaluatePromotionEligibility,
+  DEFAULT_PROMOTE_ELIGIBILITY,
   type VersionArtifactRef,
+  type PromoteEligibilityConfig,
+  type PromoteEligibilityInput,
+  type PromoteEligibilityResult,
 } from "@/services/evaluation/canary";
+
+export {
+  proposeConfigUpdate,
+  applyPromotedConfig,
+  isControlledLearningKind,
+  CONTROLLED_LEARNING_KINDS,
+  type ControlledLearningKind,
+  type ProposeConfigUpdateInput,
+} from "@/services/evaluation/controlled-learning";
 
 export {
   recordConfidenceCalibrationSample,
@@ -76,10 +91,35 @@ import {
   SIGNAL_USER_PREFERENCE,
 } from "@/services/evaluation/types";
 
+export type DeterministicEvalSuiteResult = {
+  maturity: "WORKING";
+  signalKindsDocumented: readonly [
+    typeof SIGNAL_USER_PREFERENCE,
+    typeof SIGNAL_EMPIRICAL_PERFORMANCE,
+  ];
+  caseCount: number;
+  passed: boolean;
+  cases: Array<{
+    id: string;
+    name: string;
+    signalKind: string;
+    scorer: ReturnType<typeof runScorer>;
+    passed: boolean;
+  }>;
+  learningSafety: ReturnType<typeof getLearningSafetyPolicy>;
+  message: string;
+  suiteKey: string;
+};
+
 /**
  * Run deterministic fixture suite (evaluate step before shadow/canary).
+ * When organisationId is provided, emits EVALUATION_COMPLETED via outbox.
  */
-export function runDeterministicEvalSuite(options?: { caseIds?: string[] }) {
+export async function runDeterministicEvalSuite(options?: {
+  caseIds?: string[];
+  organisationId?: string;
+}): Promise<DeterministicEvalSuiteResult> {
+  const suiteKey = "deterministic_builtin_v1";
   const fixtures = listBuiltinEvalFixtures().filter((c) =>
     options?.caseIds ? options.caseIds.includes(c.id) : true,
   );
@@ -95,7 +135,7 @@ export function runDeterministicEvalSuite(options?: { caseIds?: string[] }) {
     };
   });
   const passed = cases.every((c) => c.passed);
-  return {
+  const result: DeterministicEvalSuiteResult = {
     maturity: "WORKING" as const,
     signalKindsDocumented: [
       SIGNAL_USER_PREFERENCE,
@@ -108,12 +148,36 @@ export function runDeterministicEvalSuite(options?: { caseIds?: string[] }) {
     message: passed
       ? `All ${cases.length} deterministic cases passed.`
       : `${cases.filter((c) => !c.passed).length} case(s) failed.`,
+    suiteKey,
   };
+
+  if (options?.organisationId) {
+    const { prisma } = await import("@/lib/db");
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    const evalRunId = `det_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    await prisma.$transaction(async (tx) => {
+      await appendDomainEvent(tx, {
+        organisationId: options.organisationId!,
+        eventType: "EVALUATION_COMPLETED",
+        aggregateType: "EvalSuite",
+        aggregateId: suiteKey,
+        payload: {
+          evalRunId,
+          suiteKey,
+          caseCount: result.caseCount,
+          passed: result.passed,
+        },
+        dedupeKey: `EVALUATION_COMPLETED:${options.organisationId}:${evalRunId}`,
+      });
+    });
+  }
+
+  return result;
 }
 
 /** Convenience: evaluate then shadow (still no external actions). */
-export function evaluateThenShadow(candidateKey: string) {
-  const evalResult = runDeterministicEvalSuite();
+export async function evaluateThenShadow(candidateKey: string) {
+  const evalResult = await runDeterministicEvalSuite();
   const shadow = runShadowEvaluation({ candidateKey });
   return {
     evaluate: evalResult,

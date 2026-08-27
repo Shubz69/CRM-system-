@@ -12,6 +12,12 @@ export {
 } from "@/services/enterprise-ops/slo";
 
 export {
+  PRODUCTION_HEALTH_MATURITY,
+  getProductionHealth,
+  type ProductionHealth,
+} from "@/services/enterprise-ops/health";
+
+export {
   COST_ATTRIBUTIONS,
   CostOutcomeHonestyError,
   isCostAttribution,
@@ -45,10 +51,16 @@ export {
 
 export {
   SSO_SCIM_MATURITY,
+  SSO_POLICY_PREFERENCE_KEY,
+  DEFAULT_SSO_POLICY,
   getSsoScimReadiness,
   isSsoLive,
   isScimLive,
+  assertMfaPolicy,
+  parseOrganisationSsoPolicy,
+  MfaPolicyError,
   type SsoScimReadiness,
+  type OrganisationSsoPolicy,
 } from "@/services/enterprise-ops/sso-scim";
 
 import { peekSloIndicators } from "@/services/enterprise-ops/slo";
@@ -56,14 +68,16 @@ import { getCostOutcomePolicy } from "@/services/enterprise-ops/cost-outcomes";
 import { getRbacMatrixDocumentation } from "@/services/enterprise-ops/rbac-matrix";
 import { listRetentionPolicies } from "@/services/enterprise-ops/retention";
 import { getSsoScimReadiness } from "@/services/enterprise-ops/sso-scim";
+import { getProductionHealth } from "@/services/enterprise-ops/health";
 
 /**
  * Compact enterprise ops panel for AI Ops admin — real counts only, no fake charts.
  */
 export async function getEnterpriseOpsPanel(organisationId?: string | null) {
-  const [slo, sso] = await Promise.all([
+  const [slo, sso, productionHealth] = await Promise.all([
     peekSloIndicators(organisationId),
     Promise.resolve(getSsoScimReadiness()),
+    getProductionHealth().catch(() => null),
   ]);
 
   return {
@@ -91,5 +105,6 @@ export async function getEnterpriseOpsPanel(organisationId?: string | null) {
       liveProvidersConfigured: sso.liveProvidersConfigured,
       message: sso.message,
     },
+    productionHealth,
   };
 }

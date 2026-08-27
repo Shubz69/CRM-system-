@@ -2,7 +2,8 @@
  * Phase 16 — Continuous Intelligence / Prediction Lab
  *
  * Maturity:
- * - Time-series collection + lifecycle rules: WORKING
+ * - Time-series collection + Postgres sweep + lifecycle rules: WORKING
+ * - Prediction Lab create/score path: WORKING
  * - Prediction accuracy / calibration: FOUNDATION (transparent bands; no invented hit rates)
  */
 
@@ -10,6 +11,7 @@ export {
   appendMetricHistory,
   recordContinuousCollectionRun,
   runContinuousCollectionPass,
+  sweepContinuousIntelligence,
   type CollectionRunInput,
   type MetricObservation,
 } from "@/services/continuous-intelligence/collection";
@@ -32,6 +34,7 @@ export {
 } from "@/services/continuous-intelligence/normalisation";
 
 export {
+  attachActualOutcome,
   createIntelligencePrediction,
   deriveConfidenceBand,
   getPrediction,

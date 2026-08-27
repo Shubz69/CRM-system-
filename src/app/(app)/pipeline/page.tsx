@@ -113,7 +113,7 @@ export default function PipelinePage() {
         <EmptyState
           title="Your pipeline is ready — it just needs conversations"
           body="Leads show up here when people message you and the AI qualifies them. Connect Instagram or send a test DM to see the first card appear."
-          actionHref="/ask"
+          actionHref="/home"
           actionLabel="Go to Home"
         />
       )}
