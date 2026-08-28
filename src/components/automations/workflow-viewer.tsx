@@ -17,6 +17,17 @@ const KIND_ACCENT: Record<string, string> = {
   outcome: "border-[var(--border)] bg-[var(--surface)]",
 };
 
+const KIND_LABEL: Record<string, string> = {
+  trigger: "When",
+  wait: "Wait",
+  delay: "Wait",
+  condition: "If",
+  logic: "Then",
+  action: "Then",
+  approval: "Safety",
+  outcome: "Result",
+};
+
 /**
  * Read-only visual workflow — shows compiled steps. Not a drag-drop builder.
  */
@@ -45,8 +56,8 @@ export function WorkflowViewer({
               }`}
             >
               <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
-                {index + 1}. {step.kind}
-                {step.gated ? " · gated" : ""}
+                {KIND_LABEL[step.kind] ?? "Step"}
+                {step.gated ? " · needs approval" : ""}
               </p>
               <p className="mt-0.5 font-medium leading-snug text-[var(--foreground)]">{step.label}</p>
               {step.detail ? (

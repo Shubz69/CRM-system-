@@ -36,7 +36,7 @@ export type BriefingItem = {
  */
 export async function getChiefOfStaffBriefing(organisationId: string): Promise<{
   items: BriefingItem[];
-  nextActions: Array<{ label: string; href: string }>;
+  nextActions: Array<{ label: string; href: string; detail?: string }>;
   setupNeeded: boolean;
 }> {
   const [
@@ -77,7 +77,7 @@ export async function getChiefOfStaffBriefing(organisationId: string): Promise<{
     items.push({
       id: "handoffs",
       kind: "inbox",
-      title: `${handoffCount} conversation${handoffCount === 1 ? "" : "s"} need a human`,
+      title: `${handoffCount} conversation${handoffCount === 1 ? "" : "s"} need${handoffCount === 1 ? "s" : ""} a human`,
       detail: "Handoffs and review flags from live inbox data",
       href: "/attention",
       severity: "high",
@@ -125,16 +125,46 @@ export async function getChiefOfStaffBriefing(organisationId: string): Promise<{
   }
 
   const setupNeeded = !agentConfig;
-  const nextActions: Array<{ label: string; href: string }> = [];
+  const nextActions: Array<{ label: string; href: string; detail?: string }> = [];
   if (setupNeeded) {
-    nextActions.push({ label: "Configure workspace with Setup Assistant", href: "/setup" });
+    nextActions.push({
+      label: "Configure workspace with Setup Assistant",
+      href: "/setup",
+      detail: "Agent reply settings are not active yet — finish setup before going live.",
+    });
   }
   if (handoffCount > 0) {
-    nextActions.push({ label: "Open inbox handoffs", href: "/inbox" });
+    nextActions.push({
+      label: "Open inbox handoffs",
+      href: "/inbox",
+      detail: `${handoffCount} conversation${handoffCount === 1 ? "" : "s"} waiting for a person — reply or reassign now.`,
+    });
   }
-  nextActions.push({ label: "Go-live checklist", href: "/settings/go-live" });
+  if (hotLeadCount > 0 && nextActions.length < 3) {
+    nextActions.push({
+      label: "Review hot leads",
+      href: "/pipeline",
+      detail: `${hotLeadCount} lead${hotLeadCount === 1 ? "" : "s"} scored 70+ — prioritise follow-up while interest is high.`,
+    });
+  }
+  if (pendingApprovals > 0 && nextActions.length < 3) {
+    nextActions.push({
+      label: "Clear pending approvals",
+      href: "/automations",
+      detail: `${pendingApprovals} item${pendingApprovals === 1 ? "" : "s"} blocked on your decision.`,
+    });
+  }
+  nextActions.push({
+    label: "Go-live checklist",
+    href: "/settings/go-live",
+    detail: "Confirm channels, safety rules, and publish gates before customer traffic.",
+  });
   if (nextActions.length < 3) {
-    nextActions.push({ label: "Review needs attention", href: "/attention" });
+    nextActions.push({
+      label: "Review needs attention",
+      href: "/attention",
+      detail: "Scan the attention queue for anything that slipped past today’s briefing.",
+    });
   }
 
   return {

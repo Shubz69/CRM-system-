@@ -123,20 +123,61 @@ export default function SettingsPage() {
         }
       />
 
-      <nav className="filter-bar" aria-label="Settings categories">
-        {[
-          ["workspace", "Workspace"],
-          ["ai", "AI behaviour"],
-          ["messaging", "Messaging"],
-          ["team", "Team"],
-          ["security", "Security"],
-          ["advanced", "Advanced"],
-        ].map(([id, label]) => (
-          <a key={id} href={`#settings-${id}`} className="badge hover:badge-success">
-            {label}
-          </a>
-        ))}
-      </nav>
+      <div className="flex flex-col gap-6 lg:flex-row">
+        <nav
+          className="hidden w-48 shrink-0 space-y-1 lg:block"
+          aria-label="Settings categories"
+        >
+          {[
+            ["workspace", "Workspace"],
+            ["team", "Team"],
+            ["ai", "AI behaviour"],
+            ["messaging", "Messaging"],
+            ["qualification", "Qualification"],
+            ["brand", "Brand & policies"],
+            ["notifications", "Notifications"],
+            ["security", "Security"],
+            ["advanced", "Advanced"],
+          ].map(([id, label]) => (
+            <a
+              key={id}
+              href={`#settings-${id}`}
+              className="block rounded-lg px-3 py-2 text-sm text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1 space-y-6">
+          <label className="block lg:hidden">
+            <span className="sr-only">Settings section</span>
+            <select
+              className="input w-full"
+              aria-label="Settings section"
+              defaultValue="workspace"
+              onChange={(e) => {
+                const el = document.getElementById(`settings-${e.target.value}`);
+                el?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
+              {[
+                ["workspace", "Workspace"],
+                ["team", "Team"],
+                ["ai", "AI behaviour"],
+                ["messaging", "Messaging"],
+                ["qualification", "Qualification"],
+                ["brand", "Brand & policies"],
+                ["notifications", "Notifications"],
+                ["security", "Security"],
+                ["advanced", "Advanced"],
+              ].map(([id, label]) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
 
       <section id="settings-workspace" className="surface scroll-mt-24 p-5">
         <h2 className="section-title">Workspace</h2>
@@ -152,6 +193,21 @@ export default function SettingsPage() {
         </dl>
       </section>
 
+      <section id="settings-team" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Team</h2>
+        <ul className="mt-3 space-y-2 text-sm">
+          {members.map((m) => (
+            <li key={m.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-2">
+              <span>
+                {m.user.name || m.user.email}
+                <span className="block text-xs text-[var(--muted)]">{m.user.email}</span>
+              </span>
+              <span className="badge">{m.role}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <section id="settings-ai" className="surface scroll-mt-24 p-5">
         <h2 className="section-title">AI behaviour</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
@@ -165,9 +221,6 @@ export default function SettingsPage() {
           <Link href="/agent" className="btn btn-secondary">
             Tone & goals
           </Link>
-          <Link href="/qualification" className="btn btn-secondary">
-            Qualification
-          </Link>
           <Link href="/setup" className="btn btn-secondary">
             Setup Assistant
           </Link>
@@ -175,7 +228,7 @@ export default function SettingsPage() {
       </section>
 
       <section id="settings-messaging" className="surface scroll-mt-24 p-5">
-        <h2 className="section-title">Messaging & connections</h2>
+        <h2 className="section-title">Messaging</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
@@ -259,19 +312,41 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section id="settings-team" className="surface scroll-mt-24 p-5">
-        <h2 className="section-title">Team</h2>
-        <ul className="mt-3 space-y-2 text-sm">
-          {members.map((m) => (
-            <li key={m.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-2">
-              <span>
-                {m.user.name || m.user.email}
-                <span className="block text-xs text-[var(--muted)]">{m.user.email}</span>
-              </span>
-              <span className="badge">{m.role}</span>
-            </li>
-          ))}
-        </ul>
+      <section id="settings-qualification" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Qualification</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Score thresholds, fit criteria, and when to hand off a lead.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Link href="/qualification" className="btn btn-secondary">
+            Qualification rules
+          </Link>
+        </div>
+      </section>
+
+      <section id="settings-brand" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Brand & policies</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Tone of voice, pricing, and policy documents that guide AI replies.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Link href="/knowledge" className="btn btn-secondary">
+            Knowledge library
+          </Link>
+          <Link href="/business-context" className="btn btn-secondary">
+            Business profile
+          </Link>
+        </div>
+      </section>
+
+      <section id="settings-notifications" className="surface scroll-mt-24 p-5">
+        <h2 className="section-title">Notifications</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Alerts for handoffs, approvals, and publish confirmation stay in the header notification menu.
+        </p>
+        <p className="mt-3 text-sm text-[var(--muted)]">
+          Email delivery depends on SMTP being connected above.
+        </p>
       </section>
 
       <section id="settings-security" className="surface scroll-mt-24 p-5">
@@ -285,7 +360,7 @@ export default function SettingsPage() {
 
       <section id="settings-advanced" className="surface scroll-mt-24 p-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="section-title">Advanced · Instagram channel</h2>
+          <h2 className="section-title">Advanced</h2>
           <button
             type="button"
             className="text-sm text-[var(--accent)] hover:underline"
@@ -294,12 +369,13 @@ export default function SettingsPage() {
             {showAdvanced ? "Hide" : "Show"}
           </button>
         </div>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Channel identifiers and engineering controls. Platform-level shadow flags live under Admin, not here.
+        </p>
         {(showAdvanced || channels.length > 0) && (
           <>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Paste the Instagram channel identifier from your ManyChat connection wizard.
-            </p>
-            <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-3">
+            <p className="mt-3 text-sm font-medium">Instagram channel</p>
+            <form onSubmit={saveChannel} className="mt-2 grid gap-3 md:grid-cols-3">
               <label className="text-sm font-medium">
                 Channel ID
                 <input
@@ -358,6 +434,8 @@ export default function SettingsPage() {
           </div>
         </section>
       )}
+        </div>
+      </div>
     </div>
   );
 }

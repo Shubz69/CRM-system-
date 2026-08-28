@@ -2,7 +2,7 @@
 -- Runs after the initial schema migration on an empty database.
 
 -- ---------------------------------------------------------------------------
--- AuditLog.scope ↔ organisationId invariant
+-- AuditLog.scope <-> organisationId invariant
 -- ORG requires organisationId; PLATFORM requires organisationId IS NULL
 -- ---------------------------------------------------------------------------
 ALTER TABLE "AuditLog" DROP CONSTRAINT IF EXISTS "AuditLog_scope_organisation_check";

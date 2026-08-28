@@ -25,7 +25,7 @@ type Opp = {
 function impactWhy(impact: string, urgency: string): string {
   const bits: string[] = [];
   if (urgency && urgency !== "LOW") bits.push(`Urgency: ${statusLabel(urgency).toLowerCase()}`);
-  if (impact) bits.push(`Expected direction: ${statusLabel(impact).toLowerCase()}`);
+  if (impact) bits.push(`Impact: ${statusLabel(impact).toLowerCase()}`);
   return bits.join(" · ") || "Review when you have capacity.";
 }
 
@@ -101,15 +101,43 @@ export default function OpportunitiesPage() {
       {loading ? (
         <PageLoading label="Loading opportunities" />
       ) : opportunities.length === 0 ? (
-        <EmptyState
-          title="No opportunities yet"
-          body="When Agent Desk spots reactivation, pipeline, or market moves worth your time, they appear here with evidence."
-          actions={[
-            { href: "/crm", label: "Open CRM", primary: true },
-            { href: "/research", label: "Start research" },
-            { href: "/growth", label: "Growth overview" },
-          ]}
-        />
+        <div className="space-y-4">
+          <EmptyState
+            title="No opportunities detected yet"
+            body="Agent Desk watches for stalled qualified leads, pipeline risk, audience demand, market changes, and content opportunities."
+            actions={[
+              { href: "/crm", label: "Open CRM" },
+              { href: "/research", label: "Start research" },
+            ]}
+          />
+          <div className="surface-muted max-w-xl p-5 text-sm">
+            <p className="font-medium">How it works</p>
+            <p className="mt-1 text-[var(--muted)]">
+              Signal → Evidence → Opportunity → You decide
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary mt-4"
+              onClick={async () => {
+                try {
+                  const res = await fetch("/api/opportunities", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "run_detectors" }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json.error || "Scan failed");
+                  toast.success("Scan complete");
+                  await load();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Failed");
+                }
+              }}
+            >
+              Scan now
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="space-y-4">
           {opportunities.map((o) => (

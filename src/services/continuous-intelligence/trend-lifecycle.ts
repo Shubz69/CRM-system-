@@ -1,7 +1,7 @@
 /**
  * Deterministic trend lifecycle from observable history only.
- * Maps product language → Prisma TrendLifecycleState:
- *   BREAKING_OUT → BREAKOUT, MATURE → MAINSTREAM, SATURATING → SATURATED
+ * Maps product language -> Prisma TrendLifecycleState:
+ *   BREAKING_OUT -> BREAKOUT, MATURE -> MAINSTREAM, SATURATING -> SATURATED
  * Never LLM-assigns lifecycle.
  */
 
@@ -39,7 +39,7 @@ export type LifecycleDerivation = {
   };
 };
 
-/** Prisma enum → product label (BREAKOUT→BREAKING_OUT etc.). */
+/** Prisma enum -> product label (BREAKOUT->BREAKING_OUT etc.). */
 export function lifecycleStateToLabel(
   state: TrendLifecycleState,
 ): LifecycleDerivation["label"] {
@@ -71,7 +71,7 @@ function sortPoints(points: LifecycleHistoryPoint[]): LifecycleHistoryPoint[] {
 
 /**
  * Derive lifecycle solely from an ordered feature/time-series history.
- * Sparse history → EMERGING (honest under-confidence, not invention).
+ * Sparse history -> EMERGING (honest under-confidence, not invention).
  */
 export function deriveLifecycleFromHistory(
   points: LifecycleHistoryPoint[],
@@ -135,16 +135,16 @@ export function deriveLifecycleFromHistory(
     (velocityDelta == null || velocityDelta > 0)
   ) {
     state = TrendLifecycleState.RECURRING;
-    rationale.push("Prior DECLINING with recovering velocity/acceleration → RECURRING");
+    rationale.push("Prior DECLINING with recovering velocity/acceleration -> RECURRING");
   } else if (
     (acceleration < -0.3 && velocity < 0.2) ||
     (seriesSlope != null && seriesSlope < -0.4 && velocity < 0.4)
   ) {
     state = TrendLifecycleState.DECLINING;
-    rationale.push("Negative acceleration / declining series slope → DECLINING");
+    rationale.push("Negative acceleration / declining series slope -> DECLINING");
   } else if (mentionCount >= 20 && crossPlatformCount >= 3 && velocity < 0.5) {
     state = TrendLifecycleState.SATURATED;
-    rationale.push("High mentions + multi-platform + low velocity → SATURATED (SATURATING)");
+    rationale.push("High mentions + multi-platform + low velocity -> SATURATED (SATURATING)");
   } else if (
     mentionCount >= 12 &&
     crossPlatformCount >= 2 &&
@@ -152,16 +152,16 @@ export function deriveLifecycleFromHistory(
     (acceleration > 0 || (velocityDelta != null && velocityDelta > 0))
   ) {
     state = TrendLifecycleState.BREAKOUT;
-    rationale.push("High velocity + multi-platform growth → BREAKOUT (BREAKING_OUT)");
+    rationale.push("High velocity + multi-platform growth -> BREAKOUT (BREAKING_OUT)");
   } else if (mentionCount >= 8 && velocity >= 0.5 && (acceleration >= 0 || (velocityDelta != null && velocityDelta > 0))) {
     state = TrendLifecycleState.ACCELERATING;
-    rationale.push("Rising velocity with solid mentions → ACCELERATING");
+    rationale.push("Rising velocity with solid mentions -> ACCELERATING");
   } else if (mentionCount >= 15 && velocity >= 0.2 && velocity < 0.8) {
     state = TrendLifecycleState.MAINSTREAM;
-    rationale.push("Stable mid velocity + broad mentions → MAINSTREAM (MATURE)");
+    rationale.push("Stable mid velocity + broad mentions -> MAINSTREAM (MATURE)");
   } else {
     state = TrendLifecycleState.EMERGING;
-    rationale.push("Does not meet later-stage thresholds → EMERGING");
+    rationale.push("Does not meet later-stage thresholds -> EMERGING");
   }
 
   return {

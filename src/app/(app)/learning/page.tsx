@@ -1,8 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+
+type CreativePattern = {
+  id: string;
+  label: string;
+  sampleSize: number;
+  maturity: string;
+  maturityLabel: string;
+  showAsRecommendation: boolean;
+};
 
 type FeedbackSummary = { total: number; bySignal: Record<string, number> };
 
@@ -11,7 +22,6 @@ type Experiment = {
   name: string;
   hypothesis: string;
   status: string;
-  primaryMetric: string;
   resultSummary: {
     sampleSize?: number;
     winnerKey?: string | null;
@@ -19,388 +29,216 @@ type Experiment = {
   } | null;
 };
 
-type Candidate = {
-  id: string;
-  label: string;
-  status: string;
-  evalSummary: { passed?: boolean; message?: string; caseCount?: number } | null;
+const MATURITY_COPY: Record<string, string> = {
+  INSUFFICIENT_DATA: "Not enough data",
+  EARLY: "Early signal",
+  SUPPORTED: "Supported pattern",
+  STRONG: "Strong pattern",
 };
 
-type EvalRun = {
-  id: string;
-  suiteKey: string;
-  status: string;
-  passed: boolean | null;
-  createdAt: string;
-};
+function maturityLabel(maturity: string, fallback: string) {
+  return MATURITY_COPY[maturity] ?? fallback;
+}
 
-type Backtest = {
-  sampleSize: number;
-  brierScore: number | null;
-  accuracy: number | null;
-  message: string;
-};
-
+/**
+ * Customer Analytics → Learning: business insights only.
+ * Engineering eval / candidates / calibration live under Admin → Learning Lab.
+ */
 export default function LearningPage() {
   const [feedback, setFeedback] = useState<FeedbackSummary>({ total: 0, bySignal: {} });
+  const [patterns, setPatterns] = useState<CreativePattern[]>([]);
   const [experiments, setExperiments] = useState<Experiment[]>([]);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [recentEvals, setRecentEvals] = useState<EvalRun[]>([]);
-  const [backtest, setBacktest] = useState<Backtest | null>(null);
-  const [expName, setExpName] = useState("");
-  const [expHypothesis, setExpHypothesis] = useState("");
-  const [candidateLabel, setCandidateLabel] = useState("");
-  const [candidatePrompt, setCandidatePrompt] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/learning");
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed to load learning dashboard");
+    if (!res.ok) throw new Error(json.error || "Failed to load learning");
     setFeedback(json.feedback ?? { total: 0, bySignal: {} });
+    setPatterns(json.creativePatterns ?? []);
     setExperiments(json.experiments ?? []);
-    setCandidates(json.candidates ?? []);
-    setRecentEvals(json.recentEvals ?? []);
-    setBacktest(json.forecastBacktest ?? null);
   }, []);
 
   useEffect(() => {
-    load().catch((e) => toast.error(e.message));
+    setLoading(true);
+    load()
+      .catch((e) => toast.error(e.message))
+      .finally(() => setLoading(false));
   }, [load]);
 
+  const changing = useMemo(
+    () => patterns.filter((p) => p.maturity === "EARLY" || p.maturity === "SUPPORTED"),
+    [patterns],
+  );
+  const working = useMemo(
+    () => patterns.filter((p) => p.showAsRecommendation || p.maturity === "STRONG"),
+    [patterns],
+  );
+  const needsData = useMemo(
+    () => patterns.filter((p) => p.maturity === "INSUFFICIENT_DATA"),
+    [patterns],
+  );
+  const corrections = useMemo(() => {
+    const signals = Object.entries(feedback.bySignal);
+    return signals.map(([signal, count]) => ({
+      signal,
+      count,
+      copy:
+        signal === "APPROVE" || signal === "THUMBS_UP"
+          ? "You approved recommendations — Agent Desk keeps those approaches in mind."
+          : signal === "DISMISS" || signal === "THUMBS_DOWN"
+            ? "You dismissed recommendations — those paths are deprioritised."
+            : `${signal.replace(/_/g, " ").toLowerCase()} · ${count}`,
+    }));
+  }, [feedback]);
+
+  const completedExperiments = experiments.filter(
+    (ex) => ex.status === "COMPLETED" || ex.resultSummary?.message,
+  );
+
   return (
-    <div className="space-y-8">
-      <PageHeader
-        description="What Agent Desk is learning about your business — only patterns with enough evidence."
-        actions={
-          <button
-            className="btn btn-secondary"
-            type="button"
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/learning/evals", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: "{}",
-                });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error || "Check failed");
-                toast.success(
-                  json.evalRun?.passed
-                    ? "Quality checks passed"
-                    : "Quality checks found issues — see recent runs",
-                );
-                await load();
-              } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Check failed");
-              }
-            }}
-          >
-            Run quality checks
-          </button>
-        }
-      />
+    <div className="mx-auto max-w-4xl space-y-8">
+      <PageHeader description="What is changing in your market and messaging — only patterns with enough evidence." />
 
-      <section className="grid gap-4 md:grid-cols-2">
-        <article className="surface p-4 space-y-2">
-          <h2 className="text-lg font-semibold">Recommendation feedback</h2>
+      {loading ? (
+        <div className="surface-muted p-6 text-sm text-[var(--muted)]">Loading learning…</div>
+      ) : null}
+
+      <section className="space-y-3">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+          What is changing
+        </h2>
+        {changing.length === 0 ? (
+          <div className="surface-insight p-5">
+            <p className="font-medium">No early shifts yet</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              As conversations and content accumulate, Agent Desk will surface emerging themes here —
+              for example price objections becoming more common, or reply speed correlating with
+              progress.
+            </p>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {changing.map((p) => (
+              <li key={p.id} className="surface-insight flex flex-wrap items-start gap-3 p-4">
+                <span className="badge badge-warn">{maturityLabel(p.maturity, p.maturityLabel)}</span>
+                <p className="min-w-0 flex-1 text-sm font-medium leading-relaxed">{p.label}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+          What seems to work
+        </h2>
+        {working.length === 0 ? (
+          <div className="surface p-5">
+            <p className="font-medium">Not enough supported patterns yet</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Qualified leads that receive a reply within a few hours often progress more often —
+              Agent Desk will confirm patterns like this once sample size is reliable.
+            </p>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {working.map((p) => (
+              <li key={p.id} className="surface-primary flex flex-wrap items-start gap-3 p-4">
+                <span className="badge badge-success">
+                  {maturityLabel(p.maturity, p.maturityLabel)}
+                </span>
+                <p className="min-w-0 flex-1 text-sm font-medium leading-relaxed">{p.label}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+          What needs more data
+        </h2>
+        {needsData.length === 0 && patterns.length === 0 ? (
+          <div className="surface-muted p-5">
+            <p className="font-medium">Not enough content or conversations yet</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Publish more content or keep messaging active so Agent Desk can identify reliable
+              patterns.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link href="/content" className="btn btn-secondary">
+                Open Content
+              </Link>
+              <Link href="/inbox" className="btn btn-secondary">
+                Open Inbox
+              </Link>
+            </div>
+          </div>
+        ) : needsData.length === 0 ? (
+          <p className="text-sm text-[var(--muted)]">No thin samples waiting on more evidence.</p>
+        ) : (
+          <ul className="space-y-2">
+            {needsData.map((p) => (
+              <li key={p.id} className="surface-muted flex flex-wrap items-start gap-3 p-4">
+                <span className="badge">Not enough data</span>
+                <p className="min-w-0 flex-1 text-sm text-[var(--muted)]">{p.label}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+          Recent corrections
+        </h2>
+        {corrections.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">
-            Explicit signals only ({feedback.total} total). Approve/dismiss on Knowledge records feedback.
+            No explicit feedback yet. Approving or dismissing recommendations in Knowledge records
+            corrections here.
           </p>
-          {feedback.total === 0 ? (
-            <p className="text-sm text-[var(--muted)]">No feedback yet.</p>
-          ) : (
-            <ul className="text-sm space-y-1">
-              {Object.entries(feedback.bySignal).map(([signal, count]) => (
-                <li key={signal}>
-                  <span className="badge mr-2">{signal}</span>
-                  {count}
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-
-        <article className="surface p-4 space-y-2">
-          <h2 className="text-lg font-semibold">Forecast backtest</h2>
-          {backtest ? (
-            <>
-              <p className="text-sm text-[var(--muted)]">{backtest.message}</p>
-              <dl className="grid grid-cols-3 gap-2 text-sm">
-                <div>
-                  <dt className="text-[var(--muted)]">Samples</dt>
-                  <dd className="font-medium">{backtest.sampleSize}</dd>
-                </div>
-                <div>
-                  <dt className="text-[var(--muted)]">Brier</dt>
-                  <dd className="font-medium">
-                    {backtest.brierScore == null ? "—" : backtest.brierScore.toFixed(3)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[var(--muted)]">Accuracy</dt>
-                  <dd className="font-medium">
-                    {backtest.accuracy == null ? "—" : `${(backtest.accuracy * 100).toFixed(0)}%`}
-                  </dd>
-                </div>
-              </dl>
-            </>
-          ) : (
-            <p className="text-sm text-[var(--muted)]">Backtest unavailable.</p>
-          )}
-        </article>
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="h-display text-2xl">Experiments</h2>
-        <form
-          className="surface p-4 grid gap-3 md:grid-cols-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              const res = await fetch("/api/learning/experiments", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  name: expName,
-                  hypothesis: expHypothesis,
-                  primaryMetric: "conversion_rate",
-                  variants: [
-                    { key: "control", label: "Control" },
-                    { key: "treatment", label: "Treatment" },
-                  ],
-                }),
-              });
-              const json = await res.json();
-              if (!res.ok) throw new Error(json.error || "Create failed");
-              toast.success("Experiment created (draft)");
-              setExpName("");
-              setExpHypothesis("");
-              await load();
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Failed");
-            }
-          }}
-        >
-          <label className="text-sm font-medium">
-            Name
-            <input
-              className="input mt-1"
-              value={expName}
-              onChange={(e) => setExpName(e.target.value)}
-              required
-            />
-          </label>
-          <label className="text-sm font-medium md:col-span-2">
-            Hypothesis
-            <input
-              className="input mt-1"
-              value={expHypothesis}
-              onChange={(e) => setExpHypothesis(e.target.value)}
-              required
-            />
-          </label>
-          <button className="btn btn-secondary" type="submit">
-            Create draft experiment
-          </button>
-        </form>
-        {experiments.length === 0 && (
-          <p className="text-sm text-[var(--muted)]">No experiments yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {corrections.map((c) => (
+              <li key={c.signal} className="surface flex items-center justify-between gap-3 p-4 text-sm">
+                <span>{c.copy}</span>
+                <span className="badge">{c.count}</span>
+              </li>
+            ))}
+          </ul>
         )}
-        {experiments.map((ex) => (
-          <article key={ex.id} className="surface p-4 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="badge">{ex.status}</span>
-              <p className="font-medium">{ex.name}</p>
-            </div>
-            <p className="text-sm text-[var(--muted)]">{ex.hypothesis}</p>
-            <p className="text-xs text-[var(--muted)]">Metric: {ex.primaryMetric}</p>
-            {ex.resultSummary && (
-              <p className="text-sm">
-                {ex.resultSummary.message}
-                {ex.resultSummary.sampleSize
-                  ? ` · samples ${ex.resultSummary.sampleSize}`
-                  : ""}
-                {ex.resultSummary.winnerKey ? ` · winner ${ex.resultSummary.winnerKey}` : ""}
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {ex.status === "DRAFT" && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    const res = await fetch("/api/learning/experiments", {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: "start", id: ex.id }),
-                    });
-                    if (!res.ok) {
-                      toast.error("Start failed");
-                      return;
-                    }
-                    toast.success("Experiment running");
-                    await load();
-                  }}
-                >
-                  Start
-                </button>
-              )}
-              {ex.status === "RUNNING" && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    const res = await fetch("/api/learning/experiments", {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        action: "complete",
-                        id: ex.id,
-                        sampleSize: 0,
-                      }),
-                    });
-                    if (!res.ok) {
-                      toast.error("Complete failed");
-                      return;
-                    }
-                    toast.success("Completed with null metrics (no samples)");
-                    await load();
-                  }}
-                >
-                  Complete (no samples)
-                </button>
-              )}
-            </div>
-          </article>
-        ))}
       </section>
 
-      <section className="space-y-3">
-        <h2 className="h-display text-2xl">Agent version candidates</h2>
-        <p className="text-sm text-[var(--muted)]">
-          Promotion requires a passing eval suite. Failing tests are never skipped.
-        </p>
-        <form
-          className="surface p-4 grid gap-3"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              const res = await fetch("/api/learning/agent-versions", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  label: candidateLabel,
-                  configSnapshot: { systemPromptExtra: candidatePrompt },
-                }),
-              });
-              const json = await res.json();
-              if (!res.ok) throw new Error(json.error || "Create failed");
-              toast.success("Candidate created");
-              setCandidateLabel("");
-              setCandidatePrompt("");
-              await load();
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Failed");
-            }
-          }}
-        >
-          <label className="text-sm font-medium">
-            Label
-            <input
-              className="input mt-1"
-              value={candidateLabel}
-              onChange={(e) => setCandidateLabel(e.target.value)}
-              required
-            />
-          </label>
-          <label className="text-sm font-medium">
-            Candidate system prompt extra
-            <textarea
-              className="input mt-1 min-h-[80px]"
-              value={candidatePrompt}
-              onChange={(e) => setCandidatePrompt(e.target.value)}
-            />
-          </label>
-          <button className="btn btn-secondary w-fit" type="submit">
-            Create candidate
-          </button>
-        </form>
-        {candidates.map((c) => (
-          <article key={c.id} className="surface p-4 space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="badge">{c.status}</span>
-              <p className="font-medium">{c.label}</p>
-            </div>
-            {c.evalSummary?.message && (
-              <p className="text-sm text-[var(--muted)]">{c.evalSummary.message}</p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {c.status !== "PROMOTED" && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    const res = await fetch("/api/learning/agent-versions", {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: "evaluate", id: c.id }),
-                    });
-                    const json = await res.json();
-                    if (!res.ok) {
-                      toast.error(json.error || "Eval failed");
-                      return;
-                    }
-                    toast.success(json.evalRun?.passed ? "Passed" : "Failed");
-                    await load();
-                  }}
-                >
-                  Run eval
-                </button>
-              )}
-              {c.status === "PASSED" && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={async () => {
-                    const res = await fetch("/api/learning/agent-versions", {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: "promote", id: c.id }),
-                    });
-                    const json = await res.json();
-                    if (!res.ok) {
-                      toast.error(json.error || "Promote blocked");
-                      return;
-                    }
-                    toast.success("Promoted to active agent config");
-                    await load();
-                  }}
-                >
-                  Promote
-                </button>
-              )}
-            </div>
-          </article>
-        ))}
-      </section>
+      {completedExperiments.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+            Experiment outcomes
+          </h2>
+          <ul className="space-y-2">
+            {completedExperiments.map((ex) => (
+              <li key={ex.id} className="surface p-4">
+                <p className="font-medium">{ex.name}</p>
+                <p className="mt-1 text-sm text-[var(--muted)]">{ex.hypothesis}</p>
+                {ex.resultSummary?.message ? (
+                  <p className="mt-2 text-sm">{ex.resultSummary.message}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
-      <section className="space-y-3">
-        <h2 className="h-display text-2xl">Recent eval runs</h2>
-        {recentEvals.length === 0 && (
-          <p className="text-sm text-[var(--muted)]">No eval runs yet.</p>
-        )}
-        <ul className="space-y-2">
-          {recentEvals.map((r) => (
-            <li key={r.id} className="surface p-3 text-sm flex flex-wrap gap-2 items-center">
-              <span className="badge">{r.status}</span>
-              <span>{r.suiteKey}</span>
-              <span className="text-[var(--muted)]">
-                {r.passed == null ? "—" : r.passed ? "passed" : "failed"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {!loading && patterns.length === 0 && feedback.total === 0 ? (
+        <EmptyState
+          title="Learning starts with activity"
+          body="Agent Desk turns conversations, content, and your corrections into business patterns — never invented metrics."
+          actions={[
+            { href: "/content", label: "Create content", primary: true },
+            { href: "/inbox", label: "Work the inbox" },
+          ]}
+        />
+      ) : null}
     </div>
   );
 }

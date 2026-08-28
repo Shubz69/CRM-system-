@@ -61,6 +61,29 @@ export default function GrowthHubPage() {
         </div>
       ) : null}
 
+      {!loading && snap && snap.opportunities === 0 && snap.goals === 0 && snap.research === 0 ? (
+        <div className="surface-insight max-w-2xl p-5">
+          <p className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+            Where can you grow?
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Growth watches opportunities, research, content, and goals. Complete your business
+            profile, then run a scan or start research so Agent Desk has something to monitor.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/business-context" className="btn btn-primary">
+              Complete profile
+            </Link>
+            <Link href="/opportunities" className="btn btn-secondary">
+              Scan opportunities
+            </Link>
+            <Link href="/goals" className="btn btn-secondary">
+              Set a goal
+            </Link>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2">
         {items.map((item) => {
           const Icon = item.icon;

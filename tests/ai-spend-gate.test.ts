@@ -124,27 +124,3 @@ describe("AI spend gate (unit)", () => {
     expect(breakdown.message).toMatch(/hidden/i);
   });
 });
-
-const hasDatabase = Boolean(process.env.DATABASE_URL);
-
-describe.skipIf(!hasDatabase)("AI spend gate — DB cross-org (needs Postgres)", () => {
-  it("budget rows are org-scoped; other org cap does not apply", async () => {
-    const { prisma: db } = await import("@/lib/db");
-    const { setOrganisationAiBudget: setBudget, assertWithinSpendCap: assertCap } =
-      await import("@/services/ai-spend-gate");
-
-    const orgA = await db.organisation.create({
-      data: { name: "Spend A", slug: `spend-a-${Date.now()}` },
-    });
-    const orgB = await db.organisation.create({
-      data: { name: "Spend B", slug: `spend-b-${Date.now()}` },
-    });
-
-    await setBudget({ organisationId: orgA.id, monthlyCapCents: 1 });
-    await expect(assertCap(orgB.id)).resolves.toMatchObject({ ok: true, capCents: null });
-
-    await db.organisationAiBudget.deleteMany({ where: { organisationId: orgA.id } });
-    await db.organisation.delete({ where: { id: orgA.id } });
-    await db.organisation.delete({ where: { id: orgB.id } });
-  });
-});

@@ -24,6 +24,15 @@ type Briefing = {
   } | null;
 };
 
+type Snapshot = {
+  needsReply: number | null;
+  activeLeads: number | null;
+  openDeals: number | null;
+  opportunities: number | null;
+  goalsConfigured: boolean;
+  goalsAtRisk: number;
+};
+
 function greetingForHour(hour: number): string {
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
@@ -33,21 +42,103 @@ function greetingForHour(hour: number): string {
 export default function HomePage() {
   const router = useRouter();
   const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot>({
+    needsReply: null,
+    activeLeads: null,
+    openDeals: null,
+    opportunities: null,
+    goalsConfigured: false,
+    goalsAtRisk: 0,
+  });
   const [askDraft, setAskDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const greeting = useMemo(() => greetingForHour(new Date().getHours()), []);
 
   useEffect(() => {
-    fetch("/api/chief-of-staff")
-      .then(async (r) => {
-        if (!r.ok) return null;
-        return r.json();
-      })
-      .then((json) => {
-        if (json) setBriefing(json as Briefing);
-      })
-      .catch(() => undefined)
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    async function load() {
+      try {
+        const [briefRes, convRes, dealsRes, contactsRes, oppsRes, goalsRes] =
+          await Promise.all([
+            fetch("/api/chief-of-staff"),
+            fetch("/api/conversations"),
+            fetch("/api/deals"),
+            fetch("/api/contacts"),
+            fetch("/api/opportunities"),
+            fetch("/api/goals"),
+          ]);
+        const briefJson = briefRes.ok ? await briefRes.json() : null;
+        if (!cancelled && briefJson) setBriefing(briefJson as Briefing);
+
+        let needsReply: number | null = null;
+        if (convRes.ok) {
+          const cJson = await convRes.json();
+          const items = (cJson.conversations ?? cJson.items ?? []) as Array<{
+            unreadCount?: number;
+            needsHumanReview?: boolean;
+          }>;
+          needsReply = items.filter(
+            (c) => (c.unreadCount ?? 0) > 0 || c.needsHumanReview,
+          ).length;
+        }
+
+        let openDeals: number | null = null;
+        if (dealsRes.ok) {
+          const dJson = await dealsRes.json();
+          const deals = (dJson.deals ?? []) as Array<{ status: string }>;
+          openDeals = deals.filter((d) => d.status === "OPEN").length;
+        }
+
+        let activeLeads: number | null = null;
+        if (contactsRes.ok) {
+          const contactsJson = await contactsRes.json();
+          activeLeads = (contactsJson.contacts ?? []).length;
+        }
+
+        let opportunities: number | null = null;
+        if (oppsRes.ok) {
+          const oJson = await oppsRes.json();
+          const list = (oJson.opportunities ?? oJson.items ?? []) as Array<{
+            status?: string;
+          }>;
+          opportunities = list.filter((o) =>
+            ["DETECTED", "REVIEWED", "ACCEPTED", "IN_PROGRESS"].includes(
+              o.status ?? "",
+            ),
+          ).length;
+        }
+
+        let goalsConfigured = false;
+        let goalsAtRisk = 0;
+        if (goalsRes.ok) {
+          const gJson = await goalsRes.json();
+          const goals = (gJson.goals ?? []) as Array<{ status?: string }>;
+          goalsConfigured = goals.some((g) =>
+            ["ACTIVE", "AT_RISK"].includes(g.status ?? ""),
+          );
+          goalsAtRisk = goals.filter((g) => g.status === "AT_RISK").length;
+        }
+
+        if (!cancelled) {
+          setSnapshot({
+            needsReply,
+            activeLeads,
+            openDeals,
+            opportunities,
+            goalsConfigured,
+            goalsAtRisk,
+          });
+        }
+      } catch {
+        /* keep empty */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function onAsk(e: FormEvent) {
@@ -136,7 +227,7 @@ export default function HomePage() {
         </p>
       </form>
 
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
         <SectionCard
           title="Needs attention"
           actions={
@@ -150,12 +241,12 @@ export default function HomePage() {
               Nothing urgent. Check Inbox or Opportunities when you are ready.
             </p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="divide-y divide-[var(--border)]/70">
               {attention.slice(0, 5).map((item) => (
                 <li key={item.id}>
                   <Link
                     href={item.href}
-                    className="block rounded-xl border border-[var(--border)] px-3 py-3 transition hover:bg-[var(--surface-2)]"
+                    className="block px-1 py-3 transition hover:bg-[var(--surface-2)]"
                   >
                     <span className="card-title block">{item.title}</span>
                     <span className="meta mt-1 block leading-relaxed">{item.detail}</span>
@@ -169,7 +260,7 @@ export default function HomePage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Recommended actions">
+        <SectionCard title="Recommended next moves">
           {actions.length === 0 ? (
             <EmptyState
               title="You're clear"
@@ -180,18 +271,20 @@ export default function HomePage() {
               ]}
             />
           ) : (
-            <ul className="space-y-3">
+            <ul className="divide-y divide-[var(--border)]/70">
               {actions.slice(0, 5).map((action) => (
-                <li
-                  key={`${action.href}-${action.label}`}
-                  className="rounded-xl border border-[var(--border)] p-3"
-                >
+                <li key={`${action.href}-${action.label}`} className="py-3 first:pt-0 last:pb-0">
                   <p className="card-title">{action.label}</p>
                   {action.detail ? (
-                    <p className="meta mt-1 leading-relaxed">{action.detail}</p>
+                    <p className="meta mt-1 leading-relaxed">
+                      <span className="font-medium text-[var(--foreground)]/70">Why: </span>
+                      {action.detail}
+                    </p>
                   ) : null}
-                  <Link href={action.href} className="btn btn-secondary mt-3 w-full justify-start">
-                    Review
+                  <Link href={action.href} className="btn btn-secondary mt-2">
+                    {action.label.startsWith("Finish") || action.label.startsWith("Define")
+                      ? "Continue"
+                      : "Next"}
                   </Link>
                 </li>
               ))}
@@ -200,45 +293,57 @@ export default function HomePage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Business snapshot" description="Live workspace signals — never invented.">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <SectionCard title="Business snapshot" description="Honest counts — never invented activity.">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SnapshotCard
-            title="Inbox"
-            value="Open"
-            body="Conversations needing reply or handoff"
+            title="Conversations needing reply"
+            value={snapshot.needsReply == null ? "—" : String(snapshot.needsReply)}
+            body={snapshot.needsReply == null ? "No data yet" : "Unread or needing human review"}
             href="/inbox"
           />
           <SnapshotCard
-            title="Pipeline"
-            value="CRM"
-            body="Deals and stages across your pipeline"
-            href="/pipeline"
+            title="Contacts"
+            value={snapshot.activeLeads == null ? "—" : String(snapshot.activeLeads)}
+            body={
+              snapshot.activeLeads == null
+                ? "No data yet"
+                : snapshot.activeLeads === 0
+                  ? "No contacts yet"
+                  : "People in your CRM"
+            }
+            href="/contacts"
+          />
+          <SnapshotCard
+            title="Open deals"
+            value={snapshot.openDeals == null ? "—" : String(snapshot.openDeals)}
+            body={snapshot.openDeals == null ? "No data yet" : "Deals still open"}
+            href="/deals"
           />
           <SnapshotCard
             title="Opportunities"
             value={
-              briefing?.phase13?.openOpportunities != null
-                ? String(briefing.phase13.openOpportunities)
-                : "—"
+              snapshot.opportunities == null ? "—" : String(snapshot.opportunities)
             }
             body={
-              briefing?.phase13?.openOpportunities != null
-                ? "Open opportunities to review"
-                : "Commercial opportunities to review"
+              snapshot.opportunities == null
+                ? "No data yet"
+                : "Open opportunities to review"
             }
             href="/opportunities"
           />
           <SnapshotCard
-            title="Goals"
+            title="Goal progress"
             value={
-              briefing?.phase13?.activeGoals != null
-                ? String(briefing.phase13.activeGoals)
-                : "—"
+              !snapshot.goalsConfigured
+                ? "Not configured"
+                : snapshot.goalsAtRisk > 0
+                  ? `${snapshot.goalsAtRisk} at risk`
+                  : "On track"
             }
             body={
-              briefing?.phase13?.goalsAtRisk
-                ? `${briefing.phase13.goalsAtRisk} at risk`
-                : "Active targets and progress"
+              !snapshot.goalsConfigured
+                ? "Set a sales goal to prioritise growth"
+                : "Active targets"
             }
             href="/goals"
           />

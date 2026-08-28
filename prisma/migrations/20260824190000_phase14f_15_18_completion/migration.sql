@@ -1,4 +1,4 @@
--- Phase 14F + 15–18 additive completion (Track 5 consolidated).
+-- Phase 14F + 15-18 additive completion (Track 5 consolidated).
 -- Never use prisma db push on populated DBs.
 
 -- PublishingJobStatus extensions

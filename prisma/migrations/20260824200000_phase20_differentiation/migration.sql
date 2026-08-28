@@ -1,4 +1,4 @@
--- Phase 20 — Differentiation intelligence layer (additive)
+-- Phase 20 - Differentiation intelligence layer (additive)
 
 -- AlterTable AgentMission
 ALTER TABLE "AgentMission" ADD COLUMN IF NOT EXISTS "decisionId" TEXT;

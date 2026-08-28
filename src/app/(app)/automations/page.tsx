@@ -5,6 +5,12 @@ import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { WorkflowViewer } from "@/components/automations/workflow-viewer";
+import {
+  AUTOMATION_ACTION_OPTIONS,
+  AUTOMATION_TRIGGER_OPTIONS,
+  automationActionLabel,
+  automationTriggerLabel,
+} from "@/lib/customer-labels";
 
 type WorkflowStep = {
   id: string;
@@ -37,25 +43,26 @@ type Approval = {
 };
 
 function summarizeActions(actions: unknown): string {
-  if (!Array.isArray(actions) || actions.length === 0) return "none";
+  if (!Array.isArray(actions) || actions.length === 0) return "none yet";
   return actions
     .map((action) => {
       if (action && typeof action === "object" && "type" in action) {
-        return String((action as { type: unknown }).type);
+        return automationActionLabel(String((action as { type: unknown }).type));
       }
-      return "unknown";
+      return "unknown action";
     })
-    .join(", ");
+    .join("; ");
 }
 
 export default function AutomationsPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [name, setName] = useState("");
-  const [triggerType, setTriggerType] = useState("lead_created");
+  const [triggerType, setTriggerType] = useState("lead_qualified");
   const [actionType, setActionType] = useState("send_follow_up");
   const [nl, setNl] = useState("");
   const [preview, setPreview] = useState<WorkflowStep[] | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   async function load() {
     const [rulesRes, approvalsRes] = await Promise.all([
@@ -85,6 +92,7 @@ export default function AutomationsPage() {
     const json = await response.json();
     if (!response.ok) return toast.error(json.error || "Failed");
     setName("");
+    setShowAdvanced(false);
     await load();
     toast.success("Rule created");
   }
@@ -99,7 +107,7 @@ export default function AutomationsPage() {
     const json = await response.json();
     if (!response.ok) return toast.error(json.error || "Compile failed");
     setPreview(json.workflow?.steps ?? []);
-    toast.success("Compiled to visible workflow (not enabled yet)");
+    toast.success("Workflow ready to review — not enabled yet");
   }
 
   async function saveNlRule() {
@@ -108,13 +116,13 @@ export default function AutomationsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "create_from_nl",
-        name: name || "NL automation",
+        name: name || "Automation from description",
         naturalLanguage: nl,
       }),
     });
     const json = await response.json();
     if (!response.ok) return toast.error(json.error || "Failed");
-    toast.success("Saved as inactive — review workflow, then enable");
+    toast.success("Saved inactive — review, then enable");
     setNl("");
     setPreview(null);
     await load();
@@ -142,10 +150,12 @@ export default function AutomationsPage() {
     await load();
   }
 
+  const pending = approvals.filter((a) => a.status === "PENDING");
+
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader
-        description="Live rules, approvals, and safety — advanced builders stay below."
+        description="Describe what should happen — Agent Desk turns it into a readable workflow you can enable safely."
         actions={
           <div className="flex flex-wrap gap-2">
             <a href="/approvals" className="btn btn-secondary">
@@ -154,120 +164,130 @@ export default function AutomationsPage() {
             <a href="/autopilot" className="btn btn-secondary">
               Autopilot
             </a>
-            <a href="/qualification" className="btn btn-secondary">
-              Qualification
-            </a>
           </div>
         }
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="surface p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Live</p>
+          <p className="caption">Live</p>
           <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">
             {rules.filter((r) => r.isActive).length}
           </p>
         </div>
         <div className="surface p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Pending approval</p>
-          <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">
-            {approvals.filter((a) => a.status === "PENDING").length}
-          </p>
+          <p className="caption">Pending approval</p>
+          <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">{pending.length}</p>
         </div>
         <div className="surface p-4">
-          <p className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]">Total rules</p>
+          <p className="caption">Total rules</p>
           <p className="mt-1 font-[family-name:var(--font-fraunces)] text-3xl">{rules.length}</p>
         </div>
       </div>
 
-      <form className="surface space-y-3 p-4" onSubmit={compileNl}>
+      <form className="surface-primary space-y-3 p-5" onSubmit={compileNl}>
         <label className="block text-sm font-medium">
-          Describe an automation (natural language)
+          Describe what should happen
           <textarea
-            className="input mt-1 min-h-24 w-full"
+            className="input mt-2 min-h-28 w-full"
             value={nl}
             onChange={(e) => setNl(e.target.value)}
-            placeholder='e.g. When a lead is qualified, notify the team and send a follow-up in 60 min'
+            placeholder="When a qualified lead arrives, wait 30 minutes and send a follow-up."
             required
           />
         </label>
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-secondary" type="submit">
-            Compile to workflow
+          <button className="btn btn-primary" type="submit">
+            Build automation
           </button>
           {preview && (
-            <button className="btn btn-primary" type="button" onClick={() => void saveNlRule()}>
+            <button className="btn btn-secondary" type="button" onClick={() => void saveNlRule()}>
               Save inactive rule
             </button>
           )}
         </div>
         {preview && (
-          <div className="mt-3">
-            <WorkflowViewer steps={preview} title="Compiled preview" />
+          <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-4">
+            <p className="caption mb-3">Readable workflow</p>
+            <WorkflowViewer steps={preview} title="When → Wait → Then" />
           </div>
         )}
       </form>
 
-      <form className="surface flex flex-wrap gap-3 p-4" onSubmit={createRule}>
-        <label className="min-w-48 flex-1 text-sm">
-          Rule name
-          <input
-            className="input mt-1 w-full"
-            placeholder="Rule name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </label>
-        <label className="text-sm">
-          Trigger type
-          <input
-            className="input mt-1"
-            placeholder="Trigger type"
-            value={triggerType}
-            onChange={(e) => setTriggerType(e.target.value)}
-            required
-          />
-        </label>
-        <label className="text-sm">
-          Action type
-          <input
-            className="input mt-1"
-            placeholder="Action type"
-            value={actionType}
-            onChange={(e) => setActionType(e.target.value)}
-            required
-          />
-        </label>
-        <div className="flex items-end">
-          <button className="btn btn-primary" type="submit">
-            Create rule
-          </button>
-        </div>
-      </form>
+      <details
+        className="surface-muted p-4"
+        open={showAdvanced}
+        onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}
+      >
+        <summary className="cursor-pointer text-sm font-medium">Advanced: build from fields</summary>
+        <form className="mt-4 flex flex-wrap gap-3" onSubmit={createRule}>
+          <label className="min-w-48 flex-1 text-sm">
+            Rule name
+            <input
+              className="input mt-1 w-full"
+              placeholder="Rule name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="text-sm">
+            When
+            <select
+              className="input mt-1"
+              value={triggerType}
+              onChange={(e) => setTriggerType(e.target.value)}
+              required
+            >
+              {AUTOMATION_TRIGGER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Then
+            <select
+              className="input mt-1"
+              value={actionType}
+              onChange={(e) => setActionType(e.target.value)}
+              required
+            >
+              {AUTOMATION_ACTION_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-end">
+            <button className="btn btn-secondary" type="submit">
+              Create rule
+            </button>
+          </div>
+        </form>
+      </details>
 
-      {approvals.filter((a) => a.status === "PENDING").length > 0 && (
+      {pending.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-lg font-semibold">Pending approvals</h2>
-          {approvals
-            .filter((a) => a.status === "PENDING")
-            .map((a) => (
-              <article key={a.id} className="surface flex flex-wrap items-center gap-2 p-4">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{a.title}</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    {a.kind}
-                    {a.automationRule?.name ? ` · ${a.automationRule.name}` : ""}
-                  </p>
-                </div>
-                <button className="btn btn-primary" type="button" onClick={() => void decide(a.id, "APPROVED")}>
-                  Approve
-                </button>
-                <button className="btn btn-secondary" type="button" onClick={() => void decide(a.id, "REJECTED")}>
-                  Reject
-                </button>
-              </article>
-            ))}
+          {pending.map((a) => (
+            <article key={a.id} className="surface-attention flex flex-wrap items-center gap-2 p-4">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">{a.title}</p>
+                <p className="text-xs text-[var(--muted)]">
+                  {a.automationRule?.name ? a.automationRule.name : "Automation approval"}
+                </p>
+              </div>
+              <button className="btn btn-primary" type="button" onClick={() => void decide(a.id, "APPROVED")}>
+                Approve
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={() => void decide(a.id, "REJECTED")}>
+                Reject
+              </button>
+            </article>
+          ))}
         </section>
       )}
 
@@ -276,32 +296,39 @@ export default function AutomationsPage() {
           <article key={rule.id} className="surface p-5">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold">{rule.name}</h2>
-              <span className="badge">{rule.triggerType}</span>
+              <span className="badge">{automationTriggerLabel(rule.triggerType)}</span>
               <span className={rule.isActive ? "badge badge-success" : "badge"}>
                 {rule.isActive ? "Active" : "Inactive"}
               </span>
-              {rule.requiresApproval ? <span className="badge">Approval gated</span> : null}
+              {rule.requiresApproval ? <span className="badge">Needs approval</span> : null}
               <button className="btn btn-secondary ml-auto" type="button" onClick={() => toggle(rule)}>
                 {rule.isActive ? "Disable" : "Enable"}
               </button>
             </div>
-            <p className="mt-3 text-sm text-[var(--muted)]">
-              Trigger: {rule.triggerType}. Actions: {summarizeActions(rule.actions)}.
-            </p>
+            <div className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
+              <div className="rounded-lg bg-[var(--surface-muted)] p-3">
+                <p className="caption">When</p>
+                <p className="mt-1 font-medium">{automationTriggerLabel(rule.triggerType)}</p>
+              </div>
+              <div className="rounded-lg bg-[var(--surface-muted)] p-3 sm:col-span-2">
+                <p className="caption">Then</p>
+                <p className="mt-1 font-medium">{summarizeActions(rule.actions)}</p>
+              </div>
+            </div>
             {Array.isArray(rule.workflow?.steps) && rule.workflow!.steps!.length > 0 && (
               <div className="mt-3">
-                <WorkflowViewer steps={rule.workflow!.steps!} title="Saved workflow" />
+                <WorkflowViewer steps={rule.workflow!.steps!} title="Workflow" />
               </div>
             )}
             <p className="mt-2 text-xs text-[var(--muted)]">
-              Recent executions: {rule.executions.length}
+              Recent runs: {rule.executions.length}
             </p>
           </article>
         ))}
         {rules.length === 0 && (
           <EmptyState
             title="No automations yet"
-            body="Compile a natural-language rule into a visible workflow, review it, then enable. Or start with Autopilot for DM handling."
+            body="Describe a follow-up or handoff in plain language, review the workflow, then enable."
             actionHref="/autopilot"
             actionLabel="Open Autopilot"
           />

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -7,6 +7,7 @@ import { evaluateMessagingWindow, formatDurationRemaining } from "@/lib/messagin
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageLoading } from "@/components/ui/page-state";
+import { statusLabel } from "@/lib/customer-labels";
 
 type ConversationListItem = {
   id: string;
@@ -66,14 +67,6 @@ type ConversationDetail = {
     stageId: string | null;
     stage?: { id: string; name: string } | null;
     bookings: Array<{ id: string; status: string; bookingUrl: string | null }>;
-    scoreEvents?: Array<{
-      id: string;
-      previousScore: number;
-      newScore: number;
-      delta: number;
-      reason: string;
-      createdAt: string;
-    }>;
   }>;
   objections: Array<{ id: string; category: string; text: string }>;
   questions: Array<{ id: string; text: string }>;
@@ -97,9 +90,9 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<Member[]>([]);
   const [note, setNote] = useState("");
-  const [queue, setQueue] = useState<
-    "all" | "needs_reply" | "hot" | "human" | "waiting"
-  >("all");
+  const [queue, setQueue] = useState<"all" | "needs_reply" | "hot" | "human" | "waiting">("all");
+  const [mobilePanel, setMobilePanel] = useState<"list" | "thread">("list");
+  const [showCustomerSheet, setShowCustomerSheet] = useState(false);
 
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -135,13 +128,25 @@ export default function InboxPage() {
 
   useEffect(() => {
     const fromQuery = searchParams.get("c") || searchParams.get("conversationId");
-    if (fromQuery) setSelectedId(fromQuery);
+    if (fromQuery) {
+      setSelectedId(fromQuery);
+      setMobilePanel("thread");
+    }
   }, [searchParams]);
 
   useEffect(() => {
     if (!selectedId) return;
     loadDetail(selectedId).catch((e) => toast.error(e.message));
   }, [selectedId, loadDetail]);
+
+  useEffect(() => {
+    if (!showCustomerSheet) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setShowCustomerSheet(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showCustomerSheet]);
 
   const lead = detail?.leads?.[0];
 
@@ -202,7 +207,6 @@ export default function InboxPage() {
       if (queue === "needs_reply") {
         if (c.unreadCount > 0) return true;
         if (!c.lastMessageAt) return false;
-        // Heuristic: inbound more recent than outbound when preview exists
         return c.unreadCount > 0 || Boolean(c.lastMessagePreview);
       }
       if (queue === "waiting") {
@@ -214,12 +218,183 @@ export default function InboxPage() {
 
   if (loading) return <PageLoading label="Loading inbox" />;
 
+  const customerPanel = detail ? (
+    <div className="space-y-4 text-sm">
+      <div>
+        <h3 className="caption">Customer</h3>
+        <p className="card-title mt-1">{detail.contact.fullName}</p>
+        <p className="meta">{detail.contact.email || "No email"}</p>
+        <p className="meta">{detail.contact.phone || "No phone"}</p>
+        <p className="meta">
+          Source:{" "}
+          {detail.contact.leadSource === "simulator"
+            ? "Test conversation"
+            : detail.contact.leadSource || "Unknown"}
+        </p>
+        {detail.contact.optedOut && <span className="badge badge-danger mt-1">Opted out</span>}
+      </div>
+      <div>
+        <h3 className="caption">Messaging window</h3>
+        {messagingWindow ? (
+          <ul className="mt-2 space-y-1 text-xs">
+            <li>
+              AI reply:{" "}
+              <span className={messagingWindow.automatedReplyAllowed ? "badge badge-success" : "badge badge-danger"}>
+                {messagingWindow.automatedReplyAllowed ? "Allowed" : "Blocked"}
+              </span>
+              {" · "}
+              {formatDurationRemaining(messagingWindow.automatedMsRemaining)} left
+            </li>
+            <li>
+              Manual reply:{" "}
+              <span className={messagingWindow.humanReplyAllowed ? "badge badge-success" : "badge badge-warn"}>
+                {messagingWindow.humanReplyAllowed ? "Allowed" : "Blocked"}
+              </span>
+              {" · "}
+              {formatDurationRemaining(messagingWindow.humanMsRemaining)} left
+            </li>
+          </ul>
+        ) : (
+          <p className="meta">No window data</p>
+        )}
+      </div>
+      <div>
+        <h3 className="caption">Qualification</h3>
+        <p className="mt-1">
+          Score <span className="badge badge-success">{lead?.score ?? 0}</span>
+          {" · "}
+          <span className="badge">{statusLabel(lead?.qualificationStatus || "UNQUALIFIED")}</span>
+        </p>
+        <p className="meta mt-1">{lead?.stage?.name || detail.intent || "No stage yet"}</p>
+      </div>
+      <div>
+        <h3 className="caption">Owner</h3>
+        <select
+          className="input mt-2"
+          value={detail.assignments?.[0]?.user.id || ""}
+          onChange={(e) => patch({ assignUserId: e.target.value || null })}
+        >
+          <option value="">Unassigned</option>
+          {members.map((member) => (
+            <option key={member.id} value={member.id}>
+              {member.name || member.email}
+            </option>
+          ))}
+        </select>
+      </div>
+      <details>
+        <summary className="caption cursor-pointer">Signals & follow-ups</summary>
+        <div className="mt-2 space-y-3">
+          <div>
+            <p className="card-title">Objections</p>
+            <ul className="mt-1 space-y-1">
+              {detail.objections.length === 0 && <li className="meta">None recorded</li>}
+              {detail.objections.map((o) => (
+                <li key={o.id}>
+                  <span className="badge">{o.category}</span> {o.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="card-title">Buying signals</p>
+            <ul className="mt-1 space-y-1">
+              {detail.buyingSignals.length === 0 && <li className="meta">None recorded</li>}
+              {detail.buyingSignals.map((b) => (
+                <li key={b.id}>{b.text}</li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="card-title">Follow-ups</p>
+            <ul className="mt-1 space-y-1">
+              {detail.followUps.length === 0 && <li className="meta">None scheduled</li>}
+              {detail.followUps.map((f) => (
+                <li key={f.id}>
+                  #{f.attemptNumber} {statusLabel(f.status)} · {new Date(f.scheduledFor).toLocaleString()}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </details>
+      <div>
+        <h3 className="caption">Internal note</h3>
+        <textarea className="input mt-2 min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note" />
+        <button
+          className="btn btn-secondary mt-2"
+          type="button"
+          onClick={() => {
+            if (note.trim()) patch({ note }).then(() => setNote(""));
+          }}
+        >
+          Save note
+        </button>
+      </div>
+      <div>
+        <h3 className="caption">Pipeline stage</h3>
+        <select className="input mt-2" value={lead?.stageId || ""} onChange={(e) => patch({ stageId: e.target.value })}>
+          <option value="" disabled>
+            Select stage
+          </option>
+          {stages.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  ) : (
+    <p className="text-sm text-[var(--muted)]">Customer intelligence appears when you select a conversation.</p>
+  );
+
   return (
     <div className="space-y-4">
       <PageHeader description="Reply, qualify, and hand off — Agent Desk keeps safety rules on every send." />
 
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr_300px]" style={{ minHeight: "70vh" }}>
-        <section className="surface overflow-hidden">
+      {!loading && items.length === 0 ? (
+        <div className="mx-auto flex min-h-[58vh] max-w-xl flex-col items-center justify-center px-4 text-center">
+          <p className="font-[family-name:var(--font-fraunces)] text-3xl tracking-tight text-[var(--foreground)]">
+            Connect messaging to open your inbox
+          </p>
+          <p className="mt-3 text-sm leading-relaxed text-[var(--muted)]">
+            Once Instagram (or another channel) is connected, Agent Desk can capture conversations,
+            qualify leads, spot objections, recommend replies, schedule follow-ups, and hand off to a
+            human when needed.
+          </p>
+          <ul className="mt-6 w-full space-y-2 text-left text-sm text-[var(--muted)]">
+            {[
+              "Conversation capture",
+              "Qualification & scoring",
+              "Objection detection",
+              "Recommended replies",
+              "Follow-ups & human handoff",
+            ].map((line) => (
+              <li
+                key={line}
+                className="flex items-center gap-2 rounded-lg border border-[var(--border)]/80 bg-[var(--surface)] px-3 py-2"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" aria-hidden />
+                {line}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <a href="/integrations" className="btn btn-primary">
+              Connect Instagram
+            </a>
+            <a href="/simulator" className="btn btn-secondary">
+              Try a test conversation
+            </a>
+            <a href="/settings/go-live" className="btn btn-secondary">
+              View setup progress
+            </a>
+          </div>
+        </div>
+      ) : (
+      <div className="grid gap-4 md:grid-cols-[280px_1fr] xl:grid-cols-[320px_1fr_300px]" style={{ minHeight: "70vh" }}>
+        <section className={`surface overflow-hidden ${mobilePanel === "thread" ? "hidden md:block" : "block"}`}>
           <div className="border-b border-[var(--border)] px-4 py-3">
             <p className="font-medium">Conversations</p>
             <div className="filter-bar mt-2">
@@ -264,13 +439,17 @@ export default function InboxPage() {
               <button
                 key={c.id}
                 type="button"
-                onClick={() => setSelectedId(c.id)}
+                onClick={() => {
+                  setSelectedId(c.id);
+                  setMobilePanel("thread");
+                  setShowCustomerSheet(false);
+                }}
                 className={`block w-full border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-2)] ${
                   selectedId === c.id ? "bg-[var(--accent-soft)]" : ""
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{c.contactName || "Unknown"}</span>
+                  <span className="truncate font-medium">{c.contactName || "Unknown"}</span>
                   {c.unreadCount > 0 && <span className="badge badge-success">{c.unreadCount}</span>}
                 </div>
                 <p className="text-xs text-[var(--muted)]">@{c.instagramUsername || "—"}</p>
@@ -279,7 +458,7 @@ export default function InboxPage() {
                   <span className="badge">Score {c.lead?.score ?? 0}</span>
                   <span className="badge">{c.lead?.stage || "New"}</span>
                   {c.lead?.qualificationStatus ? (
-                    <span className="badge">{c.lead.qualificationStatus.replace(/_/g, " ")}</span>
+                    <span className="badge">{statusLabel(c.lead.qualificationStatus)}</span>
                   ) : null}
                   <span className={c.aiPaused ? "badge badge-warn" : "badge"}>
                     {c.aiPaused ? "Human" : c.handlingMode === "AI" ? "AI" : c.handlingMode}
@@ -291,47 +470,41 @@ export default function InboxPage() {
           </div>
         </section>
 
-        <section className="surface flex flex-col overflow-hidden">
+        <section className={`surface flex flex-col overflow-hidden ${mobilePanel === "list" ? "hidden md:flex" : "flex"}`}>
           {!detail ? (
             <div className="p-6 text-[var(--muted)]">Select a conversation</div>
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
-                <div>
-                  <h2 className="font-semibold">{detail.contact.fullName}</h2>
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center gap-2 md:hidden">
+                    <button type="button" className="btn btn-secondary text-xs" onClick={() => setMobilePanel("list")}>
+                      Back
+                    </button>
+                    <button type="button" className="btn btn-secondary text-xs" onClick={() => setShowCustomerSheet(true)}>
+                      Customer
+                    </button>
+                  </div>
+                  <h2 className="truncate font-semibold">{detail.contact.fullName}</h2>
                   <p className="text-sm text-[var(--muted)]">
-                    @{detail.contact.instagramUsername} · {detail.intent || "No intent"} ·{" "}
-                    {detail.sentiment || "—"}
+                    @{detail.contact.instagramUsername} · {detail.intent || "No intent"} · {detail.sentiment || "—"}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={() => patch({ aiPaused: true, handlingMode: "PAUSED" })}
-                  >
+                <div className="hidden flex-wrap gap-2 sm:flex">
+                  <button className="btn btn-secondary" type="button" onClick={() => patch({ aiPaused: true, handlingMode: "PAUSED" })}>
                     Pause AI
                   </button>
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={() => patch({ aiPaused: false, handlingMode: "AI" })}
-                  >
+                  <button className="btn btn-secondary" type="button" onClick={() => patch({ aiPaused: false, handlingMode: "AI" })}>
                     Resume AI
                   </button>
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={() => patch({ qualificationStatus: "QUALIFIED" })}
-                  >
+                  <button className="btn btn-secondary" type="button" onClick={() => patch({ qualificationStatus: "QUALIFIED" })}>
                     Mark qualified
                   </button>
-                  <button
-                    className="btn btn-danger"
-                    type="button"
-                    onClick={() => patch({ qualificationStatus: "DISQUALIFIED" })}
-                  >
+                  <button className="btn btn-danger" type="button" onClick={() => patch({ qualificationStatus: "DISQUALIFIED" })}>
                     Disqualify
+                  </button>
+                  <button type="button" className="btn btn-secondary xl:hidden" onClick={() => setShowCustomerSheet(true)}>
+                    Customer intel
                   </button>
                 </div>
               </div>
@@ -373,12 +546,12 @@ export default function InboxPage() {
                   <div
                     key={m.id}
                     className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
-                      m.direction === "OUTBOUND"
-                        ? "ml-auto bg-[var(--accent)] text-white"
-                        : "bg-[var(--surface-2)]"
+                      m.direction === "OUTBOUND" ? "ml-auto bg-[var(--accent)] text-white" : "bg-[var(--surface-2)]"
                     }`}
                   >
-                    <p className="mb-1 text-[10px] uppercase opacity-70">{m.senderType}</p>
+                    <p className="mb-1 text-[10px] uppercase opacity-70">
+                      {m.senderType === "AI" ? "AI" : m.senderType === "CONTACT" ? "Customer" : "Team"}
+                    </p>
                     <p className="whitespace-pre-wrap">{m.body}</p>
                   </div>
                 ))}
@@ -401,128 +574,33 @@ export default function InboxPage() {
           )}
         </section>
 
-        <section className="surface overflow-y-auto p-4">
-          {!detail ? (
-            <p className="text-sm text-[var(--muted)]">Customer intelligence appears when you select a conversation.</p>
-          ) : (
-            <div className="space-y-4 text-sm">
-              <div>
-                <h3 className="caption">Customer</h3>
-                <p className="card-title mt-1">{detail.contact.fullName}</p>
-                <p className="meta">{detail.contact.email || "No email"}</p>
-                <p className="meta">{detail.contact.phone || "No phone"}</p>
-                <p className="meta">Source: {detail.contact.leadSource || "—"}</p>
-                {detail.contact.optedOut && <span className="badge badge-danger mt-1">Opted out</span>}
-              </div>
-
-              <div>
-                <h3 className="caption">Messaging window</h3>
-                {messagingWindow ? (
-                  <ul className="mt-2 space-y-1 text-xs">
-                    <li>
-                      AI reply:{" "}
-                      <span className={messagingWindow.automatedReplyAllowed ? "badge badge-success" : "badge badge-danger"}>
-                        {messagingWindow.automatedReplyAllowed ? "Allowed" : "Blocked"}
-                      </span>
-                      {" · "}
-                      {formatDurationRemaining(messagingWindow.automatedMsRemaining)} left
-                    </li>
-                    <li>
-                      Manual reply:{" "}
-                      <span className={messagingWindow.humanReplyAllowed ? "badge badge-success" : "badge badge-warn"}>
-                        {messagingWindow.humanReplyAllowed ? "Allowed" : "Blocked"}
-                      </span>
-                      {" · "}
-                      {formatDurationRemaining(messagingWindow.humanMsRemaining)} left
-                    </li>
-                  </ul>
-                ) : (
-                  <p className="meta">No window data</p>
-                )}
-              </div>
-
-              <div>
-                <h3 className="caption">Qualification</h3>
-                <p className="mt-1">
-                  Score <span className="badge badge-success">{lead?.score ?? 0}</span>
-                  {" · "}
-                  <span className="badge">{(lead?.qualificationStatus || "UNQUALIFIED").replace(/_/g, " ")}</span>
-                </p>
-                <p className="meta mt-1">{lead?.stage?.name || detail.intent || "No stage yet"}</p>
-              </div>
-
-              <div>
-                <h3 className="caption">Owner</h3>
-                <select className="input mt-2" value={detail.assignments?.[0]?.user.id || ""} onChange={(e) => patch({ assignUserId: e.target.value || null })}>
-                  <option value="">Unassigned</option>
-                  {members.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}
-                </select>
-              </div>
-
-              <details open>
-                <summary className="caption cursor-pointer">Signals & follow-ups</summary>
-                <div className="mt-2 space-y-3">
-                  <div>
-                    <p className="card-title">Objections</p>
-                    <ul className="mt-1 space-y-1">
-                      {detail.objections.length === 0 && <li className="meta">None recorded</li>}
-                      {detail.objections.map((o) => (
-                        <li key={o.id}>
-                          <span className="badge">{o.category}</span> {o.text}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="card-title">Buying signals</p>
-                    <ul className="mt-1 space-y-1">
-                      {detail.buyingSignals.length === 0 && <li className="meta">None recorded</li>}
-                      {detail.buyingSignals.map((b) => (
-                        <li key={b.id}>{b.text}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="card-title">Follow-ups</p>
-                    <ul className="mt-1 space-y-1">
-                      {detail.followUps.length === 0 && <li className="meta">None scheduled</li>}
-                      {detail.followUps.map((f) => (
-                        <li key={f.id}>
-                          #{f.attemptNumber} {f.status} · {new Date(f.scheduledFor).toLocaleString()}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </details>
-
-              <div>
-                <h3 className="caption">Internal note</h3>
-                <textarea className="input mt-2 min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note" />
-                <button className="btn btn-secondary mt-2" type="button" onClick={() => { if (note.trim()) patch({ note }).then(() => setNote("")); }}>Save note</button>
-              </div>
-
-              <div>
-                <h3 className="caption">Pipeline stage</h3>
-                <select
-                  className="input mt-2"
-                  value={lead?.stageId || ""}
-                  onChange={(e) => patch({ stageId: e.target.value })}
-                >
-                  <option value="" disabled>
-                    Select stage
-                  </option>
-                  {stages.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-        </section>
+        <section className="surface hidden overflow-y-auto p-4 xl:block">{customerPanel}</section>
       </div>
+      )}
+
+      {showCustomerSheet && (
+        <div
+          className="fixed inset-0 z-40 flex justify-end bg-black/40 xl:hidden"
+          role="presentation"
+          onClick={() => setShowCustomerSheet(false)}
+        >
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Customer intelligence"
+            className="surface h-full w-full max-w-md overflow-y-auto p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <h2 className="font-semibold">Customer intelligence</h2>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowCustomerSheet(false)}>
+                Close
+              </button>
+            </div>
+            {customerPanel}
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

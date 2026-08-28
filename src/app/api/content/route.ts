@@ -31,6 +31,12 @@ export async function GET() {
         take: 40,
         include: {
           variants: true,
+          brief: {
+            select: {
+              objective: true,
+              idea: { select: { title: true, opportunity: { select: { title: true } } } },
+            },
+          },
           publishingJobs: { orderBy: { createdAt: "desc" }, take: 5 },
         },
       }),

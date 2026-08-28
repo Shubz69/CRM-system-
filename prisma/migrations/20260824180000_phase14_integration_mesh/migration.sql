@@ -1,4 +1,4 @@
--- Phase 14 — Integration mesh, sync, skills (additive)
+-- Phase 14 - Integration mesh, sync, skills (additive)
 
 CREATE TYPE "ConnectorCapabilityStatus" AS ENUM ('AVAILABLE', 'CONNECTED', 'AUTH_REQUIRED', 'SCOPE_REQUIRED', 'APPROVAL_REQUIRED', 'RESTRICTED', 'DEGRADED', 'UNSUPPORTED', 'DISABLED');
 CREATE TYPE "ConnectorConnectionStatus" AS ENUM ('DISCONNECTED', 'CONNECTING', 'CONNECTED', 'DEGRADED', 'REAUTH_REQUIRED', 'EXPIRED', 'REVOKED', 'ERROR', 'DISABLED');

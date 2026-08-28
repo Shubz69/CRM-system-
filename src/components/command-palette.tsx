@@ -46,6 +46,8 @@ export function CommandPalette() {
   const [loadingEntities, setLoadingEntities] = useState(false);
   const loadedRef = useRef(false);
   const listRef = useRef<HTMLUListElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin =
     session?.user?.isPlatformAdmin || session?.user?.role === "SUPER_ADMIN";
@@ -252,6 +254,36 @@ export function CommandPalette() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [open]);
+
   function go(item: PaletteItem) {
     setOpen(false);
     setQuery("");
@@ -268,14 +300,22 @@ export function CommandPalette() {
   const flat = items;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-[10vh] backdrop-blur-[2px]">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-[10vh] backdrop-blur-[2px]"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
       <div
+        ref={dialogRef}
         className="surface w-full max-w-xl overflow-hidden p-0 shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-label="Search Agent Desk"
       >
         <input
+          ref={inputRef}
           autoFocus
           className="input rounded-none border-0 border-b border-[var(--border)]"
           placeholder="Search Agent Desk…"

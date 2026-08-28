@@ -146,6 +146,29 @@ export default async function AdminOverviewPage() {
     { label: "Platform error rate", value: `${platformErrorRate}%`, href: "/admin/health" },
   ];
 
+  const groups: Array<{ title: string; keys: string[] }> = [
+    {
+      title: "Platform",
+      keys: ["Total workspaces", "Active workspaces", "Suspended workspaces", "Total users", "Active users"],
+    },
+    {
+      title: "Messaging",
+      keys: ["Total conversations", "Messages processed", "AI handoffs", "Human messages sent"],
+    },
+    {
+      title: "AI",
+      keys: ["AI messages sent", "AI executions", "AI usage (qty)", "Estimated AI cost"],
+    },
+    {
+      title: "Sales",
+      keys: ["Total contacts", "Qualified leads", "Confirmed bookings", "Sales recorded"],
+    },
+    {
+      title: "Reliability",
+      keys: ["Webhook success rate", "Background job success", "Platform error rate"],
+    },
+  ];
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -160,17 +183,31 @@ export default async function AdminOverviewPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map((card) => (
-          <Link
-            key={card.label}
-            href={card.href}
-            className="surface block p-4 transition hover:border-[var(--accent)]"
-          >
-            <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{card.label}</p>
-            <p className="mt-2 font-[family-name:var(--font-fraunces)] text-2xl">{card.value}</p>
-          </Link>
-        ))}
+      <div className="space-y-6">
+        {groups.map((group) => {
+          const groupCards = cards.filter((c) => group.keys.includes(c.label));
+          return (
+            <section key={group.title} className="space-y-3">
+              <h2 className="caption">{group.title}</h2>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {groupCards.map((card) => (
+                  <Link
+                    key={card.label}
+                    href={card.href}
+                    className="surface block p-4 transition hover:border-[var(--accent)]"
+                  >
+                    <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">
+                      {card.label}
+                    </p>
+                    <p className="mt-2 font-[family-name:var(--font-fraunces)] text-2xl">
+                      {card.value}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

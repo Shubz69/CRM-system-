@@ -1,4 +1,4 @@
--- Phase 13 — Goal/KPI graph, Digital Twin relations, Business Opportunity graph
+-- Phase 13 - Goal/KPI graph, Digital Twin relations, Business Opportunity graph
 -- Additive only. Safe for prisma migrate deploy.
 
 -- Enums

@@ -499,25 +499,28 @@ export async function promoteAgentVersionCandidate(input: {
 }
 
 export async function getLearningDashboard(organisationId: string) {
-  const [feedback, experiments, candidates, recentEvals, backtest] = await Promise.all([
-    getFeedbackSummary(organisationId),
-    prisma.experiment.findMany({
-      where: { organisationId },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    }),
-    prisma.agentVersionCandidate.findMany({
-      where: { organisationId },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    }),
-    prisma.evalRun.findMany({
-      where: { organisationId },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    }),
-    getForecastBacktestSummary({ organisationId }),
-  ]);
+  const { listCreativePatternsForDisplay } = await import("@/services/creative-genome");
+  const [feedback, experiments, candidates, recentEvals, backtest, creativePatterns] =
+    await Promise.all([
+      getFeedbackSummary(organisationId),
+      prisma.experiment.findMany({
+        where: { organisationId },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      }),
+      prisma.agentVersionCandidate.findMany({
+        where: { organisationId },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      }),
+      prisma.evalRun.findMany({
+        where: { organisationId },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      getForecastBacktestSummary({ organisationId }),
+      listCreativePatternsForDisplay(organisationId),
+    ]);
 
   return {
     feedback,
@@ -525,6 +528,7 @@ export async function getLearningDashboard(organisationId: string) {
     candidates,
     recentEvals,
     forecastBacktest: backtest,
+    creativePatterns,
     /** Phase 17 — signal taxonomy for API/docs consumers */
     signalKinds: {
       USER_PREFERENCE: "Explicit ratings / thumbs — not causal performance proof",

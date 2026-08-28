@@ -203,3 +203,46 @@ export async function upsertCreativePattern(input: {
     update: data,
   });
 }
+
+const MATURITY_LABEL: Record<string, string> = {
+  INSUFFICIENT_DATA: "Insufficient data",
+  EMERGING_PATTERN: "Early pattern",
+  SUPPORTED_PATTERN: "Supported pattern",
+  STRONG_PATTERN: "Strong pattern",
+};
+
+const FEATURE_LABEL: Record<string, string> = {
+  hookType: "Hook type",
+  topic: "Topic",
+  format: "Format",
+  platform: "Platform",
+  ctaType: "Call to action",
+};
+
+/** Customer-facing creative patterns — never invents when sample size is too low. */
+export async function listCreativePatternsForDisplay(organisationId: string) {
+  const rows = await prisma.creativePattern.findMany({
+    where: { organisationId },
+    orderBy: [{ sampleSize: "desc" }, { updatedAt: "desc" }],
+    take: 40,
+  });
+
+  return rows.map((row) => {
+    const combo =
+      row.featureCombo && typeof row.featureCombo === "object" && !Array.isArray(row.featureCombo)
+        ? (row.featureCombo as Record<string, string>)
+        : {};
+    const parts = Object.entries(combo)
+      .filter(([, v]) => Boolean(v))
+      .map(([k, v]) => `${FEATURE_LABEL[k] ?? k}: ${v}`);
+    return {
+      id: row.id,
+      label: parts.join(" · ") || row.patternKey,
+      sampleSize: row.sampleSize,
+      maturity: row.maturity,
+      maturityLabel: MATURITY_LABEL[row.maturity] ?? "Insufficient data",
+      /** Only surface as a recommendation when sample thresholds clear early stage. */
+      showAsRecommendation: row.sampleSize >= 5 && row.maturity !== "INSUFFICIENT_DATA",
+    };
+  });
+}

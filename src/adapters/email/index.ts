@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import type { EmailAdapter, EmailDeliveryInput, EmailDeliveryResult } from "./types";
 import { mockEmailLog } from "./types";
 import { getEnv } from "@/lib/env";
@@ -43,6 +42,17 @@ export class SmtpEmailAdapter implements EmailAdapter {
     const secure = parsed.protocol === "smtps:" || port === 465;
     const user = parsed.username ? decodeURIComponent(parsed.username) : undefined;
     const pass = parsed.password ? decodeURIComponent(parsed.password) : undefined;
+
+    let nodemailer: typeof import("nodemailer");
+    try {
+      nodemailer = await import("nodemailer");
+    } catch {
+      return {
+        ok: false,
+        provider: this.name,
+        error: "nodemailer is not installed — cannot send via SMTP",
+      };
+    }
 
     const transporter = nodemailer.createTransport({
       host: parsed.hostname,

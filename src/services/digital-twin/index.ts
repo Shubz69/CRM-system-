@@ -219,6 +219,11 @@ export async function getBusinessContextCompleteness(organisationId: string): Pr
     kpis,
     linkedIn,
     org,
+    brandDocs,
+    salesDocs,
+    policyDocs,
+    knowledgeDocs,
+    latestKnowledge,
   ] = await Promise.all([
     prisma.productOffering.count({ where: { organisationId, status: "ACTIVE" } }),
     prisma.audienceSegment.count({ where: { organisationId } }),
@@ -235,55 +240,134 @@ export async function getBusinessContextCompleteness(organisationId: string): Pr
       where: { id: organisationId },
       select: { name: true, updatedAt: true },
     }),
+    prisma.knowledgeDocument.count({
+      where: { organisationId, category: { in: ["tone", "brand"] }, status: "ACTIVE" },
+    }),
+    prisma.knowledgeDocument.count({
+      where: { organisationId, category: { in: ["scripts", "sop"] }, status: "ACTIVE" },
+    }),
+    prisma.knowledgeDocument.count({
+      where: { organisationId, category: { in: ["sop", "faq", "pricing"] }, status: "ACTIVE" },
+    }),
+    prisma.knowledgeDocument.count({
+      where: { organisationId, status: "ACTIVE" },
+    }),
+    prisma.knowledgeDocument.findFirst({
+      where: { organisationId, status: "ACTIVE" },
+      orderBy: { updatedAt: "desc" },
+      select: { updatedAt: true },
+    }),
   ]);
+
+  const orgFresh = org
+    ? classifyFreshness(org.updatedAt, "company_description")
+    : "UNKNOWN";
+  const knowledgeFresh = latestKnowledge
+    ? classifyFreshness(latestKnowledge.updatedAt, "default")
+    : "UNKNOWN";
 
   const items: CompletenessItem[] = [
     {
+      key: "business",
+      label: "Business",
+      status: org
+        ? orgFresh === "STALE"
+          ? "partial"
+          : "known"
+        : "missing",
+      detail: org
+        ? `${org.name} · updated ${org.updatedAt.toISOString().slice(0, 10)}`
+        : "Organisation profile missing",
+    },
+    {
       key: "products",
-      label: "Products/services",
+      label: "Products / services",
       status: products > 0 ? "known" : "missing",
       detail: products > 0 ? `${products} active offering(s)` : "No product offerings configured",
     },
     {
       key: "audience",
-      label: "Primary audience",
+      label: "Customers / audiences",
       status: audiences > 0 ? "known" : "missing",
       detail: audiences > 0 ? `${audiences} segment(s)` : "No audience segments configured",
     },
     {
-      key: "competitors",
-      label: "Primary competitors",
-      status: competitorRels >= 3 ? "known" : competitorRels > 0 ? "partial" : "missing",
+      key: "markets",
+      label: "Markets / regions",
+      status: audiences > 0 ? "partial" : "missing",
       detail:
-        competitorRels > 0
-          ? `${competitorRels} of expected ~5 COMPETES_WITH relations`
-          : "No competitor relations configured",
+        audiences > 0
+          ? "Audience segments exist — confirm geographic markets"
+          : "No markets or regions recorded yet",
+    },
+    {
+      key: "brand",
+      label: "Brand",
+      status: brandDocs > 0 ? "known" : "missing",
+      detail:
+        brandDocs > 0
+          ? `${brandDocs} brand / tone document(s)`
+          : "No brand or tone of voice documents",
+    },
+    {
+      key: "sales",
+      label: "Sales approach",
+      status: salesDocs > 0 ? "known" : "missing",
+      detail:
+        salesDocs > 0
+          ? `${salesDocs} scripts / process document(s)`
+          : "No sales scripts or process docs",
     },
     {
       key: "goals",
-      label: "Revenue / active goal",
-      status: goals > 0 ? "known" : "missing",
-      detail: goals > 0 ? `${goals} active/at-risk goal(s)` : "No active goals",
+      label: "Goals",
+      status: goals > 0 ? (kpis > 0 ? "known" : "partial") : "missing",
+      detail:
+        goals > 0
+          ? `${goals} active goal(s)${kpis > 0 ? ` · ${kpis} KPI(s)` : " · add KPIs"}`
+          : "No active goals",
     },
     {
-      key: "kpis",
-      label: "Primary KPI",
-      status: kpis > 0 ? "known" : "missing",
-      detail: kpis > 0 ? `${kpis} KPI definition(s)` : "No KPI definitions",
+      key: "policies",
+      label: "Policies",
+      status: policyDocs > 0 ? "known" : "missing",
+      detail:
+        policyDocs > 0
+          ? `${policyDocs} policy / FAQ / pricing document(s)`
+          : "No policies or pricing guidance stored",
+    },
+    {
+      key: "competitors",
+      label: "Competitors",
+      status: competitorRels >= 3 ? "known" : competitorRels > 0 ? "partial" : "missing",
+      detail:
+        competitorRels > 0
+          ? `${competitorRels} competitor relationship(s)`
+          : "No competitor relationships configured",
     },
     {
       key: "social",
-      label: "Social connection",
+      label: "Social presence",
       status: linkedIn ? "known" : "missing",
-      detail: linkedIn ? "At least one social connection ACTIVE" : "No LinkedIn/Instagram connection",
+      detail: linkedIn
+        ? "At least one social channel connected"
+        : "No LinkedIn or Instagram connection",
     },
     {
-      key: "org_profile",
-      label: "Organisation profile",
-      status: org ? "known" : "missing",
-      detail: org
-        ? `Last updated ${org.updatedAt.toISOString().slice(0, 10)} (${classifyFreshness(org.updatedAt, "company_description")})`
-        : "Organisation missing",
+      key: "knowledge_health",
+      label: "Knowledge health",
+      status:
+        knowledgeDocs === 0
+          ? "missing"
+          : knowledgeFresh === "STALE"
+            ? "partial"
+            : knowledgeFresh === "AGING"
+              ? "partial"
+              : "known",
+      detail:
+        knowledgeDocs === 0
+          ? "No active knowledge documents"
+          : `${knowledgeDocs} active document(s) · freshness ${knowledgeFresh.toLowerCase()}`,
     },
   ];
   return { items };

@@ -56,16 +56,48 @@ export default function CrmHubPage() {
           <Metric title="Contacts" value={String(snap.contacts)} href="/contacts" />
           <Metric title="Companies" value={String(snap.companies)} href="/companies" />
           <Metric title="Open deals" value={String(snap.openDeals)} href="/deals" />
-          <Metric
-            title="Open pipeline"
-            value={
-              snap.dealValueCents > 0
-                ? `£${(snap.dealValueCents / 100).toLocaleString()}`
-                : String(snap.stages || "—")
-            }
-            body={snap.dealValueCents > 0 ? "Sum of open deal amounts" : "Pipeline stages configured"}
-            href="/pipeline"
-          />
+          {snap.dealValueCents > 0 ? (
+            <Metric
+              title="Open pipeline value"
+              value={`£${(snap.dealValueCents / 100).toLocaleString()}`}
+              body="Sum of open deal amounts"
+              href="/pipeline"
+            />
+          ) : (
+            <Metric
+              title="Pipeline stages"
+              value={String(snap.stages || "0")}
+              body={
+                snap.stages > 0
+                  ? "Stages configured — no open deal value yet"
+                  : "Not configured"
+              }
+              href="/pipeline"
+            />
+          )}
+        </div>
+      ) : null}
+
+      {!loading && snap && snap.contacts === 0 && snap.companies === 0 && snap.openDeals === 0 ? (
+        <div className="surface-insight max-w-2xl p-5">
+          <p className="font-[family-name:var(--font-fraunces)] text-2xl tracking-tight">
+            Set up your CRM once
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Contacts, companies, deals, and pipeline work together. Start with people from Inbox, or
+            add a company and deal when you have a real opportunity.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/contacts" className="btn btn-primary">
+              Add contacts
+            </Link>
+            <Link href="/companies" className="btn btn-secondary">
+              Add a company
+            </Link>
+            <Link href="/inbox" className="btn btn-secondary">
+              Open Inbox
+            </Link>
+          </div>
         </div>
       ) : null}
 

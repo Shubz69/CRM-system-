@@ -103,9 +103,11 @@ function nextActionsFor(
     case "COMPLETED":
       if (looksLikeResearch) {
         return [
-          "Turn this into content",
-          "Save to Knowledge",
-          "Run this again next month",
+          "Create opportunity",
+          "Draft content",
+          "Save research",
+          "Create goal",
+          "Create automation",
           "Ask something else",
         ];
       }
@@ -116,8 +118,9 @@ function nextActionsFor(
     case "PARTIAL":
       if (looksLikeResearch) {
         return [
-          "Turn this into content",
-          "Save to Knowledge",
+          "Create opportunity",
+          "Draft content",
+          "Save research",
           "Try again",
           "Ask something else",
         ];

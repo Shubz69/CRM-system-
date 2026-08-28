@@ -102,6 +102,7 @@ export const ANALYTICS_SUBNAV: NavItem[] = [
 export const ADMIN_SUBNAV: NavItem[] = [
   { href: "/admin", label: "Overview", icon: Shield, match: "exact" },
   { href: "/admin/ai-ops", label: "AI Ops", icon: Activity },
+  { href: "/admin/learning-lab", label: "Learning Lab", icon: FlaskConical },
   { href: "/admin/workspaces", label: "Workspaces", icon: Building2 },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/usage", label: "AI Usage", icon: Cpu },

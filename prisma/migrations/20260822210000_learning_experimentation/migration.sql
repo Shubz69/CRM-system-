@@ -1,4 +1,4 @@
--- Phase 9 — Learning & Experimentation
+-- Phase 9 - Learning & Experimentation
 
 CREATE TYPE "ExperimentStatus" AS ENUM ('DRAFT', 'RUNNING', 'COMPLETED', 'CANCELLED');
 CREATE TYPE "AgentVersionCandidateStatus" AS ENUM ('DRAFT', 'EVALUATING', 'PASSED', 'FAILED', 'PROMOTED', 'REJECTED');

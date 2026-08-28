@@ -1,4 +1,4 @@
--- Phase 10 — Entitlements + UsageMeter + Organisation.entitlementSnapshot
+-- Phase 10 - Entitlements + UsageMeter + Organisation.entitlementSnapshot
 
 ALTER TABLE "Organisation" ADD COLUMN IF NOT EXISTS "entitlementSnapshot" JSONB NOT NULL DEFAULT '{}';
 

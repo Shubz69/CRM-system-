@@ -10,7 +10,7 @@ export class InvalidDomainEventTransitionError extends Error {
     public readonly from: string,
     public readonly to: string,
   ) {
-    super(`Invalid DomainEvent transition ${from} → ${to}`);
+    super(`Invalid DomainEvent transition ${from} -> ${to}`);
     this.name = "InvalidDomainEventTransitionError";
   }
 }

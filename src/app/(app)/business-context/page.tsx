@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
+import { profileStateLabel, profileStateTone } from "@/lib/customer-labels";
 
 type CompletenessItem = {
   key: string;
@@ -23,15 +25,42 @@ type Profile = {
   atRisk: Array<{ id: string; name: string }>;
 };
 
+const SECTION_ORDER = [
+  "business",
+  "products",
+  "audience",
+  "markets",
+  "brand",
+  "sales",
+  "goals",
+  "policies",
+  "competitors",
+  "social",
+  "knowledge_health",
+] as const;
+
+function StateBadge({ status }: { status: string }) {
+  const label = profileStateLabel(status);
+  const tone = profileStateTone(status);
+  const className =
+    tone === "success"
+      ? "badge badge-success"
+      : tone === "warn"
+        ? "badge badge-warn"
+        : "badge";
+  return <span className={className}>{label}</span>;
+}
+
 export default function BusinessContextPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [completeness, setCompleteness] = useState<CompletenessItem[]>([]);
   const [productName, setProductName] = useState("");
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/business-context");
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed to load business context");
+    if (!res.ok) throw new Error(json.error || "Failed to load business profile");
     setProfile(json.profile);
     setCompleteness(json.completeness ?? []);
   }, []);
@@ -40,103 +69,151 @@ export default function BusinessContextPage() {
     load().catch((e) => toast.error(e.message));
   }, [load]);
 
-  return (
-    <div className="space-y-8">
-      <PageHeader description="Your business profile — who you are, what you sell, and evidence behind it." />
+  const byKey = useMemo(() => {
+    const map = new Map(completeness.map((item) => [item.key, item]));
+    return map;
+  }, [completeness]);
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Context completeness</h2>
-        <ul className="space-y-2">
-          {completeness.map((item) => (
-            <li key={item.key} className="text-sm flex flex-wrap gap-2">
-              <span className="font-medium min-w-[10rem]">{item.label}</span>
-              <span className="uppercase text-xs tracking-wide">{item.status}</span>
-              <span className="text-muted-foreground">{item.detail}</span>
-            </li>
-          ))}
+  const ordered = SECTION_ORDER.map((key) => byKey.get(key)).filter(
+    (item): item is CompletenessItem => Boolean(item),
+  );
+  const extras = completeness.filter(
+    (item) => !(SECTION_ORDER as readonly string[]).includes(item.key),
+  );
+
+  const confirmed = completeness.filter((i) => profileStateLabel(i.status) === "Confirmed").length;
+  const needsReview = completeness.filter(
+    (i) => profileStateLabel(i.status) === "Needs review",
+  ).length;
+  const missing = completeness.filter((i) => profileStateLabel(i.status) === "Missing").length;
+  const totalAreas = Math.max(completeness.length, 1);
+  const completePct = Math.round((confirmed / totalAreas) * 100);
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader description="What Agent Desk knows about your business — confirmed, needs review, or missing." />
+
+      <section className="surface-primary p-5 md:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="caption">Business Profile</p>
+            <p className="mt-1 font-[family-name:var(--font-fraunces)] text-4xl tracking-tight">
+              {completePct}% complete
+            </p>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Agent Desk understands {confirmed} of {totalAreas} important areas
+              {profile?.organisation?.name ? ` for ${profile.organisation.name}` : ""}.
+            </p>
+          </div>
+          <a href="#profile-checklist" className="btn btn-primary">
+            Complete profile
+          </a>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2 text-sm">
+          <span className="badge badge-success">{confirmed} confirmed</span>
+          <span className="badge badge-warn">{needsReview} need review</span>
+          <span className="badge">{missing} missing</span>
+        </div>
+      </section>
+
+      <section id="profile-checklist" className="space-y-2">
+        <h2 className="section-title">Profile checklist</h2>
+        <ul className="divide-y divide-[var(--border)] overflow-hidden rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)]">
+          {[...ordered, ...extras].map((item) => {
+            const open = openKey === item.key;
+            const done = profileStateLabel(item.status) === "Confirmed";
+            return (
+              <li key={item.key}>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--surface-2)]"
+                  onClick={() => setOpenKey(open ? null : item.key)}
+                  aria-expanded={open}
+                >
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${
+                      done
+                        ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                        : "border border-[var(--border)] text-[var(--muted)]"
+                    }`}
+                    aria-hidden
+                  >
+                    {done ? "✓" : "○"}
+                  </span>
+                  <span className="min-w-0 flex-1 font-medium">{item.label}</span>
+                  <StateBadge status={item.status} />
+                </button>
+                {open ? (
+                  <div className="border-t border-[var(--border)]/70 bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--muted)]">
+                    <p>{item.detail}</p>
+                    {item.key === "products" ? (
+                      <form
+                        className="mt-3 flex flex-wrap gap-2"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!productName.trim()) return;
+                          const res = await fetch("/api/business-context", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "create_product", name: productName }),
+                          });
+                          if (!res.ok) {
+                            toast.error("Could not add product");
+                            return;
+                          }
+                          setProductName("");
+                          toast.success("Product added");
+                          await load();
+                        }}
+                      >
+                        <input
+                          className="input flex-1"
+                          placeholder="Add a product or service"
+                          value={productName}
+                          onChange={(e) => setProductName(e.target.value)}
+                        />
+                        <button className="btn btn-secondary" type="submit">
+                          Add
+                        </button>
+                      </form>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Link href="/settings" className="btn btn-secondary">
+                          Edit in Settings
+                        </Link>
+                        <Link href="/knowledge" className="btn btn-secondary">
+                          Add to Knowledge
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+          {completeness.length === 0 && (
+            <li className="px-4 py-4 text-sm text-[var(--muted)]">Loading profile…</li>
+          )}
         </ul>
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Known information</h2>
-        {!profile ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          <div className="space-y-3 text-sm">
-            <p>
-              <strong>Organisation:</strong> {profile.organisation?.name ?? "Unknown"}
-              {profile.freshness?.organisation
-                ? ` · freshness ${profile.freshness.organisation}`
-                : ""}
-            </p>
-            <p>
-              <strong>Products:</strong>{" "}
-              {profile.products.length
-                ? profile.products.map((p) => p.name).join(", ")
-                : "Insufficient data"}
-            </p>
-            <p>
-              <strong>Audiences:</strong>{" "}
-              {profile.audiences.length
-                ? profile.audiences.map((a) => a.name).join(", ")
-                : "Insufficient data"}
-            </p>
-            <p>
-              <strong>Competitor relations:</strong> {profile.competitors.length || "None configured"}
-            </p>
-            <p>
-              <strong>Active goals:</strong>{" "}
-              {profile.goals.length
-                ? profile.goals.map((g) => `${g.name} (${g.status})`).join(", ")
-                : "None"}
-            </p>
-            <p>
-              <strong>KPIs:</strong>{" "}
-              {profile.kpis.length ? profile.kpis.map((k) => k.name).join(", ") : "None"}
-            </p>
-            <p>
-              <strong>At risk:</strong>{" "}
-              {profile.atRisk.length
-                ? profile.atRisk.map((g) => g.name).join(", ")
-                : "None"}
-            </p>
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Add product / service</h2>
-        <div className="flex flex-wrap gap-2">
-          <input
-            className="input"
-            placeholder="Offering name"
-            value={productName}
-            onChange={(e) => setProductName(e.target.value)}
-          />
-          <button
-            className="btn btn-primary"
-            type="button"
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/business-context", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ action: "create_product", name: productName }),
-                });
-                const json = await res.json();
-                if (!res.ok) throw new Error(json.error || "Failed");
-                toast.success("Product offering added");
-                setProductName("");
-                await load();
-              } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Failed");
-              }
-            }}
-          >
-            Save
-          </button>
-        </div>
-      </section>
+      {profile && (profile.products.length > 0 || profile.audiences.length > 0) ? (
+        <section className="surface-muted p-4 text-sm">
+          <p className="caption">At a glance</p>
+          <p className="mt-2 text-[var(--muted)]">
+            {[
+              profile.products.length
+                ? `Products: ${profile.products.map((p) => p.name).join(", ")}`
+                : null,
+              profile.audiences.length
+                ? `Audiences: ${profile.audiences.map((a) => a.name).join(", ")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </section>
+      ) : null}
     </div>
   );
 }

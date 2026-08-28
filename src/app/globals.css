@@ -2,11 +2,15 @@
 
 :root {
   /* Daylight ink + teal — one accent, used everywhere */
-  --background: #f3f5f8;
+  --background: #eef1f6;
   --foreground: #0b1220;
   --surface: #ffffff;
   --surface-2: #e8edf3;
-  --border: #cdd5e0;
+  --surface-muted: #f6f8fb;
+  --surface-insight: #f0f7f6;
+  --surface-attention: #fff8ef;
+  --border: #c5cdd8;
+  --border-strong: #a8b3c2;
   --accent: #0c6b64;
   --accent-soft: #d7f3ef;
   --accent-2: #1e3a5f;
@@ -58,9 +62,9 @@
 
 body {
   background:
-    radial-gradient(circle at 8% 0%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 38%),
-    radial-gradient(circle at 94% 4%, color-mix(in oklab, var(--accent-2) 10%, transparent), transparent 32%),
-    linear-gradient(180deg, #f7f8fb 0%, var(--background) 42%, #e7ebf1 100%);
+    radial-gradient(circle at 10% -4%, color-mix(in oklab, var(--accent) 14%, transparent), transparent 34%),
+    radial-gradient(circle at 92% 0%, color-mix(in oklab, var(--accent-2) 12%, transparent), transparent 30%),
+    linear-gradient(180deg, #f4f6fa 0%, var(--background) 38%, #e4e9f0 100%);
   color: var(--foreground);
   font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
 }
@@ -78,20 +82,46 @@ a {
 }
 
 .surface {
-  background: color-mix(in oklab, var(--surface) 96%, white);
-  border: 1px solid color-mix(in oklab, var(--border) 75%, white);
-  border-radius: 16px;
-  box-shadow: 0 1px 0 rgba(11, 18, 32, 0.04);
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--border) 88%, white);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.surface-primary {
+  background: var(--surface);
+  border: 1px solid color-mix(in oklab, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-card);
+  box-shadow: 0 1px 0 rgba(11, 18, 32, 0.05), 0 8px 24px rgba(11, 18, 32, 0.04);
+}
+
+.surface-insight {
+  background: var(--surface-insight);
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-card);
+}
+
+.surface-attention {
+  background: var(--surface-attention);
+  border: 1px solid color-mix(in oklab, var(--warn) 22%, var(--border));
+  border-radius: var(--radius-card);
+}
+
+.surface-muted {
+  background: var(--surface-muted);
+  border: 1px solid color-mix(in oklab, var(--border) 70%, white);
+  border-radius: var(--radius-card);
 }
 
 .surface-interactive {
-  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
 }
 
 .surface-interactive:hover {
   transform: translateY(-1px);
   border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
   background: white;
+  box-shadow: 0 4px 14px rgba(11, 18, 32, 0.06);
 }
 
 .app-atmosphere {

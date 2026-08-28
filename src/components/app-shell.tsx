@@ -304,14 +304,16 @@ export function AppShell({
         <ImpersonationBanner />
         <header className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="btn btn-secondary px-2.5 py-2 lg:hidden"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Open navigation menu"
-            >
-              Menu
-            </button>
+            <div className="lg:hidden">
+              <button
+                type="button"
+                className="btn btn-secondary px-2.5 py-2"
+                onClick={() => setMobileOpen(true)}
+                aria-label="Open navigation menu"
+              >
+                Menu
+              </button>
+            </div>
             <div className="min-w-0 flex-1">
               <p className="caption">{activeName}</p>
               <h1 className="truncate font-[family-name:var(--font-fraunces)] text-xl tracking-tight text-[var(--foreground)] md:text-2xl">
@@ -337,14 +339,16 @@ export function AppShell({
                   </kbd>
                 </span>
               </button>
-              <button
-                type="button"
-                className="btn btn-secondary px-2.5 py-2 sm:hidden"
-                onClick={() => openCommandPalette()}
-                aria-label="Open search"
-              >
-                <Search size={16} />
-              </button>
+              <div className="sm:hidden">
+                <button
+                  type="button"
+                  className="btn btn-secondary px-2.5 py-2"
+                  onClick={() => openCommandPalette()}
+                  aria-label="Open search"
+                >
+                  <Search size={16} />
+                </button>
+              </div>
               <NotificationsMenu />
             </div>
           </div>

@@ -42,14 +42,14 @@ export function deriveConfidenceBand(features: PredictionFeatures): {
     return { band: "INSUFFICIENT", reasons };
   }
   if (sampleSize < 3 || cross < 2) {
-    reasons.push("Limited history or single-platform signal → LOW band");
+    reasons.push("Limited history or single-platform signal -> LOW band");
     return { band: "LOW", reasons };
   }
   if (sampleSize >= 8 && cross >= 2 && mentions >= 10 && hasNorm) {
-    reasons.push("Richer history + multi-platform + normalisation context → HIGH band (still uncalibrated)");
+    reasons.push("Richer history + multi-platform + normalisation context -> HIGH band (still uncalibrated)");
     return { band: "HIGH", reasons };
   }
-  reasons.push("Moderate observables → MEDIUM band (transparent, not calibrated)");
+  reasons.push("Moderate observables -> MEDIUM band (transparent, not calibrated)");
   return { band: "MEDIUM", reasons };
 }
 

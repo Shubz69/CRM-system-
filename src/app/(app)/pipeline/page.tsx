@@ -23,12 +23,15 @@ export default function PipelinePage() {
   const [stages, setStages] = useState<Stage[]>([]);
   const [view, setView] = useState<"kanban" | "table">("kanban");
   const [loading, setLoading] = useState(true);
+  const [mobileStageId, setMobileStageId] = useState<string | null>(null);
 
   async function load() {
     const res = await fetch("/api/pipeline");
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed");
-    setStages(json.pipeline?.stages ?? []);
+    const next = json.pipeline?.stages ?? [];
+    setStages(next);
+    setMobileStageId((prev) => prev ?? next[0]?.id ?? null);
   }
 
   useEffect(() => {
@@ -119,42 +122,108 @@ export default function PipelinePage() {
       )}
 
       {view === "kanban" ? (
-        <div className="flex gap-3 overflow-x-auto pb-4">
-          {stages.map((stage) => (
-            <div key={stage.id} className="surface min-w-[260px] max-w-[280px] flex-shrink-0 p-3">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-full" style={{ background: stage.color }} />
-                <h2 className="font-semibold">{stage.name}</h2>
-                <span className="badge ml-auto">{stage.leads.length}</span>
-              </div>
-              <div className="space-y-2">
-                {stage.leads.map((lead) => (
-                  <div key={lead.id} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-                    <p className="font-medium">{lead.contact.fullName || "Lead"}</p>
-                    <p className="text-xs text-[var(--muted)]">@{lead.contact.instagramUsername}</p>
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="badge badge-success">{lead.score}</span>
-                      <select
-                        className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
-                        value={stage.id}
-                        onChange={(e) => moveLead(lead.id, e.target.value)}
-                      >
-                        {stages.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
+        <>
+          <div className="md:hidden">
+            <label className="block text-sm font-medium">
+              Stage
+              <select
+                className="input mt-1 w-full"
+                value={mobileStageId ?? ""}
+                onChange={(e) => setMobileStageId(e.target.value)}
+                aria-label="Pipeline stage"
+              >
+                {stages.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.leads.length})
+                  </option>
                 ))}
-                {stage.leads.length === 0 && (
-                  <p className="text-xs text-[var(--muted)]">No leads in this stage.</p>
-                )}
-              </div>
+              </select>
+            </label>
+            {stages
+              .filter((s) => s.id === mobileStageId)
+              .map((stage) => (
+                <div key={stage.id} className="surface mt-3 space-y-2 p-3">
+                  {stage.leads.map((lead) => (
+                    <div
+                      key={lead.id}
+                      className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+                    >
+                      <p className="font-medium">{lead.contact.fullName || "Lead"}</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        @{lead.contact.instagramUsername}
+                      </p>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="badge badge-success">{lead.score}</span>
+                        <select
+                          className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
+                          value={stage.id}
+                          onChange={(e) => moveLead(lead.id, e.target.value)}
+                        >
+                          {stages.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                  {stage.leads.length === 0 && (
+                    <p className="text-xs text-[var(--muted)]">No leads in this stage.</p>
+                  )}
+                </div>
+              ))}
+          </div>
+          <div className="relative hidden md:block">
+            <div className="flex gap-3 overflow-x-auto pb-4 [scrollbar-gutter:stable]">
+              {stages.map((stage) => (
+                <div
+                  key={stage.id}
+                  className="surface sticky top-0 min-w-[260px] max-w-[280px] flex-shrink-0 p-3"
+                >
+                  <div className="mb-3 flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: stage.color }} />
+                    <h2 className="font-semibold">{stage.name}</h2>
+                    <span className="badge ml-auto">{stage.leads.length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {stage.leads.map((lead) => (
+                      <div
+                        key={lead.id}
+                        className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3"
+                      >
+                        <p className="font-medium">{lead.contact.fullName || "Lead"}</p>
+                        <p className="text-xs text-[var(--muted)]">
+                          @{lead.contact.instagramUsername}
+                        </p>
+                        <div className="mt-2 flex items-center justify-between">
+                          <span className="badge badge-success">{lead.score}</span>
+                          <select
+                            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-xs"
+                            value={stage.id}
+                            onChange={(e) => moveLead(lead.id, e.target.value)}
+                          >
+                            {stages.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    ))}
+                    {stage.leads.length === 0 && (
+                      <p className="text-xs text-[var(--muted)]">No leads in this stage.</p>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            {stages.length > 3 ? (
+              <p className="pointer-events-none absolute top-0 right-0 h-full w-8 bg-gradient-to-l from-[var(--background)] to-transparent" />
+            ) : null}
+          </div>
+        </>
       ) : (
         <div className="surface overflow-x-auto">
           <table className="w-full text-left text-sm">

@@ -99,7 +99,7 @@ const missionFromLeadConsumer: DomainEventConsumer = {
       organisationId: event.organisationId,
       title: `Follow up qualified lead`,
       objectiveSummary: `Operational follow-up for lead ${leadId}`,
-      planSummary: "Qualify→outreach mission from LEAD_QUALIFIED event",
+      planSummary: "Qualify->outreach mission from LEAD_QUALIFIED event",
       tasks: [
         {
           idempotencyKey: `lead-${leadId}-research`,

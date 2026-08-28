@@ -533,7 +533,11 @@ export default function AskPage() {
       inputRef.current?.focus();
       return;
     }
-    if (action === "Turn this into content") {
+    if (
+      action === "Turn this into content" ||
+      action === "Draft content" ||
+      action === "Prepare messages"
+    ) {
       const source = progress?.finalOutput ?? progress?.outputSoFar;
       const researchJobId =
         source &&
@@ -541,7 +545,7 @@ export default function AskPage() {
         typeof (source as { researchJobId?: unknown }).researchJobId === "string"
           ? (source as { researchJobId: string }).researchJobId
           : null;
-      if (researchJobId) {
+      if (researchJobId && action !== "Prepare messages") {
         try {
           const res = await fetch("/api/content", {
             method: "POST",
@@ -560,15 +564,92 @@ export default function AskPage() {
         }
       }
       const summary = renderAnswerBody(source);
-      const seeded = `Write content based on this brief:\n\n${summary.slice(0, 3500)}`;
+      const seeded =
+        action === "Prepare messages"
+          ? `Prepare customer messages based on this brief:\n\n${summary.slice(0, 3500)}`
+          : `Write content based on this brief:\n\n${summary.slice(0, 3500)}`;
       setRequest(seeded);
       setProgress(null);
       setRunId(null);
       inputRef.current?.focus();
       return;
     }
-    if (action === "Save to Knowledge") {
+    if (action === "Create opportunity") {
+      const source = progress?.finalOutput ?? progress?.outputSoFar;
+      const researchJobId =
+        source &&
+        typeof source === "object" &&
+        typeof (source as { researchJobId?: unknown }).researchJobId === "string"
+          ? (source as { researchJobId: string }).researchJobId
+          : null;
+      if (!researchJobId) {
+        toast.error("No research result to turn into an opportunity yet.");
+        return;
+      }
+      try {
+        const res = await fetch("/api/content", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "create_opportunity_from_research",
+            researchJobId,
+            agentRunId: progress?.runId,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Could not create opportunity");
+        toast.success("Opportunity created from this research.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not create opportunity");
+      }
+      return;
+    }
+    if (action === "Save to Knowledge" || action === "Save research") {
       await saveToKnowledge();
+      return;
+    }
+    if (action === "Create goal") {
+      const source = progress?.finalOutput ?? progress?.outputSoFar;
+      const summary = renderAnswerBody(source).slice(0, 120);
+      const name = summary.split("\n").find((line) => line.trim())?.trim().slice(0, 80) || "Goal from Ask";
+      try {
+        const res = await fetch("/api/goals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "create_goal",
+            name,
+            description: renderAnswerBody(source).slice(0, 2000),
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Could not create goal");
+        toast.success("Goal created");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not create goal");
+      }
+      return;
+    }
+    if (action === "Create automation") {
+      const source = progress?.finalOutput ?? progress?.outputSoFar;
+      const summary = renderAnswerBody(source).slice(0, 800);
+      try {
+        const res = await fetch("/api/automations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "create_from_nl",
+            name: "Automation from Ask",
+            naturalLanguage: summary || "Follow up with qualified leads who have not replied",
+            description: "Drafted from an Ask result — review before activating.",
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Could not create automation");
+        toast.success("Automation draft created — review before activating.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not create automation");
+      }
       return;
     }
     if (action === "Make another image") {
