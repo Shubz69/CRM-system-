@@ -83,14 +83,29 @@ type SocialPlatformStatus = {
   connection: SocialConnectionSummary | null;
 };
 
+type MetaInstagramStatus = {
+  appConfigured: boolean;
+  connection: {
+    configured: boolean;
+    isActive: boolean;
+    health: string;
+    username: string | null;
+    igUserId: string | null;
+    scopes: string[];
+    webhookSubscribed: boolean;
+    connectedAt: string | null;
+    lastValidatedAt: string | null;
+    duplicateManyChatRisk: boolean;
+  };
+  reconnectHint: string | null;
+};
+
 /**
- * Messaging is a real, working capability today only for Instagram — via the
- * ManyChat channel configured below, not this OAuth connection. LinkedIn and
- * TikTok have no compliant third-party DM API at all (checked Aug 2026) —
- * shown explicitly so it never reads as "coming soon".
+ * Messaging for Instagram: native Meta path or ManyChat below.
+ * LinkedIn / TikTok have no compliant third-party DM API.
  */
 function messagingNote(slug: string): string {
-  if (slug === "instagram") return "via ManyChat (configured below)";
+  if (slug === "instagram") return "via Meta (Connect above) or ManyChat (below)";
   return "not available — no third-party API exists";
 }
 
@@ -127,6 +142,10 @@ export default function IntegrationsClient() {
   const manychatSetupRef = useRef<HTMLElement | null>(null);
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<ManyChatStatus | null>(null);
+  const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
+  const [metaTestContactId, setMetaTestContactId] = useState("");
+  const [metaTestConversationId, setMetaTestConversationId] = useState("");
+  const [metaTestText, setMetaTestText] = useState("");
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [socialPlatforms, setSocialPlatforms] = useState<SocialPlatformStatus[] | null>(null);
   const [externalId, setExternalId] = useState("");
@@ -181,6 +200,13 @@ export default function IntegrationsClient() {
     setStatus(json);
   }, []);
 
+  const loadMetaInstagram = useCallback(async () => {
+    const res = await fetch("/api/integrations/meta-instagram");
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Failed to load Instagram (Meta)");
+    setMetaIg(json);
+  }, []);
+
   const loadSocial = useCallback(async () => {
     const res = await fetch("/api/social/connections");
     const json = await res.json();
@@ -199,7 +225,13 @@ export default function IntegrationsClient() {
     setLoading(true);
     try {
       const providersPromise = fetch("/api/health/providers");
-      await Promise.all([loadManyChat(), loadReadiness(), loadSocial(), loadMesh()]);
+      await Promise.all([
+        loadManyChat(),
+        loadMetaInstagram(),
+        loadReadiness(),
+        loadSocial(),
+        loadMesh(),
+      ]);
       const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
@@ -210,7 +242,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadManyChat, loadReadiness, loadSocial, loadMesh]);
+  }, [loadManyChat, loadMetaInstagram, loadReadiness, loadSocial, loadMesh]);
 
   useEffect(() => {
     void load();
@@ -239,16 +271,28 @@ export default function IntegrationsClient() {
     }
   }, [loading, searchParams, focusManyChatSetup]);
 
-  // /api/social/[platform]/callback redirects back here with one of these —
-  // surface it once, then strip it from the URL so a refresh doesn't repeat it.
+  // /api/social/[platform]/callback and Meta Instagram OAuth redirect here —
+  // surface once, then strip from the URL so a refresh doesn't repeat it.
   useEffect(() => {
     const connected = searchParams.get("social_connected");
     const error = searchParams.get("social_error");
-    if (!connected && !error) return;
+    const metaStatus = searchParams.get("meta_instagram");
+    const metaError = searchParams.get("meta_instagram_error");
+    if (!connected && !error && !metaStatus) return;
     if (connected) toast.success(`${connected} connected`);
     if (error) toast.error(error);
+    if (metaStatus === "connected") toast.success("Instagram messaging connected");
+    else if (metaStatus === "incomplete")
+      toast.error(metaError || "Instagram connected but setup is incomplete");
+    else if (metaStatus === "not_configured")
+      toast.error("Meta Instagram app is not configured on the server");
+    else if (metaStatus === "denied") toast.error(metaError || "Instagram connection denied");
+    else if (metaStatus === "error") toast.error(metaError || "Instagram connection failed");
+    if (metaStatus === "connected" || metaStatus === "incomplete") {
+      void loadMetaInstagram();
+    }
     router.replace("/integrations");
-  }, [searchParams, router]);
+  }, [searchParams, router, loadMetaInstagram]);
 
   async function disconnectSocial(id: string) {
     setDisconnectingId(id);
@@ -291,6 +335,17 @@ export default function IntegrationsClient() {
 
   async function manychatAction(action: string, payload: Record<string, unknown> = {}) {
     const res = await fetch("/api/integrations/manychat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Request failed");
+    return json;
+  }
+
+  async function metaInstagramAction(action: string, payload: Record<string, unknown> = {}) {
+    const res = await fetch("/api/integrations/meta-instagram", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
@@ -478,24 +533,35 @@ export default function IntegrationsClient() {
         </p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl border border-[var(--border)] p-4">
-            <p className="font-medium">Instagram (via ManyChat)</p>
-            <p className="mt-1 text-xs text-[var(--muted)]">DM messaging into Inbox</p>
+            <p className="font-medium">Instagram messaging</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">DMs into the same Inbox</p>
             <p className="mt-3 text-sm">
-              {status?.connected ? (
+              {metaIg?.connection?.health === "CONNECTED" || status?.connected ? (
                 <span className="badge badge-success">Connected</span>
               ) : (
                 <span className="badge badge-warn">Needs setup</span>
               )}
             </p>
-            {!status?.connected && (
+            {metaIg?.connection?.username ? (
+              <p className="mt-1 text-xs text-[var(--muted)]">@{metaIg.connection.username}</p>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {metaIg?.appConfigured ? (
+                <a
+                  href="/api/integrations/meta-instagram/connect"
+                  className="btn btn-primary text-xs"
+                >
+                  Connect with Instagram
+                </a>
+              ) : null}
               <button
                 type="button"
-                className="btn btn-primary mt-3 text-xs"
+                className="btn btn-secondary text-xs"
                 onClick={() => focusManyChatSetup({ focusToken: true })}
               >
-                Set up
+                Set up with ManyChat
               </button>
-            )}
+            </div>
           </div>
           <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">AI provider</p>
@@ -599,18 +665,156 @@ export default function IntegrationsClient() {
         <div className="surface p-4">
           <div className="flex items-center justify-between gap-2">
             <h2 className="font-semibold">Instagram</h2>
-            <span className={status?.connected ? "badge" : "badge badge-warn"}>
-              {status?.connected ? "Connected" : "Not Connected"}
+            <span
+              className={
+                metaIg?.connection?.health === "CONNECTED" || status?.connected
+                  ? "badge"
+                  : "badge badge-warn"
+              }
+            >
+              {metaIg?.connection?.health === "CONNECTED"
+                ? "Meta Connected"
+                : status?.connected
+                  ? "ManyChat Connected"
+                  : "Not Connected"}
             </span>
           </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">Instagram DMs run through ManyChat</p>
-          <button
-            type="button"
-            className="btn btn-primary mt-3"
-            onClick={() => focusManyChatSetup({ focusToken: !status?.apiTokenConfigured })}
-          >
-            {status?.connected ? "Manage setup" : "Configure"}
-          </button>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Native Meta DMs or ManyChat — same Inbox
+          </p>
+          {metaIg?.connection?.username ? (
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              @{metaIg.connection.username}
+              {metaIg.connection.health ? ` · ${metaIg.connection.health}` : ""}
+            </p>
+          ) : metaIg && !metaIg.appConfigured ? (
+            <p className="mt-1 text-xs text-[var(--muted)]">Meta app not configured on server</p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {metaIg?.appConfigured ? (
+              <a href="/api/integrations/meta-instagram/connect" className="btn btn-primary">
+                Connect with Instagram
+              </a>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => focusManyChatSetup({ focusToken: !status?.apiTokenConfigured })}
+            >
+              Set up with ManyChat
+            </button>
+          </div>
+          {metaIg?.connection?.isActive || metaIg?.connection?.health === "CONNECTED" ? (
+            <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    void (async () => {
+                      setBusy(true);
+                      try {
+                        const json = await metaInstagramAction("validate_configuration");
+                        toast.success(json.message || json.status || "Validated");
+                        await loadMetaInstagram();
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Validate failed");
+                      } finally {
+                        setBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  Validate
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!confirm("Disconnect Instagram (Meta)? History is kept; outbound stops.")) {
+                      return;
+                    }
+                    void (async () => {
+                      setBusy(true);
+                      try {
+                        const json = await metaInstagramAction("disconnect");
+                        toast.success(json.message || "Disconnected");
+                        await loadMetaInstagram();
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Disconnect failed");
+                      } finally {
+                        setBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  Disconnect
+                </button>
+              </div>
+              <p className="text-xs text-[var(--muted)]">
+                Test message sends a real Instagram DM — requires contactId + conversationId with
+                prior inbound.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  className="input text-xs"
+                  placeholder="contactId"
+                  value={metaTestContactId}
+                  onChange={(e) => setMetaTestContactId(e.target.value)}
+                />
+                <input
+                  className="input text-xs"
+                  placeholder="conversationId"
+                  value={metaTestConversationId}
+                  onChange={(e) => setMetaTestConversationId(e.target.value)}
+                />
+                <input
+                  className="input text-xs"
+                  placeholder="Optional message"
+                  value={metaTestText}
+                  onChange={(e) => setMetaTestText(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!metaTestContactId.trim() || !metaTestConversationId.trim()) {
+                      toast.error("contactId and conversationId are required");
+                      return;
+                    }
+                    if (
+                      !confirm(
+                        "Send a real Instagram DM via Meta? This uses the live outbound path.",
+                      )
+                    ) {
+                      return;
+                    }
+                    void (async () => {
+                      setBusy(true);
+                      try {
+                        const json = await metaInstagramAction("send_test_message", {
+                          contactId: metaTestContactId.trim(),
+                          conversationId: metaTestConversationId.trim(),
+                          text: metaTestText.trim() || undefined,
+                        });
+                        if (json.ok) toast.success(json.message || "Test sent");
+                        else toast.error(json.message || "Test not sent");
+                      } catch (e) {
+                        toast.error(e instanceof Error ? e.message : "Test failed");
+                      } finally {
+                        setBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  Send test message
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="surface p-4">
           <div className="flex items-center justify-between gap-2">

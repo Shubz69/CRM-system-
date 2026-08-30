@@ -93,6 +93,12 @@ export async function processInboundMessage(
   options?: { provider?: string; rawPayload?: unknown },
 ): Promise<InboundProcessResult> {
   const provider = options?.provider ?? "simulator";
+  // Channel storage provider: Meta Instagram uses its own channel; simulator /
+  // integration_test / unknown keep ManyChat channel semantics for compatibility.
+  const messagingProvider =
+    options?.provider === "manychat" || options?.provider === "meta_instagram"
+      ? options.provider
+      : "manychat";
   const idempotencyKey =
     input.idempotencyKey ||
     hashForIdempotency(
@@ -182,7 +188,7 @@ export async function processInboundMessage(
       let channel = await tx.messagingChannel.findFirst({
         where: {
           organisationId: input.organisationId,
-          provider: "manychat",
+          provider: messagingProvider,
           ...(input.channelExternalId ? { externalId: input.channelExternalId } : {}),
         },
       });
@@ -191,20 +197,24 @@ export async function processInboundMessage(
         channel = await tx.messagingChannel.create({
           data: {
             organisationId: input.organisationId,
-            provider: "manychat",
+            provider: messagingProvider,
             externalId: input.channelExternalId ?? "default",
-            displayName: "Instagram via ManyChat",
-            instagramUsername: "demo_account",
+            displayName:
+              messagingProvider === "meta_instagram"
+                ? "Instagram (Meta)"
+                : "Instagram via ManyChat",
+            instagramUsername:
+              messagingProvider === "meta_instagram" ? null : "demo_account",
           },
         });
       }
 
-      const identifierValue = `manychat:${input.contact.externalId}`;
+      const identifierValue = `${messagingProvider}:${input.contact.externalId}`;
       const contactIdentifier = await tx.contactIdentifier.findUnique({
         where: {
           organisationId_channel_identifier: {
             organisationId: input.organisationId,
-            channel: "manychat",
+            channel: messagingProvider,
             identifier: identifierValue,
           },
         },
@@ -258,7 +268,7 @@ export async function processInboundMessage(
             identifiers: {
               create: {
                 organisationId: input.organisationId,
-                channel: "manychat",
+                channel: messagingProvider,
                 identifier: identifierValue,
               },
             },
@@ -285,7 +295,7 @@ export async function processInboundMessage(
               data: {
                 organisationId: input.organisationId,
                 contactId: contact.id,
-                channel: "manychat",
+                channel: messagingProvider,
                 identifier: identifierValue,
               },
             });
@@ -300,7 +310,7 @@ export async function processInboundMessage(
               where: {
                 organisationId_channel_identifier: {
                   organisationId: input.organisationId,
-                  channel: "manychat",
+                  channel: messagingProvider,
                   identifier: identifierValue,
                 },
               },
@@ -313,7 +323,7 @@ export async function processInboundMessage(
         }
       }
 
-      const threadKey = input.threadId || `manychat:${input.contact.externalId}`;
+      const threadKey = input.threadId || `${messagingProvider}:${input.contact.externalId}`;
       let conversation = await tx.conversation.findFirst({
         where: {
           organisationId: input.organisationId,
@@ -1137,6 +1147,8 @@ export async function processInboundMessage(
         idempotencyKey: `ai-reply:${result.inboundMessage.id}`,
         threadId: result.conversation.externalThreadId ?? undefined,
         agentVersion: routed.model,
+        provider: messagingProvider,
+        channel: messagingProvider,
       });
 
       if (sendResult.ok && sendResult.dispatch?.messageId) {

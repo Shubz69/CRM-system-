@@ -123,15 +123,23 @@ const envSchema = z.object({
   MANYCHAT_API_TOKEN: z.string().optional(),
   MANYCHAT_WEBHOOK_SECRET: z.string().default("dev-manychat-webhook-secret"),
   /**
-   * Social Connections (Settings → Integrations → Social Connections).
-   * Per-platform OAuth app credentials for tenants to connect their own
-   * Instagram / LinkedIn / TikTok accounts (listen + publish). Unset →
-   * SocialNotConfiguredError, never a fake connection. See docs/SOCIAL_CONNECTIONS.md.
+   * Social Connections + native Instagram DMs share one Meta App.
+   * Canonical keys: INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_GRAPH_API_VERSION
+   * Aliases META_APP_ID / META_APP_SECRET are fallbacks only when INSTAGRAM_* unset.
+   * Precedence: INSTAGRAM_* wins whenever set (never prefer META_* over INSTAGRAM_*).
    */
   INSTAGRAM_APP_ID: z.string().optional(),
   INSTAGRAM_APP_SECRET: z.string().optional(),
   INSTAGRAM_REDIRECT_URI: z.string().optional(),
-  INSTAGRAM_GRAPH_API_VERSION: z.string().default("v21.0"),
+  /** Graph API version for Instagram Login + Send API. Default v26.0 (Aug 2026). */
+  INSTAGRAM_GRAPH_API_VERSION: z.string().default("v26.0"),
+  /** Fallback aliases only — used when corresponding INSTAGRAM_* is unset. */
+  META_APP_ID: z.string().optional(),
+  META_APP_SECRET: z.string().optional(),
+  /** Meta webhook subscription verify token for Instagram messaging. */
+  META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().default("dev-meta-instagram-verify-token"),
+  /** OAuth redirect for native Instagram messaging Login (defaults to APP_URL callback). */
+  META_INSTAGRAM_MESSAGING_REDIRECT_URI: z.string().optional(),
   LINKEDIN_CLIENT_ID: z.string().optional(),
   LINKEDIN_CLIENT_SECRET: z.string().optional(),
   LINKEDIN_REDIRECT_URI: z.string().optional(),
@@ -166,6 +174,7 @@ let cached: AppEnv | null = null;
 const DEV_WEBHOOK_SECRETS = new Set([
   "dev-manychat-webhook-secret",
   "dev-booking-webhook-secret",
+  "dev-meta-instagram-verify-token",
 ]);
 
 export function getEnv(): AppEnv {
@@ -226,6 +235,11 @@ export function getEnv(): AppEnv {
     if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
       console.warn("[env] MANYCHAT_WEBHOOK_SECRET is still the default — rotate before production traffic.");
     }
+    if (DEV_WEBHOOK_SECRETS.has(data.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN)) {
+      console.warn(
+        "[env] META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN is still the default — rotate before Meta webhook traffic.",
+      );
+    }
     if (DEV_WEBHOOK_SECRETS.has(data.BOOKING_WEBHOOK_SECRET)) {
       console.warn("[env] BOOKING_WEBHOOK_SECRET is still the default — rotate before production traffic.");
     }
@@ -259,6 +273,11 @@ export function assertWebhookSecretsConfigured(): void {
   }
   if (DEV_WEBHOOK_SECRETS.has(env.BOOKING_WEBHOOK_SECRET)) {
     throw new Error("BOOKING_WEBHOOK_SECRET must be rotated away from the default in production");
+  }
+  if (DEV_WEBHOOK_SECRETS.has(env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN)) {
+    throw new Error(
+      "META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN must be rotated away from the default in production",
+    );
   }
 }
 

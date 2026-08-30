@@ -93,6 +93,7 @@ enum WebhookProcessingStatus {
 
 enum IntegrationType {
   MANYCHAT
+  META_INSTAGRAM
   OPENAI
   ANTHROPIC
   BOOKING
@@ -459,6 +460,20 @@ model IntegrationCredential {
   @@unique([integrationId, keyName])
 }
 
+/// Short-lived OAuth `state` nonce ledger — single-use CSRF binding for Meta Instagram Login.
+model OAuthStateConsumption {
+  nonce          String   @id
+  organisationId String
+  purpose        String
+  userId         String?
+  consumedAt     DateTime?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@index([organisationId, purpose])
+  @@index([expiresAt])
+}
+
 model MessagingChannel {
   id             String   @id @default(cuid())
   organisationId String
@@ -480,9 +495,11 @@ model MessagingChannel {
 }
 
 /// A tenant's own OAuth-connected social account (Instagram/LinkedIn/TikTok).
-/// Separate from MessagingChannel (the ManyChat-mediated Instagram DM channel) —
-/// this powers "Connect Instagram/LinkedIn/TikTok" in Settings → Integrations for
-/// listening/publishing capabilities. See docs/SOCIAL_CONNECTIONS.md.
+/// Separate from MessagingChannel:
+/// - SocialConnection powers listen/publish OAuth in Integrations → Social Connections
+/// - MessagingChannel.provider = "meta_instagram" | "manychat" powers Instagram DMs
+/// Native Meta Instagram DMs use IntegrationType.META_INSTAGRAM + MessagingChannel,
+/// not ManyChat Integration rows. See docs/SOCIAL_CONNECTIONS.md.
 model SocialConnection {
   id                String                 @id @default(cuid())
   organisationId    String

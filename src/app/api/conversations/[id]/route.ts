@@ -91,6 +91,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       where: { id, organisationId: session.organisationId, deletedAt: null },
       include: {
         contact: { include: { identifiers: true } },
+        messagingChannel: { select: { provider: true } },
         leads: { where: { deletedAt: null }, take: 1 },
       },
     });
@@ -200,7 +201,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         );
       }
 
-      const identifier = conversation.contact.identifiers.find((i) => i.channel === "manychat");
+      const channelProvider = conversation.messagingChannel?.provider || "manychat";
+      const identifier =
+        conversation.contact.identifiers.find((i) => i.channel === channelProvider) ||
+        conversation.contact.identifiers.find((i) => i.channel === "manychat") ||
+        conversation.contact.identifiers[0];
       const bodyHash = createHash("sha256").update(body.reply).digest("hex").slice(0, 16);
       const idempotencyKey =
         body.replyIdempotencyKey ??
@@ -210,13 +215,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         organisationId: session.organisationId,
         conversationId: id,
         contactId: conversation.contactId,
-        contactExternalId:
-          identifier?.identifier.replace(/^manychat:/, "") || conversation.contactId,
+        contactExternalId: identifier
+          ? identifier.identifier.replace(new RegExp(`^${channelProvider}:`), "")
+          : conversation.contactId,
         content: body.reply,
         source: "HUMAN",
         actorId: session.userId,
         holder: `human:${session.userId}:${id}`,
         idempotencyKey,
+        provider: channelProvider,
+        channel: channelProvider,
         threadId: conversation.externalThreadId ?? undefined,
         expectedActivityVersion: body.expectedActivityVersion,
         metadata: { path: "inbox_reply" },
@@ -234,7 +242,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           sendResult.code === "CONTACT_SUPPRESSED" ||
           sendResult.code === "DO_NOT_CONTACT" ||
           sendResult.code === "CONVERSATION_CLOSED" ||
-          sendResult.code === "MESSAGING_WINDOW_CLOSED"
+          sendResult.code === "MESSAGING_WINDOW_CLOSED" ||
+          sendResult.code === "META_INSTAGRAM_NO_PRIOR_INBOUND" ||
+          sendResult.code === "PROVIDER_POLICY_BLOCKED"
         ) {
           return jsonError(sendResult.code, 403);
         }

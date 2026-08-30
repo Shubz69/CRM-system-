@@ -1,9 +1,11 @@
 import { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";
+import { createMetaInstagramMessagingAdapter } from "@/adapters/messaging/meta-instagram";
 import type { MessagingAdapter, OutboundMessage, OutboundResult } from "@/adapters/messaging/types";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { allowMockTransports, isProductionRuntime } from "@/lib/runtime";
 import { resolveMessagingSendCredential } from "@/services/messaging/credentials";
+import { isMetaInstagramProvider, MESSAGING_PROVIDER } from "@/services/messaging/providers";
 
 /**
  * Live ManyChat adapter.
@@ -109,8 +111,34 @@ export function getMessagingAdapter(preferLive?: boolean): MessagingAdapter {
 export async function getMessagingAdapterForOrganisation(
   organisationId: string,
   preferLive?: boolean,
+  provider?: string,
 ): Promise<MessagingAdapter> {
-  const credential = await resolveMessagingSendCredential(organisationId);
+  const credential = await resolveMessagingSendCredential(organisationId, { provider });
+  const useMeta =
+    isMetaInstagramProvider(provider) ||
+    Boolean(credential.connectionRef?.startsWith("meta_instagram:"));
+
+  if (useMeta) {
+    if (!credential.token) {
+      return new NotConfiguredMessagingAdapter(MESSAGING_PROVIDER.META_INSTAGRAM);
+    }
+    const live = createMetaInstagramMessagingAdapter();
+    const igUserId = credential.igUserId ?? null;
+    return {
+      name: live.name,
+      sendMessage(message) {
+        return live.sendMessage({
+          ...message,
+          apiToken: message.apiToken ?? credential.token!,
+          metadata: {
+            ...(message.metadata ?? {}),
+            igUserId: (message.metadata?.igUserId as string | undefined) ?? igUserId,
+          },
+        });
+      },
+    };
+  }
+
   if (!credential.token) return getMessagingAdapter(preferLive);
 
   const live = new ManyChatAdapter();
@@ -138,6 +166,12 @@ class NotConfiguredMessagingAdapter implements MessagingAdapter {
 }
 
 export { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";
+export {
+  MetaInstagramMessagingAdapter,
+  createMetaInstagramMessagingAdapter,
+  normalizeMetaInstagramWebhookMessage,
+  normalizeAllMetaInstagramWebhookMessages,
+} from "@/adapters/messaging/meta-instagram";
 export {
   clearMockOutboundLog,
   mockOutboundLog,

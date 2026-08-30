@@ -301,7 +301,9 @@ export async function dispatchOutboundMessage(
   }
 
   // Capture connection binding at PREPARE so revoke-after-prepare can be detected.
-  const prepareCredential = await resolveMessagingSendCredential(input.organisationId);
+  const prepareCredential = await resolveMessagingSendCredential(input.organisationId, {
+    provider,
+  });
 
   let dispatch = existing;
   if (!dispatch) {
@@ -441,6 +443,7 @@ export async function dispatchOutboundMessage(
       typeof dispatch.connectionRef === "string" ? dispatch.connectionRef : null;
     const credential = await resolveMessagingSendCredential(input.organisationId, {
       preparedConnectionRef: preparedConnectionRef ?? undefined,
+      provider,
     });
 
     if (credential.source === "revoked") {
@@ -467,7 +470,11 @@ export async function dispatchOutboundMessage(
       },
     });
 
-    const adapter = await getMessagingAdapterForOrganisation(input.organisationId, true);
+    const adapter = await getMessagingAdapterForOrganisation(
+      input.organisationId,
+      true,
+      provider,
+    );
     let result;
     try {
       result = await adapter.sendMessage({
@@ -595,6 +602,7 @@ export async function prepareAndSendOutbound(input: {
   holder: string;
   idempotencyKey: string;
   provider?: string;
+  channel?: string;
   threadId?: string;
   agentVersion?: string;
   source?: OutboundSource;
@@ -622,6 +630,7 @@ export async function prepareAndSendOutbound(input: {
     idempotencyKey: input.idempotencyKey,
     holder: input.holder,
     provider: input.provider,
+    channel: input.channel ?? input.provider,
     threadId: input.threadId,
     agentVersion: input.agentVersion,
     actorId: input.actorId,

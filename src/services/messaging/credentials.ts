@@ -2,6 +2,8 @@ import { IntegrationType } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
+import { resolveMetaInstagramSendCredential } from "@/services/messaging/meta-instagram";
+import { isMetaInstagramProvider } from "@/services/messaging/providers";
 
 const API_TOKEN_KEY = "api_token";
 
@@ -240,21 +242,45 @@ export async function reconnectOrganisationManyChat(
 }
 
 /**
- * Resolve ManyChat send credentials for an organisation.
- * Prefer active org credential over env. Never cross-org.
+ * Resolve messaging send credentials for an organisation.
+ * ManyChat: prefer active org credential over env. Never cross-org.
+ * Meta Instagram: org token only (no env ManyChat fallback).
  * If a prior dispatch bound an org connection that is now inactive → revoked
  * (do not silently fall back to env for that send).
  */
 export async function resolveMessagingSendCredential(
   organisationId: string,
-  options?: { preparedConnectionRef?: string },
+  options?: { preparedConnectionRef?: string; provider?: string },
 ): Promise<{
   token: string | null;
   source: MessagingCredentialSource;
   connectionRef: string | null;
+  igUserId?: string | null;
 }> {
-  const organisation = await readOrganisationCredential(organisationId);
   const prepared = options?.preparedConnectionRef;
+  const wantMeta =
+    isMetaInstagramProvider(options?.provider) ||
+    Boolean(prepared?.startsWith("meta_instagram:"));
+
+  if (wantMeta) {
+    const meta = await resolveMetaInstagramSendCredential(organisationId);
+    if (prepared?.startsWith("meta_instagram:")) {
+      if (!meta.connectionRef || meta.connectionRef !== prepared) {
+        return { token: null, source: "revoked", connectionRef: prepared, igUserId: null };
+      }
+      if (meta.source === "revoked" || !meta.token) {
+        return { token: null, source: "revoked", connectionRef: prepared, igUserId: meta.igUserId };
+      }
+    }
+    return {
+      token: meta.token,
+      source: meta.source,
+      connectionRef: meta.connectionRef,
+      igUserId: meta.igUserId,
+    };
+  }
+
+  const organisation = await readOrganisationCredential(organisationId);
 
   if (prepared?.startsWith("manychat:")) {
     if (!organisation || organisation.connectionRef !== prepared) {

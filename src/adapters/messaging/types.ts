@@ -38,7 +38,7 @@ export type NormalizedInboundMessage = {
 
 /**
  * Conceptual provider adapter surface.
- * ManyChat remains the only real adapter; other providers are not implemented.
+ * ManyChat and native Meta Instagram are the live adapters.
  */
 export type MessagingProviderAdapter = MessagingAdapter & {
   readonly capabilities?: MessagingAdapterCapabilities;

@@ -1,5 +1,7 @@
+import { MessageDirection } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
+import { isMetaInstagramProvider } from "@/services/messaging/providers";
 import { isContactSuppressed } from "@/services/messaging/suppression";
 
 export type ContactabilityActionType =
@@ -18,7 +20,9 @@ export type ContactabilityCode =
   | "CONVERSATION_NOT_FOUND"
   | "CONVERSATION_CLOSED"
   | "AI_PAUSED"
-  | "MESSAGING_WINDOW_CLOSED";
+  | "MESSAGING_WINDOW_CLOSED"
+  | "PROVIDER_POLICY_BLOCKED"
+  | "META_INSTAGRAM_NO_PRIOR_INBOUND";
 
 export class ContactabilityError extends Error {
   constructor(
@@ -104,6 +108,24 @@ export async function assertContactable(input: {
       "DO_NOT_CONTACT",
       "Conversation is marked do not contact",
     );
+  }
+
+  // Meta Instagram: no cold DMs — require prior customer inbound on this conversation.
+  if (isMetaInstagramProvider(input.channel)) {
+    const priorInbound = await prisma.message.findFirst({
+      where: {
+        organisationId: input.organisationId,
+        conversationId: input.conversationId,
+        direction: MessageDirection.INBOUND,
+      },
+      select: { id: true },
+    });
+    if (!priorInbound) {
+      throw new ContactabilityError(
+        "META_INSTAGRAM_NO_PRIOR_INBOUND",
+        "Meta Instagram forbids outbound without a prior customer message on this conversation",
+      );
+    }
   }
 
   const isHuman = input.actionType === "HUMAN" || input.actionType === "HUMAN_REPLY";

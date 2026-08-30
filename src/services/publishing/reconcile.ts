@@ -204,7 +204,7 @@ async function lookupExternalPost(input: {
   externalPostId: string;
 }): Promise<LookupResult> {
   if (input.platform === SocialPlatform.INSTAGRAM) {
-    const version = getEnv().INSTAGRAM_GRAPH_API_VERSION || "v21.0";
+    const version = getEnv().INSTAGRAM_GRAPH_API_VERSION || "v26.0";
     try {
       const res = await fetch(
         `https://graph.instagram.com/${version}/${encodeURIComponent(input.externalPostId)}` +
