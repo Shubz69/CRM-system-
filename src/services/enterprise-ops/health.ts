@@ -6,6 +6,7 @@
 import { DomainEventStatus, PublishingJobStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { pingRedis } from "@/jobs/redis";
+import { getRedisCircuitSnapshot, isRedisCircuitOpen } from "@/jobs/redis-circuit";
 
 export const PRODUCTION_HEALTH_MATURITY = "FOUNDATION" as const;
 
@@ -55,6 +56,12 @@ export async function getProductionHealth(): Promise<ProductionHealth> {
   } catch {
     redisOk = false;
   }
+  const circuit = getRedisCircuitSnapshot();
+  const redisDetail = isRedisCircuitOpen()
+    ? `provider circuit OPEN (${circuit.openReason ?? "fatal"})`
+    : redisOk
+      ? "ping ok"
+      : "unreachable or not configured";
 
   let pending = 0;
   let retry = 0;
@@ -112,8 +119,8 @@ export async function getProductionHealth(): Promise<ProductionHealth> {
     ok: databaseOk,
     database: { ok: databaseOk, detail: databaseDetail },
     redis: {
-      ok: redisOk,
-      detail: redisOk ? "ping ok" : "unreachable or not configured",
+      ok: redisOk && !isRedisCircuitOpen(),
+      detail: redisDetail,
     },
     outboxLag: {
       pendingCount: pending,

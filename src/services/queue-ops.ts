@@ -14,6 +14,8 @@ type WorkerMeta = {
   queues: string[];
   prefix: string;
   stoppedAt: string | null;
+  degraded: boolean;
+  degradedReason: string | null;
 };
 
 const counts: Record<QueueOpKind, number> = {
@@ -51,6 +53,17 @@ export function markWorkerStarted(input: { queues: string[]; prefix: string }): 
     queues: input.queues,
     prefix: input.prefix,
     stoppedAt: null,
+    degraded: false,
+    degradedReason: null,
+  };
+}
+
+export function markWorkerDegraded(degraded: boolean, reason?: string): void {
+  if (!workerMeta) return;
+  workerMeta = {
+    ...workerMeta,
+    degraded,
+    degradedReason: degraded ? reason ?? "degraded" : null,
   };
 }
 

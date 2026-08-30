@@ -11,6 +11,11 @@
 import IORedis, { type RedisOptions } from "ioredis";
 import { logger } from "@/lib/logger";
 import { getRuntimeMode, isProductionRuntime } from "@/lib/runtime";
+import {
+  isFatalRedisProviderError,
+  isRedisCircuitOpen,
+  noteRedisError,
+} from "@/jobs/redis-circuit";
 
 let shared: IORedis | null = null;
 let lastPingAt = 0;
@@ -151,6 +156,13 @@ export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
       }),
     );
     shared.on("error", (err) => {
+      if (noteRedisError(err)) {
+        return;
+      }
+      if (isFatalRedisProviderError(err) && isRedisCircuitOpen()) {
+        // Deduplicated — circuit already OPEN.
+        return;
+      }
       logger.error("Redis connection error", { message: err.message });
     });
   }
@@ -160,10 +172,20 @@ export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
 /**
  * Lightweight ping. Prefers shared connection; caches result briefly to avoid
  * connect storms from health/enqueue paths.
+ *
+ * When the fatal provider circuit is OPEN, returns false without Redis traffic
+ * unless `bypassCircuit` is set (recovery probe only).
  */
-export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
+export async function pingRedis(
+  timeoutMs = 2000,
+  opts?: { bypassCircuit?: boolean },
+): Promise<boolean> {
+  if (!opts?.bypassCircuit && isRedisCircuitOpen()) {
+    return false;
+  }
+
   const now = Date.now();
-  if (now - lastPingAt < PING_CACHE_MS) {
+  if (!opts?.bypassCircuit && now - lastPingAt < PING_CACHE_MS) {
     return lastPingOk;
   }
 
@@ -194,7 +216,8 @@ export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
       lastPingOk = pong === "PONG";
       lastPingAt = now;
       return lastPingOk;
-    } catch {
+    } catch (error) {
+      noteRedisError(error);
       /* fall through to ephemeral */
     }
   }
@@ -216,9 +239,12 @@ export async function pingRedis(timeoutMs = 2000): Promise<boolean> {
     lastPingAt = now;
     return lastPingOk;
   } catch (error) {
-    logger.warn("Redis ping failed", {
-      message: error instanceof Error ? error.message : "unknown",
-    });
+    noteRedisError(error);
+    if (!(isFatalRedisProviderError(error) && isRedisCircuitOpen())) {
+      logger.warn("Redis ping failed", {
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
     lastPingOk = false;
     lastPingAt = now;
     return false;

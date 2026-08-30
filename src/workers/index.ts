@@ -31,6 +31,14 @@ import {
   pingRedis,
   redisRequired,
 } from "@/jobs/redis";
+import {
+  clearRedisCircuit,
+  getRedisCircuitSnapshot,
+  isFatalRedisProviderError,
+  isRedisCircuitOpen,
+  noteRedisError,
+  setRedisCircuitHooks,
+} from "@/jobs/redis-circuit";
 import { processDueFollowUps, startInProcessFollowUpLoop } from "@/workers/followups";
 import { processAgentRunJob } from "@/workers/agent-runs-processor";
 import { aggregateDailyInsights } from "@/services/insights-aggregation";
@@ -40,6 +48,7 @@ import { logger } from "@/lib/logger";
 import { recordFailedJob } from "@/services/failed-jobs";
 import { assertProductionSecretsConfigured } from "@/lib/env";
 import {
+  markWorkerDegraded,
   markWorkerStarted,
   markWorkerStopped,
   recordQueueOp,
@@ -96,6 +105,39 @@ const CONTINUOUS_INTEL_SWEEP_INTERVAL_MS = Number(
 const PROCESS_TWIN_RECONCILE_INTERVAL_MS = Number(
   process.env.PROCESS_TWIN_RECONCILE_INTERVAL_MS || 6 * 60 * 60_000,
 );
+/** Bounded Redis recovery probe while fatal circuit is OPEN (~5 minutes). */
+const REDIS_CIRCUIT_RECOVERY_INTERVAL_MS = Number(
+  process.env.REDIS_CIRCUIT_RECOVERY_INTERVAL_MS || 5 * 60_000,
+);
+
+/** Re-enqueue eligible READY mission tasks after Redis loss — skipped while circuit OPEN. */
+function startMissionQueueRecoverySweep() {
+  intervals.push(
+    setInterval(() => {
+      if (isRedisCircuitOpen()) return;
+      recoverMissionQueueJobs().catch((error) => {
+        noteRedisError(error);
+        logger.error("Mission queue recovery failed", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      });
+    }, MISSION_QUEUE_RECOVERY_INTERVAL_MS),
+  );
+}
+
+function startRedisCircuitRecoveryProbe() {
+  intervals.push(
+    setInterval(() => {
+      if (!isRedisCircuitOpen()) return;
+      void (async () => {
+        const ok = await pingRedis(2000, { bypassCircuit: true });
+        if (ok) {
+          clearRedisCircuit("recovery_probe_ok");
+        }
+      })().catch(() => undefined);
+    }, REDIS_CIRCUIT_RECOVERY_INTERVAL_MS),
+  );
+}
 
 async function runDailyAggregationSweep() {
   const orgs = await prisma.organisation.findMany({
@@ -168,20 +210,7 @@ function startOutboxDbSweep() {
   );
 }
 
-/** Re-enqueue eligible READY mission tasks after Redis loss. */
-function startMissionQueueRecoverySweep() {
-  intervals.push(
-    setInterval(() => {
-      recoverMissionQueueJobs().catch((error) =>
-        logger.error("Mission queue recovery failed", {
-          message: error instanceof Error ? error.message : "unknown",
-        }),
-      );
-    }, MISSION_QUEUE_RECOVERY_INTERVAL_MS),
-  );
-}
-
-/** Phase 13 — opportunity detectors + expire (Postgres only). */
+/** Opportunity detectors — conservative Postgres sweep (no new BullMQ worker). */
 function startOpportunityDetectorSweep() {
   intervals.push(
     setInterval(() => {
@@ -310,6 +339,38 @@ async function startRedisWorkers() {
 
   workers.push(agentRunsWorker);
 
+  /**
+   * BullMQ 5.x: Worker.pause() sets paused=true and stops the main fetch loop
+   * (`while (!this.paused)`). Quota command errors are non-connection errors with
+   * onlyEmitError — without pause they re-enter the loop and storm EVALSHA.
+   * doNotWaitActive=true avoids waiting on in-flight jobs during emergency stop.
+   * Do NOT process.exit — Railway restartPolicyType=ON_FAILURE would crash-loop.
+   */
+  setRedisCircuitHooks({
+    onOpen: async () => {
+      markWorkerDegraded(true, "REDIS_PROVIDER_QUOTA");
+      if (!agentRunsWorker.isPaused()) {
+        await agentRunsWorker.pause(true);
+        logger.error("BullMQ agent-runs worker paused — Redis provider circuit OPEN", {
+          circuit: getRedisCircuitSnapshot(),
+        });
+      }
+    },
+    onRecover: async () => {
+      markWorkerDegraded(false);
+      if (agentRunsWorker.isPaused()) {
+        agentRunsWorker.resume();
+        logger.info("BullMQ agent-runs worker resumed — Redis provider circuit CLOSED");
+      }
+    },
+  });
+
+  agentRunsWorker.on("error", (err) => {
+    if (noteRedisError(err)) return;
+    if (isFatalRedisProviderError(err) && isRedisCircuitOpen()) return;
+    logger.error("BullMQ agent-runs worker error", { message: err.message });
+  });
+
   agentRunsWorker.on("ready", () =>
     logger.info("BullMQ agent-runs worker ready", {
       queuePrefix: getQueuePrefix(),
@@ -321,6 +382,7 @@ async function startRedisWorkers() {
   );
 
   agentRunsWorker.on("failed", (job, err) => {
+    noteRedisError(err);
     logger.error("Worker job failed", {
       queue: agentRunsWorker.name,
       jobId: job?.id,
@@ -361,6 +423,7 @@ async function startRedisWorkers() {
   startMaintenanceDbSweeps();
   startOutboxDbSweep();
   startMissionQueueRecoverySweep();
+  startRedisCircuitRecoveryProbe();
   startOpportunityDetectorSweep();
   startKpiRefreshSweep();
   startPublishingSweep();
@@ -371,7 +434,7 @@ async function startRedisWorkers() {
   void dispatchDomainEventBatch().catch(() => undefined);
 
   logger.info(
-    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention + outbox + mission-queue + opportunity detectors + KPI refresh + publishing + continuous-intel + process-twin reconcile via Postgres intervals",
+    "Worker started — 1 BullMQ worker (agent-runs); follow-ups + retention + outbox + mission-queue + opportunity detectors + KPI refresh + publishing + continuous-intel + process-twin reconcile via Postgres intervals; Redis quota circuit armed",
   );
 }
 

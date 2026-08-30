@@ -9,6 +9,7 @@ import { logger } from "@/lib/logger";
 import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { missionTaskJobId, pingRedis } from "@/jobs/redis";
 import { getAgentRunsQueue } from "@/jobs/queues";
+import { isRedisCircuitOpen } from "@/jobs/redis-circuit";
 
 /**
  * Find READY tasks that should have queue work and ensure a BullMQ job exists.
@@ -18,6 +19,11 @@ export async function recoverMissionQueueJobs(input?: {
   organisationId?: string;
   limit?: number;
 }): Promise<{ examined: number; enqueued: number; skipped: number }> {
+  if (isRedisCircuitOpen()) {
+    logger.warn("Mission queue recovery skipped — Redis provider circuit OPEN");
+    return { examined: 0, enqueued: 0, skipped: 0 };
+  }
+
   if (!(await pingRedis())) {
     logger.warn("Mission queue recovery skipped — Redis unavailable");
     return { examined: 0, enqueued: 0, skipped: 0 };

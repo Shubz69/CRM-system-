@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { getAgentRunsQueue, type JobsOptions } from "@/jobs/queues";
-import { pingRedis, redisRequired, toSafeBullMqJobId} from "@/jobs/redis";
+import { pingRedis, redisRequired, toSafeBullMqJobId } from "@/jobs/redis";
+import {
+  assertRedisCircuitAllowsWork,
+  RedisCircuitOpenError,
+} from "@/jobs/redis-circuit";
 import { recordQueueOp } from "@/services/queue-ops";
 
 /** Agent-runs queue also carries rare on-demand maintenance (single worker topology). */
@@ -49,6 +53,17 @@ export async function enqueueAgentRunJob(input: {
   payload: Record<string, unknown>;
   opts?: JobsOptions;
 }): Promise<{ jobId: string }> {
+  try {
+    assertRedisCircuitAllowsWork();
+  } catch (error) {
+    if (error instanceof RedisCircuitOpenError) {
+      throw new Error(
+        "Cannot enqueue agent-runs job: Redis provider circuit is OPEN (quota exhausted). Job was not queued.",
+      );
+    }
+    throw error;
+  }
+
   if (!(await pingRedis())) {
     throw new Error(
       redisRequired()
