@@ -25,6 +25,8 @@ export type PlanResult =
   | { kind: "plan"; plan: AgentPlan }
   | Clarification;
 
+import type { AgentAnswerMode } from "@prisma/client";
+
 export type OrgAgentContext = {
   organisationId: string;
   organisationName?: string;
@@ -32,4 +34,6 @@ export type OrgAgentContext = {
   remainingAllowanceCents?: number | null;
   /** Uploaded reference Asset id for imaging runs. */
   referenceAssetId?: string | null;
+  /** Explicit or detected answer mode — skips format clarification when set. */
+  answerMode?: AgentAnswerMode | null;
 };

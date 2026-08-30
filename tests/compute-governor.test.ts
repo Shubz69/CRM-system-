@@ -117,4 +117,35 @@ describe("Phase 20A compute governor", () => {
     expect(active.selectedModel).toBe("legacy-standard");
     expect(plan.legacySelection.tier).toBe("default");
   });
+
+  it("maps answer modes into existing governor modes", async () => {
+    const quick = await planCompute({
+      organisationId: "org_1",
+      taskType: "insight_generation",
+      answerMode: "QUICK",
+      preferCache: true,
+      verificationBudget: "FAST",
+      complexity: "LOW",
+    });
+    expect(quick.governorMode).toBe("ECONOMY");
+    expect(quick.reasonCodes).toContain("ANSWER_MODE_QUICK");
+    expect(quick.verificationDepth).toBe("FAST");
+
+    const actionHigh = await planCompute({
+      organisationId: "org_1",
+      taskType: "insight_generation",
+      answerMode: "ACTION",
+      consequence: "HIGH",
+    });
+    expect(actionHigh.governorMode).toBe("ADVANCED");
+    expect(actionHigh.reasonCodes).toContain("ANSWER_MODE_ACTION");
+
+    const deep = await planCompute({
+      organisationId: "org_1",
+      taskType: "insight_generation",
+      answerMode: "DEEP",
+    });
+    expect(deep.governorMode).toBe("DEEP");
+    expect(deep.verificationDepth).toBe("DEEP");
+  });
 });

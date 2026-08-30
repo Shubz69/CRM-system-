@@ -33,6 +33,21 @@ vi.mock("@/adapters/sources/apify-billing", () => ({
   },
 }));
 
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    systemSetting: {
+      findUnique: vi.fn(async () => ({ key: "apify.enabled", value: { enabled: true } })),
+      upsert: vi.fn(async () => ({ key: "apify.enabled", value: { enabled: true } })),
+    },
+    organisationPreference: {
+      findUnique: vi.fn(async () => null),
+      upsert: vi.fn(async () => null),
+    },
+    researchSource: { findMany: vi.fn(async () => []) },
+    researchSourceSnapshot: { findMany: vi.fn(async () => []) },
+  },
+}));
+
 function stubApifyFetchSequence(
   handlers: Array<(url: string, init?: RequestInit) => Promise<Response> | Response>,
 ) {

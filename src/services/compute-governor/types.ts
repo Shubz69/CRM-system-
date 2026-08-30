@@ -1,3 +1,4 @@
+import type { AgentAnswerMode } from "@prisma/client";
 import type { AiModelTier, AiTaskType } from "@/lib/ai-models";
 
 export type ComputeExecutionMode =
@@ -17,6 +18,10 @@ export type ComputePlanInput = {
   complexity?: ComputeBand | number;
   consequence?: ComputeBand | number;
   verificationBudget?: VerificationDepth;
+  /** Ask/research answer mode — maps into existing governor controls (not a new pipeline). */
+  answerMode?: AgentAnswerMode | null;
+  /** Prefer CACHE/ECONOMY paths when evidence allows (QUICK mode). */
+  preferCache?: boolean;
   evidenceState?: {
     hasVerifiedClaim?: boolean;
     hasBusinessState?: boolean;

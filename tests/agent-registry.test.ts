@@ -85,7 +85,10 @@ describe("agent registry", () => {
   });
 
   it("plans research → analyst → critic for research requests", () => {
-    const plan = planAgentRunDeterministic("Research plant hire equipment pricing in the UK");
+    const plan = planAgentRunDeterministic("Research plant hire equipment pricing in the UK", {
+      organisationId: "org_1",
+      answerMode: "DEEP",
+    });
     expect(plan.kind).toBe("plan");
     if (plan.kind !== "plan") return;
     expect(plan.plan.steps.map((s) => s.agentName)).toEqual([
@@ -99,6 +102,7 @@ describe("agent registry", () => {
   it("plans social listening pipeline without assuming Instagram", () => {
     const plan = planAgentRunDeterministic(
       "Social listening on what hooks and formats work for dental practice software",
+      { organisationId: "org_1", answerMode: "EXECUTIVE" },
     );
     expect(plan.kind).toBe("plan");
     if (plan.kind !== "plan") return;

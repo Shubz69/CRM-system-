@@ -16,6 +16,7 @@ import {
 const createSchema = z.object({
   request: z.string().min(1).max(20_000),
   referenceAssetId: z.string().min(1).optional(),
+  answerMode: z.enum(["QUICK", "EXECUTIVE", "ACTION", "DEEP"]).optional(),
 });
 
 function askErrorResponse(error: unknown, fallbackStatus = 503) {
@@ -55,11 +56,13 @@ export async function POST(req: NextRequest) {
       userId: session.userId,
       request: body.request,
       referenceAssetId: body.referenceAssetId ?? null,
+      answerMode: body.answerMode ?? null,
     });
     return Response.json({
       ok: true,
       runId,
       jobId,
+      answerMode: body.answerMode ?? null,
       message: "Started — you'll see progress as each step finishes.",
     });
   } catch (error) {

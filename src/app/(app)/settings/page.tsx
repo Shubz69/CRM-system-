@@ -16,9 +16,34 @@ type Channel = {
 
 type Member = {
   id: string;
+  userId: string;
   role: string;
-  user: { email: string; name: string | null };
+  user: {
+    id: string;
+    email: string;
+    name: string | null;
+    isPlatformAdmin?: boolean;
+  };
 };
+
+type PendingInvite = {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  expiresAt: string;
+  createdAt: string;
+};
+
+const INVITE_ROLE_OPTIONS = [
+  "ADMINISTRATOR",
+  "MANAGER",
+  "SALES_AGENT",
+  "ANALYST",
+  "READ_ONLY",
+] as const;
+
+const MEMBER_ROLE_OPTIONS = ["OWNER", ...INVITE_ROLE_OPTIONS] as const;
 
 type OrgInfo = {
   name?: string;
@@ -45,6 +70,8 @@ function StatusChip({ ok, label }: { ok: boolean; label: string }) {
 export default function SettingsPage() {
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [invitations, setInvitations] = useState<PendingInvite[]>([]);
+  const [canManageMembers, setCanManageMembers] = useState(false);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [providers, setProviders] = useState<ProviderStatus>({});
@@ -52,18 +79,49 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [bookingUrl, setBookingUrl] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<string>("SALES_AGENT");
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   async function load() {
-    const [settingsRes, channelsRes, providersRes] = await Promise.all([
+    const [settingsRes, channelsRes, providersRes, membersRes] = await Promise.all([
       fetch("/api/settings"),
       fetch("/api/messaging-channels"),
       fetch("/api/health/providers"),
+      fetch("/api/workspace/members"),
     ]);
     if (settingsRes.ok) {
       const json = await settingsRes.json();
       setOrg(json.organisation);
-      setMembers(json.members || []);
       setIntegrations(json.integrations || []);
+      if (!membersRes.ok) {
+        // Fallback: settings still returns basic member list for read-only viewers.
+        setMembers(
+          (json.members || []).map(
+            (m: {
+              id: string;
+              userId?: string;
+              role: string;
+              user: { email: string; name: string | null };
+            }) => ({
+              id: m.id,
+              userId: m.userId || m.id,
+              role: m.role,
+              user: { id: m.userId || m.id, email: m.user.email, name: m.user.name },
+            }),
+          ),
+        );
+      }
+    }
+    if (membersRes.ok) {
+      const json = await membersRes.json();
+      setCanManageMembers(true);
+      setMembers(json.members || []);
+      setInvitations(json.invitations || []);
+    } else {
+      setCanManageMembers(false);
+      setInvitations([]);
     }
     if (channelsRes.ok) {
       const json = await channelsRes.json();
@@ -72,6 +130,102 @@ export default function SettingsPage() {
     if (providersRes.ok) {
       const json = await providersRes.json();
       setProviders(json.providers || {});
+    }
+  }
+
+  async function sendInvite(e: FormEvent) {
+    e.preventDefault();
+    setInviteBusy(true);
+    setLastInviteUrl(null);
+    try {
+      const res = await fetch("/api/workspace/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Invite failed");
+        return;
+      }
+      if (json.emailSent) {
+        toast.success("Invitation email sent");
+      } else {
+        toast.message(json.emailError || "Email not sent — copy the invite link");
+        if (json.inviteUrl) setLastInviteUrl(json.inviteUrl);
+      }
+      if (json.inviteUrl && json.emailSent) setLastInviteUrl(json.inviteUrl);
+      setInviteEmail("");
+      await load();
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function resendInvite(id: string) {
+    const res = await fetch(`/api/workspace/invitations/${id}/resend`, { method: "POST" });
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error(json.error || "Resend failed");
+      return;
+    }
+    if (json.emailSent) toast.success("Invitation resent");
+    else {
+      toast.message(json.emailError || "Email not sent — copy the invite link");
+      if (json.inviteUrl) setLastInviteUrl(json.inviteUrl);
+    }
+    await load();
+  }
+
+  async function revokeInvite(id: string) {
+    const res = await fetch(`/api/workspace/invitations/${id}/revoke`, { method: "POST" });
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error(json.error || "Revoke failed");
+      return;
+    }
+    toast.success("Invitation revoked");
+    await load();
+  }
+
+  async function changeRole(userId: string, role: string) {
+    const res = await fetch(`/api/workspace/members/${userId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "role", role }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error(json.error || "Role change failed");
+      return;
+    }
+    toast.success("Role updated");
+    await load();
+  }
+
+  async function removeMember(userId: string) {
+    if (!window.confirm("Remove this member from the workspace?")) return;
+    const res = await fetch(`/api/workspace/members/${userId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "remove" }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      toast.error(json.error || "Remove failed");
+      return;
+    }
+    toast.success("Member removed");
+    await load();
+  }
+
+  async function copyInviteLink() {
+    if (!lastInviteUrl) return;
+    try {
+      await navigator.clipboard.writeText(lastInviteUrl);
+      toast.success("Invite link copied");
+    } catch {
+      toast.message(lastInviteUrl);
     }
   }
 
@@ -195,17 +349,141 @@ export default function SettingsPage() {
 
       <section id="settings-team" className="surface scroll-mt-24 p-5">
         <h2 className="section-title">Team</h2>
-        <ul className="mt-3 space-y-2 text-sm">
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Members and pending invitations for this workspace.
+        </p>
+
+        {canManageMembers && (
+          <form onSubmit={sendInvite} className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
+            <label className="text-sm font-medium">
+              Invite email
+              <input
+                className="input mt-1"
+                type="email"
+                required
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="colleague@company.com"
+              />
+            </label>
+            <label className="text-sm font-medium">
+              Role
+              <select
+                className="input mt-1"
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value)}
+              >
+                {INVITE_ROLE_OPTIONS.map((role) => (
+                  <option key={role} value={role}>
+                    {role.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-end">
+              <button className="btn btn-primary w-full" type="submit" disabled={inviteBusy}>
+                {inviteBusy ? "Sending…" : "Invite"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {lastInviteUrl && (
+          <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
+            <p className="text-[var(--muted)]">Invite link (share if email was not delivered):</p>
+            <p className="mt-1 break-all font-mono text-xs">{lastInviteUrl}</p>
+            <button type="button" className="btn btn-secondary mt-2" onClick={copyInviteLink}>
+              Copy link
+            </button>
+          </div>
+        )}
+
+        <ul className="mt-4 space-y-2 text-sm">
           {members.map((m) => (
-            <li key={m.id} className="flex justify-between gap-3 border-b border-[var(--border)] py-2">
+            <li
+              key={m.id}
+              className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] py-2"
+            >
               <span>
                 {m.user.name || m.user.email}
                 <span className="block text-xs text-[var(--muted)]">{m.user.email}</span>
+                {m.user.isPlatformAdmin ? (
+                  <span className="mt-1 inline-block text-xs text-[var(--muted)]">
+                    Platform admin (flag — not a workspace role)
+                  </span>
+                ) : null}
               </span>
-              <span className="badge">{m.role}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {canManageMembers ? (
+                  <>
+                    <select
+                      className="input py-1 text-xs"
+                      aria-label={`Role for ${m.user.email}`}
+                      value={m.role}
+                      onChange={(e) => changeRole(m.userId, e.target.value)}
+                    >
+                      {MEMBER_ROLE_OPTIONS.map((role) => (
+                        <option key={role} value={role}>
+                          {role.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                      {m.role === "SUPER_ADMIN" ? (
+                        <option value="SUPER_ADMIN">SUPER ADMIN</option>
+                      ) : null}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-secondary py-1 text-xs"
+                      onClick={() => removeMember(m.userId)}
+                    >
+                      Remove
+                    </button>
+                  </>
+                ) : (
+                  <span className="badge">{m.role}</span>
+                )}
+              </div>
             </li>
           ))}
         </ul>
+
+        {canManageMembers && invitations.length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold">Pending invitations</h3>
+            <ul className="mt-2 space-y-2 text-sm">
+              {invitations.map((inv) => (
+                <li
+                  key={inv.id}
+                  className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] py-2"
+                >
+                  <span>
+                    {inv.email}
+                    <span className="block text-xs text-[var(--muted)]">
+                      {inv.role.replace(/_/g, " ")} · expires{" "}
+                      {new Date(inv.expiresAt).toLocaleDateString()}
+                    </span>
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary py-1 text-xs"
+                      onClick={() => resendInvite(inv.id)}
+                    >
+                      Resend
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary py-1 text-xs"
+                      onClick={() => revokeInvite(inv.id)}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       <section id="settings-ai" className="surface scroll-mt-24 p-5">
@@ -242,14 +520,10 @@ export default function SettingsPage() {
               Connect via ManyChat so Agent Desk can reply to DMs.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowAdvanced(true)}
-              >
-                Connect
-              </button>
-              <Link href="/integrations" className="btn btn-secondary">
+              <Link href="/integrations?setup=manychat" className="btn btn-primary">
+                Configure
+              </Link>
+              <Link href="/integrations#manychat-setup" className="btn btn-secondary">
                 Integrations
               </Link>
               <Link href="/simulator" className="btn btn-secondary">

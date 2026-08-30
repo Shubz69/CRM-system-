@@ -3,6 +3,10 @@ import { ensureAgentsRegistered, hasAgent, listAgents } from "@/agents";
 import { completeStructuredSafe } from "@/adapters/ai/structured";
 import type { Clarification, OrgAgentContext, PlanResult } from "@/agents/supervisor/types";
 import { agentPlanSchema } from "@/agents/supervisor/types";
+import {
+  detectAnswerModeFromLanguage,
+  formatClarification,
+} from "@/services/answer-modes";
 
 const AMBIGUOUS_MARKERS = [
   /what (can|should) (you|i)/i,
@@ -244,6 +248,9 @@ export function planAgentRunDeterministic(
   }
 
   if (looksLikeSocialListening(trimmed)) {
+    if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
+      return formatClarification();
+    }
     const topic =
       extractQuotedOrRemainder(
         trimmed,
@@ -253,6 +260,9 @@ export function planAgentRunDeterministic(
   }
 
   if (looksLikeResearch(trimmed)) {
+    if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
+      return formatClarification();
+    }
     const topic =
       extractQuotedOrRemainder(
         trimmed,

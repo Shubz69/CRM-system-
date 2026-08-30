@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -22,7 +22,9 @@ type ManyChatStatus = {
   secretMasked: string;
   secretSource?: string;
   apiTokenConfigured: boolean;
+  apiTokenStatus?: "Configured" | "Not configured";
   apiTokenMasked?: string;
+  connectionActive?: boolean;
   channels: Channel[];
   connected: boolean;
   lastInboundEvent?: {
@@ -117,14 +119,22 @@ function formatTestedAt(iso: string | undefined | null): string {
   }
 }
 
+const MANYCHAT_SETUP_ID = "manychat-setup";
+
 export default function IntegrationsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const manychatSetupRef = useRef<HTMLElement | null>(null);
+  const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<ManyChatStatus | null>(null);
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [socialPlatforms, setSocialPlatforms] = useState<SocialPlatformStatus[] | null>(null);
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [channelActive, setChannelActive] = useState(true);
+  const [apiTokenInput, setApiTokenInput] = useState("");
+  const [testContactExternalId, setTestContactExternalId] = useState("");
+  const [testMessageText, setTestMessageText] = useState("");
   const [loading, setLoading] = useState(true);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -206,6 +216,29 @@ export default function IntegrationsClient() {
     void load();
   }, [load]);
 
+  const focusManyChatSetup = useCallback((opts?: { focusToken?: boolean }) => {
+    const el = manychatSetupRef.current || document.getElementById(MANYCHAT_SETUP_ID);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (typeof el.focus === "function") {
+      el.focus({ preventScroll: true });
+    }
+    if (opts?.focusToken) {
+      window.setTimeout(() => apiTokenInputRef.current?.focus(), 350);
+    }
+  }, []);
+
+  // One journey: Instagram Configure / Set up → ManyChat setup section.
+  useEffect(() => {
+    if (loading) return;
+    const setup = searchParams.get("setup");
+    const hash =
+      typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+    if (setup === "manychat" || hash === MANYCHAT_SETUP_ID) {
+      focusManyChatSetup({ focusToken: setup === "manychat" });
+    }
+  }, [loading, searchParams, focusManyChatSetup]);
+
   // /api/social/[platform]/callback redirects back here with one of these —
   // surface it once, then strip it from the URL so a refresh doesn't repeat it.
   useEffect(() => {
@@ -241,6 +274,7 @@ export default function IntegrationsClient() {
         provider: "manychat",
         externalId,
         displayName: displayName || externalId,
+        isActive: channelActive,
       }),
     });
     const json = await res.json();
@@ -251,19 +285,105 @@ export default function IntegrationsClient() {
     toast.success("Messaging channel saved");
     setExternalId("");
     setDisplayName("");
+    setChannelActive(true);
     await load();
+  }
+
+  async function manychatAction(action: string, payload: Record<string, unknown> = {}) {
+    const res = await fetch("/api/integrations/manychat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Request failed");
+    return json;
+  }
+
+  async function saveApiToken(e: FormEvent) {
+    e.preventDefault();
+    if (!apiTokenInput.trim()) {
+      toast.error("Paste your ManyChat API token first");
+      return;
+    }
+    setBusy(true);
+    try {
+      const json = await manychatAction("save_api_token", { apiToken: apiTokenInput.trim() });
+      setApiTokenInput("");
+      toast.success(json.message || "API token saved");
+      await loadManyChat();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save token");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnectManyChat() {
+    setBusy(true);
+    try {
+      const json = await manychatAction("disconnect");
+      toast.success(json.message || "ManyChat disconnected");
+      await loadManyChat();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not disconnect");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reconnectManyChat() {
+    setBusy(true);
+    try {
+      const json = await manychatAction("reconnect");
+      toast.success(json.message || "ManyChat reconnected");
+      await loadManyChat();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not reconnect");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function validateConfiguration() {
+    setBusy(true);
+    try {
+      const json = await manychatAction("validate_configuration");
+      if (json.ok) toast.success(json.message || "Configuration valid — no message sent");
+      else toast.error(json.message || "Configuration incomplete");
+      await loadManyChat();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Validation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTestMessage(e: FormEvent) {
+    e.preventDefault();
+    if (!testContactExternalId.trim()) {
+      toast.error("Enter a real ManyChat subscriber ID");
+      return;
+    }
+    setBusy(true);
+    try {
+      const json = await manychatAction("send_test_message", {
+        contactExternalId: testContactExternalId.trim(),
+        text: testMessageText.trim() || undefined,
+      });
+      if (json.ok) toast.success(json.message || "Test message sent");
+      else toast.error(json.message || "Test message failed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Test message failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function regenerateSecret() {
     setBusy(true);
     try {
-      const res = await fetch("/api/integrations/manychat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "regenerate_secret" }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not regenerate secret");
+      const json = await manychatAction("regenerate_secret");
       if (json.secret) {
         setOneTimeSecret(json.secret);
         toast.success("Secret regenerated — copy it now");
@@ -279,13 +399,7 @@ export default function IntegrationsClient() {
   async function simulateInbound() {
     setBusy(true);
     try {
-      const res = await fetch("/api/integrations/manychat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "test_inbound" }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Simulation failed");
+      await manychatAction("test_inbound");
       toast.success("Sample inbound message processed inside the CRM (nothing sent to Instagram)");
       await load();
     } catch (e) {
@@ -373,6 +487,15 @@ export default function IntegrationsClient() {
                 <span className="badge badge-warn">Needs setup</span>
               )}
             </p>
+            {!status?.connected && (
+              <button
+                type="button"
+                className="btn btn-primary mt-3 text-xs"
+                onClick={() => focusManyChatSetup({ focusToken: true })}
+              >
+                Set up
+              </button>
+            )}
           </div>
           <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">AI provider</p>
@@ -480,7 +603,14 @@ export default function IntegrationsClient() {
               {status?.connected ? "Connected" : "Not Connected"}
             </span>
           </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">ManyChat Instagram DMs</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">Instagram DMs run through ManyChat</p>
+          <button
+            type="button"
+            className="btn btn-primary mt-3"
+            onClick={() => focusManyChatSetup({ focusToken: !status?.apiTokenConfigured })}
+          >
+            {status?.connected ? "Manage setup" : "Configure"}
+          </button>
         </div>
         <div className="surface p-4">
           <div className="flex items-center justify-between gap-2">
@@ -607,7 +737,7 @@ export default function IntegrationsClient() {
                       className={`mt-1 text-xs ${item.lastTest.ok ? "text-[var(--muted)]" : "text-[var(--danger)]"}`}
                     >
                       {formatTestedAt(item.lastTest.testedAt)}
-                      {" Â· "}
+                      {" · "}
                       {item.lastTest.ok ? "Passed" : "Failed"}: {item.lastTest.message}
                     </p>
                   )}
@@ -634,18 +764,65 @@ export default function IntegrationsClient() {
         </section>
       )}
 
-      <section className="surface space-y-4 p-5">
+      <section
+        id={MANYCHAT_SETUP_ID}
+        ref={manychatSetupRef}
+        tabIndex={-1}
+        className="surface scroll-mt-24 space-y-4 p-5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="h-display text-2xl">ManyChat setup</h2>
             <p className="text-sm text-[var(--muted)]">
-              Webhook URL, secret, and Instagram channel mapping.
+              Connect Instagram DMs to Agent Desk through ManyChat — one guided path from account to
+              first verified message.
             </p>
           </div>
-          <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
-            {status?.connected ? "Channel mapped" : "Channel not mapped"}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
+              {status?.connected ? "Connected" : "Not connected"}
+            </span>
+            {status?.connectionActive === false && (
+              <span className="badge badge-warn">Disconnected</span>
+            )}
+          </div>
         </div>
+
+        <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Start in ManyChat</span> — open
+            your Instagram-connected ManyChat account (or connect Instagram inside ManyChat first).
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Paste your API token</span> — from
+            ManyChat Settings → API, save it below. We store it encrypted and never show it again.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Copy the webhook URL</span> — Agent
+            Desk listens here for inbound Instagram DMs.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Set the webhook secret</span> —
+            regenerate below, then add header <code>x-manychat-secret</code> in ManyChat.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Add a ManyChat automation</span> —
+            on new Instagram DM, POST subscriber id + message text to the webhook URL.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Map your channel</span> — save the
+            page/bot id under Messaging channels so traffic lands in this workspace.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Validate configuration</span> —
+            checks settings only; does not message anyone.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Send a test DM</span> — optional,
+            explicit, to a real subscriber who already messaged you.
+          </li>
+        </ol>
+
         <dl className="grid gap-3 text-sm md:grid-cols-2">
           <div>
             <dt className="text-[var(--muted)]">Webhook URL</dt>
@@ -675,14 +852,6 @@ export default function IntegrationsClient() {
               >
                 Regenerate secret
               </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={Boolean(testingId)}
-                onClick={() => void testConnection("manychat")}
-              >
-                Test connection
-              </button>
             </div>
             {oneTimeSecret && (
               <p className="mt-2 rounded-lg bg-[var(--surface-2)] p-2 font-mono text-xs">
@@ -696,14 +865,36 @@ export default function IntegrationsClient() {
           <div>
             <dt className="text-[var(--muted)]">API token</dt>
             <dd className="mt-1">
-              {status?.apiTokenMasked || (status?.apiTokenConfigured ? "Configured" : "Not configured")}
+              <span className={status?.apiTokenConfigured ? "badge badge-success" : "badge badge-warn"}>
+                {status?.apiTokenStatus ||
+                  (status?.apiTokenConfigured ? "Configured" : "Not configured")}
+              </span>
             </dd>
+            <form onSubmit={saveApiToken} className="mt-2 flex flex-wrap gap-2">
+              <input
+                ref={apiTokenInputRef}
+                className="input min-w-[12rem] flex-1 font-mono text-xs"
+                type="password"
+                autoComplete="off"
+                value={apiTokenInput}
+                onChange={(e) => setApiTokenInput(e.target.value)}
+                placeholder={
+                  status?.apiTokenConfigured ? "Paste new token to rotate" : "Paste ManyChat API token"
+                }
+              />
+              <button className="btn btn-primary" type="submit" disabled={busy}>
+                {status?.apiTokenConfigured ? "Rotate token" : "Save token"}
+              </button>
+            </form>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Saved tokens are encrypted. We never return the plaintext after save.
+            </p>
           </div>
           <div>
             <dt className="text-[var(--muted)]">Last inbound event</dt>
             <dd className="mt-1 text-xs">
               {status?.lastInboundEvent
-                ? `${status.lastInboundEvent.status} Â· ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
+                ? `${status.lastInboundEvent.status} · ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
                 : "None yet"}
             </dd>
           </div>
@@ -712,14 +903,82 @@ export default function IntegrationsClient() {
             <dd className="mt-1">{status?.channels.filter((c) => c.isActive).length ?? 0}</dd>
           </div>
         </dl>
+
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => void validateConfiguration()}
+          >
+            Validate configuration
+          </button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void simulateInbound()}>
             Simulate inbound DM
           </button>
+          {status?.connectionActive === false ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void reconnectManyChat()}
+            >
+              Reconnect ManyChat
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || !status?.apiTokenConfigured}
+              onClick={() => void disconnectManyChat()}
+            >
+              Disconnect ManyChat
+            </button>
+          )}
         </div>
+
+        <form
+          onSubmit={sendTestMessage}
+          className="space-y-3 rounded-xl border border-[var(--border)] p-4"
+        >
+          <div>
+            <h3 className="font-semibold">Send test message</h3>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Explicit live send to a real ManyChat subscriber who already has a conversation here.
+              Uses the same outbound path as Inbox replies.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm md:col-span-1">
+              Subscriber ID
+              <input
+                className="input mt-1"
+                value={testContactExternalId}
+                onChange={(e) => setTestContactExternalId(e.target.value)}
+                placeholder="ManyChat subscriber_id"
+                required
+              />
+            </label>
+            <label className="text-sm md:col-span-1">
+              Message (optional)
+              <input
+                className="input mt-1"
+                value={testMessageText}
+                onChange={(e) => setTestMessageText(e.target.value)}
+                placeholder="Test message from Agent Desk"
+              />
+            </label>
+            <div className="flex items-end">
+              <button className="btn btn-primary w-full" type="submit" disabled={busy}>
+                Send test message
+              </button>
+            </div>
+          </div>
+        </form>
+
         <p className="text-xs text-[var(--muted)]">
-          Simulate inbound runs inside the CRM only. Use Test connection above to verify the ManyChat
-          API token without messaging anyone on Instagram.
+          Validate configuration never sends a DM. Simulate inbound stays inside the CRM. Send test
+          message is the only control that delivers to Instagram.
         </p>
         {(status?.recentErrors?.length || 0) > 0 && (
           <div>
@@ -727,7 +986,7 @@ export default function IntegrationsClient() {
             <ul className="mt-2 space-y-1 text-xs text-[var(--danger)]">
               {status?.recentErrors?.map((e) => (
                 <li key={e.id}>
-                  {e.status}: {e.error || "unknown"} Â· {new Date(e.receivedAt).toLocaleString()}
+                  {e.status}: {e.error || "unknown"} · {new Date(e.receivedAt).toLocaleString()}
                 </li>
               ))}
             </ul>
@@ -735,16 +994,10 @@ export default function IntegrationsClient() {
         )}
         {status?.setup && (
           <details className="rounded-xl border border-[var(--border)] p-3 text-sm">
-            <summary className="cursor-pointer font-medium">ManyChat setup instructions</summary>
-            <ol className="mt-3 list-decimal space-y-2 pl-5 text-[var(--muted)]">
-              <li>Create an External Request or Dynamic Block in ManyChat.</li>
-              <li>POST to the webhook URL with header <code>x-manychat-secret</code>.</li>
-              <li>Include <code>subscriber_id</code> and <code>text</code> (or <code>message</code>).</li>
-              <li>Pass <code>organisationId</code> or map <code>channel_id</code> to a messaging channel.</li>
-              <li>Use the regenerated org secret or the environment secret.</li>
-            </ol>
+            <summary className="cursor-pointer font-medium">Technical payload reference</summary>
             <p className="mt-3 text-xs text-[var(--muted)]">
-              Required fields: {status.setup.requiredFields.join(", ")}
+              Required fields: {status.setup.requiredFields.join(", ")}. Header:{" "}
+              {status.setup.requiredHeaders.join(", ")}.
             </p>
             <pre className="mt-3 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-xs">
               {JSON.stringify(status.setup.examplePayload, null, 2)}
@@ -780,6 +1033,9 @@ export default function IntegrationsClient() {
 
       <section className="surface p-5">
         <h2 className="h-display text-2xl">Messaging channels</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Map your ManyChat / Instagram page id so inbound DMs resolve to this workspace.
+        </p>
         <ul className="mt-3 space-y-2 text-sm">
           {(status?.channels || []).length === 0 && (
             <li className="text-[var(--muted)]">No channels configured yet.</li>
@@ -792,8 +1048,8 @@ export default function IntegrationsClient() {
               <div>
                 <p className="font-medium">{ch.displayName}</p>
                 <p className="text-[var(--muted)]">
-                  {ch.provider} Â· {ch.externalId || "no external id"}
-                  {ch.instagramUsername ? ` Â· @${ch.instagramUsername}` : ""}
+                  {ch.provider} · {ch.externalId || "no external id"}
+                  {ch.instagramUsername ? ` · @${ch.instagramUsername}` : ""}
                 </p>
               </div>
               <span className={ch.isActive ? "badge badge-success" : "badge"}>
@@ -802,7 +1058,7 @@ export default function IntegrationsClient() {
             </li>
           ))}
         </ul>
-        <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-3">
+        <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-4">
           <label className="text-sm">
             External ID
             <input
@@ -821,6 +1077,15 @@ export default function IntegrationsClient() {
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Instagram page"
             />
+          </label>
+          <label className="flex items-end gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mb-2 size-4"
+              checked={channelActive}
+              onChange={(e) => setChannelActive(e.target.checked)}
+            />
+            <span className="pb-2">Active</span>
           </label>
           <div className="flex items-end">
             <button className="btn btn-primary w-full" type="submit">

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { getOrganisationManyChatSecret } from "@/services/manychat-secrets";
+import { getOrganisationManyChatApiToken } from "@/services/messaging/credentials";
 import type { IntegrationType, Prisma } from "@prisma/client";
 import IORedis from "ioredis";
 import net from "net";
@@ -562,8 +563,10 @@ async function testManyChat(organisationId: string): Promise<{ ok: boolean; mess
   const env = getEnv();
   const orgSecret = await getOrganisationManyChatSecret(organisationId);
   const hasSecret = Boolean(orgSecret || env.MANYCHAT_WEBHOOK_SECRET);
+  const orgToken = await getOrganisationManyChatApiToken(organisationId);
+  const apiToken = orgToken || env.MANYCHAT_API_TOKEN?.trim() || null;
 
-  if (!env.MANYCHAT_API_TOKEN) {
+  if (!apiToken) {
     if (hasSecret) {
       return {
         ok: false,
@@ -581,7 +584,7 @@ async function testManyChat(organisationId: string): Promise<{ ok: boolean; mess
     const base = env.MANYCHAT_API_BASE_URL.replace(/\/$/, "");
     const response = await fetch(`${base}/fb/page/getInfo`, {
       headers: {
-        Authorization: `Bearer ${env.MANYCHAT_API_TOKEN}`,
+        Authorization: `Bearer ${apiToken}`,
         "Content-Type": "application/json",
       },
     });

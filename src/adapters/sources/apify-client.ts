@@ -4,12 +4,27 @@ import type { SourcePlatform } from "@/adapters/sources/types";
 
 const APIFY_API = "https://api.apify.com/v2";
 
+export type ApifyHardRunOptions = {
+  /** Cap dataset items requested / returned. */
+  maxItems: number;
+  /** Hard USD charge cap for PPE actors (Apify enforces when supported). */
+  maxTotalChargeUsd?: number;
+  /** Actor memory in MB. */
+  memory?: number;
+  /** Actor wall timeout in seconds (Apify API). */
+  timeoutSecs?: number;
+  /** Build tag or number pin. */
+  build?: string;
+};
+
 export type ApifyRunResult = {
   runId: string;
   datasetId: string | null;
   status: string;
   items: Record<string, unknown>[];
+  /** Authoritative completed-run usage when Apify reports it. */
   usageTotalUsd: number | null;
+  build?: string | null;
 };
 
 export class ApifyTimeoutError extends Error {
@@ -88,12 +103,46 @@ type RunPayload = {
     status?: string;
     defaultDatasetId?: string | null;
     usageTotalUsd?: number | null;
+    buildNumber?: string | number | null;
+    actId?: string | null;
   };
 };
+
+/** Build Apify run start query string with hard safety options. */
+export function buildApifyRunQuery(options: ApifyHardRunOptions): string {
+  const params = new URLSearchParams();
+  params.set("waitForFinish", "0");
+  if (Number.isFinite(options.maxItems) && options.maxItems > 0) {
+    params.set("maxItems", String(Math.floor(options.maxItems)));
+  }
+  if (
+    options.maxTotalChargeUsd != null &&
+    Number.isFinite(options.maxTotalChargeUsd) &&
+    options.maxTotalChargeUsd > 0
+  ) {
+    params.set("maxTotalChargeUsd", String(options.maxTotalChargeUsd));
+  }
+  if (options.memory != null && Number.isFinite(options.memory) && options.memory > 0) {
+    params.set("memory", String(Math.floor(options.memory)));
+  }
+  if (
+    options.timeoutSecs != null &&
+    Number.isFinite(options.timeoutSecs) &&
+    options.timeoutSecs > 0
+  ) {
+    params.set("timeout", String(Math.floor(options.timeoutSecs)));
+  }
+  if (options.build && options.build.trim()) {
+    params.set("build", options.build.trim());
+  }
+  return params.toString();
+}
 
 /**
  * Start an Apify actor, poll until terminal status or timeout, then load dataset items.
  * Never scrapes platforms directly — all traffic goes through Apify.
+ * Hard options (maxItems, maxTotalChargeUsd, memory, timeout, build) are applied
+ * at the API level where supported. Completed-run usageTotalUsd is authoritative for spend.
  */
 export async function runApifyActor(input: {
   platform: SourcePlatform;
@@ -101,12 +150,24 @@ export async function runApifyActor(input: {
   actorInput: Record<string, unknown>;
   timeoutMs: number;
   maxItems: number;
+  maxTotalChargeUsd?: number;
+  memoryMb?: number;
+  build?: string;
 }): Promise<ApifyRunResult> {
   const actorPath = toApifyActorPath(input.actorId);
   const started = Date.now();
   const deadline = started + input.timeoutMs;
+  const timeoutSecs = Math.max(5, Math.ceil(input.timeoutMs / 1000));
 
-  const startRes = await apifyFetch(`/acts/${actorPath}/runs?waitForFinish=0`, {
+  const query = buildApifyRunQuery({
+    maxItems: input.maxItems,
+    maxTotalChargeUsd: input.maxTotalChargeUsd,
+    memory: input.memoryMb,
+    timeoutSecs,
+    build: input.build,
+  });
+
+  const startRes = await apifyFetch(`/acts/${actorPath}/runs?${query}`, {
     method: "POST",
     body: JSON.stringify(input.actorInput),
     timeoutMs: 30_000,
@@ -136,6 +197,8 @@ export async function runApifyActor(input: {
   let status = startJson.data?.status || "RUNNING";
   let datasetId = startJson.data?.defaultDatasetId ?? null;
   let usageTotalUsd = startJson.data?.usageTotalUsd ?? null;
+  let build =
+    startJson.data?.buildNumber != null ? String(startJson.data.buildNumber) : input.build ?? null;
 
   const terminal = new Set(["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]);
 
@@ -181,6 +244,9 @@ export async function runApifyActor(input: {
     status = pollJson.data?.status || status;
     datasetId = pollJson.data?.defaultDatasetId ?? datasetId;
     usageTotalUsd = pollJson.data?.usageTotalUsd ?? usageTotalUsd;
+    if (pollJson.data?.buildNumber != null) {
+      build = String(pollJson.data.buildNumber);
+    }
   }
 
   if (status !== "SUCCEEDED") {
@@ -199,7 +265,7 @@ export async function runApifyActor(input: {
   }
 
   if (!datasetId) {
-    return { runId, datasetId: null, status, items: [], usageTotalUsd };
+    return { runId, datasetId: null, status, items: [], usageTotalUsd, build };
   }
 
   const itemsRes = await apifyFetch(
@@ -231,5 +297,6 @@ export async function runApifyActor(input: {
     status,
     items: list.slice(0, input.maxItems),
     usageTotalUsd,
+    build,
   };
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePermission } from "@/lib/session";
+import { writeAuditLog } from "@/services/audit";
 
 export async function GET() {
   try {
@@ -47,8 +48,30 @@ export async function POST(req: Request) {
           provider: body.provider,
         },
       });
+      await writeAuditLog({
+        organisationId: session.organisationId,
+        userId: session.userId,
+        action: "messaging_channel.updated",
+        entityType: "MessagingChannel",
+        entityId: channel.id,
+        metadata: {
+          provider: channel.provider,
+          externalId: channel.externalId,
+          isActive: channel.isActive,
+        },
+      });
       return Response.json({ channel });
     }
+
+    const existingByKey = await prisma.messagingChannel.findUnique({
+      where: {
+        organisationId_provider_externalId: {
+          organisationId: session.organisationId,
+          provider: body.provider,
+          externalId: body.externalId,
+        },
+      },
+    });
 
     const channel = await prisma.messagingChannel.upsert({
       where: {
@@ -70,6 +93,19 @@ export async function POST(req: Request) {
         displayName: body.displayName,
         instagramUsername: body.instagramUsername,
         isActive: body.isActive ?? true,
+      },
+    });
+
+    await writeAuditLog({
+      organisationId: session.organisationId,
+      userId: session.userId,
+      action: existingByKey ? "messaging_channel.updated" : "messaging_channel.created",
+      entityType: "MessagingChannel",
+      entityId: channel.id,
+      metadata: {
+        provider: channel.provider,
+        externalId: channel.externalId,
+        isActive: channel.isActive,
       },
     });
 

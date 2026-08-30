@@ -16,6 +16,7 @@ import {
   type SourceResult,
   type SourceSearchOptions,
 } from "@/adapters/sources/types";
+import { ApifyDeniedError } from "@/adapters/sources/apify-hardening";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
@@ -31,6 +32,22 @@ export {
   SourceRateLimitError,
   SourceUnavailableError,
 } from "@/adapters/sources/types";
+export {
+  ApifyDeniedError,
+  isApifyEnabled,
+  setApifyGlobalEnabled,
+  setApifyOrgEnabled,
+} from "@/adapters/sources/apify-hardening";
+export {
+  collectCheapestSufficientSources,
+  SOURCE_COST_TIER_ORDER,
+  type SourceCostTier,
+} from "@/adapters/sources/source-ordering";
+export {
+  assertApprovedApifyActor,
+  isApprovedApifyActor,
+  listApprovedApifyActors,
+} from "@/adapters/sources/apify-platforms";
 
 const PLATFORM_DISPLAY: Record<SourcePlatform, string> = {
   youtube: "YouTube",
@@ -51,6 +68,12 @@ function userFacingSourceError(platform: SourcePlatform, error: unknown): {
     return {
       code: error.code,
       message: `${PLATFORM_DISPLAY[platform]} is not configured for this workspace.`,
+    };
+  }
+  if (error instanceof ApifyDeniedError) {
+    return {
+      code: error.code,
+      message: `${PLATFORM_DISPLAY[platform]} results were unavailable for this search.`,
     };
   }
   if (error instanceof SourceUnavailableError) {

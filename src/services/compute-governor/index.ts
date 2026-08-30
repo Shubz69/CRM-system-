@@ -62,6 +62,28 @@ function governorMode(input: ComputePlanInput): {
   if (evidence.deterministicCapable)
     return { mode: "DETERMINISTIC", reasons: ["L0_DETERMINISTIC_CAPABLE"] };
 
+  // Answer-mode mapping into existing modes (single pipeline).
+  if (input.answerMode === "QUICK") {
+    return {
+      mode: input.preferCache !== false ? "ECONOMY" : "ECONOMY",
+      reasons: ["ANSWER_MODE_QUICK", "FAST", "CACHE_FIRST"],
+    };
+  }
+  if (input.answerMode === "EXECUTIVE") {
+    return { mode: "STANDARD", reasons: ["ANSWER_MODE_EXECUTIVE"] };
+  }
+  if (input.answerMode === "ACTION") {
+    const consequence = bandScore(input.consequence);
+    const mode: ComputeExecutionMode = consequence >= 2 ? "ADVANCED" : "STANDARD";
+    return {
+      mode,
+      reasons: ["ANSWER_MODE_ACTION", `CONSEQUENCE_${consequence}`],
+    };
+  }
+  if (input.answerMode === "DEEP") {
+    return { mode: "DEEP", reasons: ["ANSWER_MODE_DEEP"] };
+  }
+
   const score = Math.max(bandScore(input.complexity), bandScore(input.consequence));
   const mode: ComputeExecutionMode =
     score === 0 ? "ECONOMY" : score === 1 ? "STANDARD" : score === 2 ? "ADVANCED" : "DEEP";
@@ -199,6 +221,14 @@ export async function planCompute(input: ComputePlanInput): Promise<ComputePlan>
       Record<ComputeExecutionMode, number>
     >)[proposed.mode];
 
+  const defaultVerification =
+    input.answerMode === "QUICK"
+      ? "FAST"
+      : input.answerMode === "DEEP"
+        ? "DEEP"
+        : "STANDARD";
+  const verification = input.verificationBudget ?? defaultVerification;
+
   const plan: ComputePlan = {
     executionMode: activeMode,
     governorMode: proposed.mode,
@@ -206,8 +236,8 @@ export async function planCompute(input: ComputePlanInput): Promise<ComputePlan>
     reasonCodes: proposed.reasons,
     selectedModel: governorModel,
     selectedProvider: provider,
-    qualityBudget: input.verificationBudget ?? "STANDARD",
-    verificationDepth: input.verificationBudget ?? "STANDARD",
+    qualityBudget: verification,
+    verificationDepth: verification,
     estimatedCostCents,
     escalationReason: input.escalationReason,
     contextBudget: Math.max(256, input.contextBudget ?? 4_000),

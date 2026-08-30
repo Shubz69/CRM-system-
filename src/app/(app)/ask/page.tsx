@@ -7,11 +7,14 @@ import { signOut } from "next-auth/react";
 import { toast } from "sonner";
 import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
+import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
+import { isModeShapedOutput } from "@/services/answer-modes/shape";
 
 type Progress = {
   runId: string;
   status: string;
   request: string;
+  answerMode?: string | null;
   plainEnglishPlan: string | null;
   clarificationQuestion: string | null;
   clarificationOptions: string[] | null;
@@ -137,6 +140,21 @@ function renderAnswerBody(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
+    if (obj.mode === "quick" && typeof obj.answer === "string") return obj.answer.trim();
+    if (obj.mode === "executive" && typeof obj.keyFinding === "string") return obj.keyFinding.trim();
+    if (obj.mode === "action" && Array.isArray(obj.actions)) {
+      return obj.actions
+        .map((a, i) =>
+          a && typeof a === "object" && typeof (a as { what?: unknown }).what === "string"
+            ? `${i + 1}. ${(a as { what: string }).what}`
+            : null,
+        )
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (obj.mode === "deep" && typeof obj.executiveSummary === "string") {
+      return obj.executiveSummary.trim();
+    }
     // Prefer shortAnswer for the lead block; full brief is rendered separately in the UI.
     if (typeof obj.shortAnswer === "string" && obj.shortAnswer.trim()) {
       return obj.shortAnswer.trim();
@@ -511,6 +529,13 @@ export default function AskPage() {
 
   async function onNextAction(action: string) {
     const cleaned = (progress?.request || request).replace(/\n\n\[User chose:.*$/, "");
+    const source = progress?.finalOutput ?? progress?.outputSoFar;
+    const modeShaped = isModeShapedOutput(source);
+    const proposalOnly =
+      progress?.answerMode === "ACTION" ||
+      progress?.answerMode === "DEEP" ||
+      (modeShaped && (source.mode === "action" || source.mode === "deep"));
+
     if (action === "Ask something else") {
       setProgress(null);
       setRunId(null);
@@ -531,6 +556,38 @@ export default function AskPage() {
       setProgress(null);
       setRunId(null);
       inputRef.current?.focus();
+      return;
+    }
+
+    // ACTION/DEEP capability CTAs are proposals — never auto-execute.
+    if (
+      proposalOnly &&
+      [
+        "Create opportunity",
+        "Create task",
+        "Create mission",
+        "Draft content",
+        "Prepare outreach",
+        "Prepare messages",
+        "Save research",
+        "Save to Knowledge",
+        "Update business state",
+        "Create goal",
+        "Create automation",
+        "Turn this into content",
+      ].includes(action)
+    ) {
+      const alreadyProposed =
+        modeShaped &&
+        ((source.mode === "action" &&
+          source.actions.some((a) => Boolean(a.approvalRequestId))) ||
+          (source.mode === "deep" &&
+            (source.capabilityProposals?.some((p) => Boolean(p.approvalRequestId)) ?? false)));
+      toast.success(
+        alreadyProposed
+          ? "That action is already waiting for approval — nothing was auto-run."
+          : "Proposed for approval — review it in Approvals before anything runs.",
+      );
       return;
     }
     if (
@@ -695,9 +752,11 @@ export default function AskPage() {
       ? ((answerSource as { adapterErrors: Array<{ platform?: string; message?: string }> }).adapterErrors)
       : [];
   const isPartial = progress?.status === "PARTIAL";
+  const modeShapedAnswer = isModeShapedOutput(answerSource);
   const showAnswer =
     Boolean(
-      answerBody ||
+      modeShapedAnswer ||
+        answerBody ||
         fullBrief ||
         imageUrl ||
         findings.length ||
@@ -883,158 +942,167 @@ export default function AskPage() {
       {/* Answer at the top */}
       {showAnswer && (
         <section className="space-y-6">
-          <div className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-              {isPartial ? "What I finished" : "Short answer"}
-            </h2>
-            {isPartial && progress?.userFacingError && (
-              <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
-                {progress.userFacingError}
-              </p>
-            )}
-            {imageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={imageUrl}
-                alt="Generated image"
-                className="max-h-[28rem] w-full rounded-xl object-contain"
-              />
-            )}
-            {answerBody && (
-              <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
-            )}
-            {execSummary && execSummary !== answerBody && (
-              <p className="text-sm leading-relaxed text-[var(--muted)]">{execSummary}</p>
-            )}
-          </div>
-
-          {viralExamples.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-                Recent viral examples
-              </h3>
-              <ul className="space-y-3">
-                {viralExamples.map((v, i) => (
-                  <li key={`${v.sourceUrl}-${i}`} className="surface p-4">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <p className="font-medium text-[var(--foreground)]">{v.title}</p>
-                      <span className="text-xs uppercase tracking-wide text-[var(--muted)]">
-                        {v.platform}
-                        {v.formatHint ? ` · ${v.formatHint}` : ""}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-[var(--muted)]">{v.whyItWorked}</p>
-                    <a
-                      href={v.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
-                    >
-                      Open video / post
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {nextBigThings.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-                What looks next on the algorithm
-              </h3>
-              <ul className="space-y-3">
-                {nextBigThings.map((n, i) => (
-                  <li key={`${n.prediction}-${i}`} className="surface p-4">
-                    <p className="font-medium text-[var(--foreground)]">{n.prediction}</p>
-                    {n.confidence ? (
-                      <p className="mt-1 text-xs uppercase tracking-wide text-[var(--muted)]">
-                        Confidence: {n.confidence}
-                      </p>
-                    ) : null}
-                    <p className="mt-2 text-sm text-[var(--muted)]">
-                      <span className="font-medium text-[var(--foreground)]">Why now:</span> {n.whyNow}
-                    </p>
-                    <p className="mt-1 text-sm text-[var(--muted)]">
-                      <span className="font-medium text-[var(--foreground)]">How to ride it:</span>{" "}
-                      {n.howToRideIt}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {contentHooks.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-                Content hooks
-              </h3>
-              <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
-                {contentHooks.map((hook, i) => (
-                  <li key={`${hook}-${i}`}>{hook}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {algorithmNotes.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-                Algorithm notes
-              </h3>
-              <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
-                {algorithmNotes.map((note, i) => (
-                  <li key={`${note}-${i}`}>{note}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {fullBrief && (
-            <details className="rounded-xl border border-[var(--border)] px-4 py-3" open>
-              <summary className="cursor-pointer text-sm font-medium">Full brief</summary>
-              <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-[var(--foreground)]">
-                {fullBrief}
-              </div>
-            </details>
-          )}
-
-          {findings.length > 0 && (
-            <ul className="space-y-3">
-              {findings.map((f, i) => (
-                <li key={`${f.claim}-${i}`} className="surface p-4">
-                  <p className="text-[var(--foreground)]">{f.claim}</p>
-                  {f.evidenceExcerpt ? (
-                    <p className="mt-2 text-sm text-[var(--muted)]">{f.evidenceExcerpt}</p>
-                  ) : null}
-                  {f.sourceUrl ? (
-                    <a
-                      href={f.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
-                    >
-                      Source
-                    </a>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-          {adapterErrors.length > 0 && (
-            <p className="text-sm text-[var(--muted)]">
-              Some sources were skipped:{" "}
-              {adapterErrors
-                .map((e) => e.message || e.platform)
-                .filter(Boolean)
-                .slice(0, 4)
-                .join(" · ")}
+          {isPartial && progress?.userFacingError && (
+            <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
+              {progress.userFacingError}
             </p>
           )}
-          {!isPartial && progress?.userFacingError && !answerBody && !imageUrl && (
-            <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
+          {imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl}
+              alt="Generated image"
+              className="max-h-[28rem] w-full rounded-xl object-contain"
+            />
           )}
+          <AnswerModeOutputView
+            output={answerSource}
+            onCapability={(label) => void onNextAction(label)}
+            fallback={
+              <>
+                <div className="space-y-3">
+                  <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                    {isPartial ? "What I finished" : "Short answer"}
+                  </h2>
+                  {answerBody && (
+                    <div className="whitespace-pre-wrap text-lg leading-relaxed">{answerBody}</div>
+                  )}
+                  {execSummary && execSummary !== answerBody && (
+                    <p className="text-sm leading-relaxed text-[var(--muted)]">{execSummary}</p>
+                  )}
+                </div>
+
+                {viralExamples.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Recent viral examples
+                    </h3>
+                    <ul className="space-y-3">
+                      {viralExamples.map((v, i) => (
+                        <li key={`${v.sourceUrl}-${i}`} className="surface p-4">
+                          <div className="flex flex-wrap items-baseline gap-2">
+                            <p className="font-medium text-[var(--foreground)]">{v.title}</p>
+                            <span className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                              {v.platform}
+                              {v.formatHint ? ` · ${v.formatHint}` : ""}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-[var(--muted)]">{v.whyItWorked}</p>
+                          <a
+                            href={v.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
+                          >
+                            Open video / post
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {nextBigThings.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                      What looks next on the algorithm
+                    </h3>
+                    <ul className="space-y-3">
+                      {nextBigThings.map((n, i) => (
+                        <li key={`${n.prediction}-${i}`} className="surface p-4">
+                          <p className="font-medium text-[var(--foreground)]">{n.prediction}</p>
+                          {n.confidence ? (
+                            <p className="mt-1 text-xs uppercase tracking-wide text-[var(--muted)]">
+                              Confidence: {n.confidence}
+                            </p>
+                          ) : null}
+                          <p className="mt-2 text-sm text-[var(--muted)]">
+                            <span className="font-medium text-[var(--foreground)]">Why now:</span>{" "}
+                            {n.whyNow}
+                          </p>
+                          <p className="mt-1 text-sm text-[var(--muted)]">
+                            <span className="font-medium text-[var(--foreground)]">How to ride it:</span>{" "}
+                            {n.howToRideIt}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {contentHooks.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Content hooks
+                    </h3>
+                    <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
+                      {contentHooks.map((hook, i) => (
+                        <li key={`${hook}-${i}`}>{hook}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {algorithmNotes.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Algorithm notes
+                    </h3>
+                    <ul className="list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
+                      {algorithmNotes.map((note, i) => (
+                        <li key={`${note}-${i}`}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {fullBrief && (
+                  <details className="rounded-xl border border-[var(--border)] px-4 py-3" open>
+                    <summary className="cursor-pointer text-sm font-medium">Full brief</summary>
+                    <div className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-[var(--foreground)]">
+                      {fullBrief}
+                    </div>
+                  </details>
+                )}
+
+                {findings.length > 0 && (
+                  <ul className="space-y-3">
+                    {findings.map((f, i) => (
+                      <li key={`${f.claim}-${i}`} className="surface p-4">
+                        <p className="text-[var(--foreground)]">{f.claim}</p>
+                        {f.evidenceExcerpt ? (
+                          <p className="mt-2 text-sm text-[var(--muted)]">{f.evidenceExcerpt}</p>
+                        ) : null}
+                        {f.sourceUrl ? (
+                          <a
+                            href={f.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
+                          >
+                            Source
+                          </a>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {adapterErrors.length > 0 && (
+                  <p className="text-sm text-[var(--muted)]">
+                    Some sources were skipped:{" "}
+                    {adapterErrors
+                      .map((e) => e.message || e.platform)
+                      .filter(Boolean)
+                      .slice(0, 4)
+                      .join(" · ")}
+                  </p>
+                )}
+                {!isPartial && progress?.userFacingError && !answerBody && !imageUrl && (
+                  <p className="text-sm text-[var(--muted)]">{progress.userFacingError}</p>
+                )}
+              </>
+            }
+          />
         </section>
       )}
 

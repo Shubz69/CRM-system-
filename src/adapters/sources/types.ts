@@ -38,6 +38,21 @@ export type SourceSearchOptions = {
   /** Optional subreddit / channel / site hint — never required. */
   nicheHint?: string;
   /**
+   * Progressive Apify depth — from answerMode / Quality Engine / compute governor.
+   * Small sample first; broaden only when evidence is insufficient.
+   */
+  answerMode?: "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP";
+  qualityBudget?: "FAST" | "STANDARD" | "DEEP" | "MISSION_CRITICAL";
+  governorMode?:
+    | "DETERMINISTIC"
+    | "CACHE"
+    | "ECONOMY"
+    | "STANDARD"
+    | "ADVANCED"
+    | "DEEP";
+  /** After insufficient evidence, allow a broader Apify sample (still ≤ hardMaxItems). */
+  broadenApify?: boolean;
+  /**
    * Internal sink for billable adapter costs (cents). Used by Apify adapters so
    * searchConfiguredSources can return spend without changing SourceAdapter.
    */

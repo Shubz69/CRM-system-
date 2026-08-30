@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
+import { getBusinessProfile } from "@/services/digital-twin";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 
 export type ContextItem = {
-  source: "state" | "goal" | "opportunity" | "decision" | "claim" | "knowledge";
+  source: "state" | "goal" | "opportunity" | "decision" | "claim" | "knowledge" | "business_profile";
   priority: number;
   estimatedTokens: number;
   freshness: string;
@@ -59,7 +60,7 @@ export async function planContext(input: {
     .filter(Boolean)
     .join(" ");
 
-  const [states, goal, opportunity, decision, claims, knowledge] = await Promise.all([
+  const [states, goal, opportunity, decision, claims, knowledge, profile] = await Promise.all([
     input.entityType && input.entityId
       ? prisma.stateSnapshot.findMany({
           where: {
@@ -122,9 +123,27 @@ export async function planContext(input: {
           limit: 2,
         }).catch(() => null)
       : null,
+    getBusinessProfile(input.organisationId).catch(() => null),
   ]);
 
   const candidates: ContextItem[] = [];
+  if (profile?.organisation?.name) {
+    candidates.push(
+      item({
+        source: "business_profile",
+        priority: 98,
+        freshness: profile.organisation.updatedAt?.toISOString?.() ?? new Date().toISOString(),
+        reason: "Approved business profile",
+        content: bounded({
+          company: profile.organisation.name,
+          products: profile.products.slice(0, 5).map((p) => p.name),
+          audiences: profile.audiences.slice(0, 5).map((a) => a.name),
+          competitors: profile.competitors.length,
+          goals: profile.goals.slice(0, 5).map((g) => g.name),
+        }),
+      }),
+    );
+  }
   for (const state of states) {
     candidates.push(
       item({

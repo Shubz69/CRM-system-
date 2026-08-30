@@ -14,6 +14,17 @@ import {
 } from "@/services/agent-memory";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import { evaluateToolPolicy } from "@/kernel";
+import {
+  CUSTOMER_PROGRESS_STAGES,
+  attachApprovalProposals,
+  computeHintsForAnswerMode,
+  customerFacingLabelForAgent,
+  resolveAskBusinessContext,
+  shapeFinalOutputForMode,
+  shouldSuppressBusinessClarification,
+} from "@/services/answer-modes";
+import { planCompute } from "@/services/compute-governor";
+import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -159,8 +170,31 @@ export async function executeAgentRun(input: {
       maxSteps,
       maxWallClockSeconds,
       maxSpendCents,
+      // Customer-facing stage while planning (no agents/tools jargon).
+      plainEnglishPlan: run.plainEnglishPlan || CUSTOMER_PROGRESS_STAGES.understanding,
     },
   });
+
+  // Understanding / business-context stages (customer-facing only).
+  let businessContextKnownFacts: string[] = [];
+  try {
+    const askCtx = await resolveAskBusinessContext({
+      organisationId: input.organisationId,
+      request: run.request,
+    });
+    businessContextKnownFacts = askCtx.knownFacts;
+    if (askCtx.knownFacts.length && !asPlan(run.plan)) {
+      await prisma.agentRun.updateMany({
+        where: { id: run.id, organisationId: input.organisationId, status: "PLANNING" },
+        data: { plainEnglishPlan: CUSTOMER_PROGRESS_STAGES.context },
+      });
+    }
+  } catch (error) {
+    logger.warn("Ask business context resolve skipped", {
+      runId: run.id,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
 
   let plan = asPlan(run.plan);
   if (!plan) {
@@ -168,29 +202,75 @@ export async function executeAgentRun(input: {
       organisationId: input.organisationId,
       organisationName: org?.name,
       referenceAssetId: run.referenceAssetId,
+      answerMode: run.answerMode,
     });
 
     if (planned.kind === "clarification") {
-      await prisma.agentRun.updateMany({
-        where: { id: run.id, organisationId: input.organisationId },
-        data: {
+      // Suppress business-info clarifications already answered by Context Resolver.
+      let suppress = false;
+      try {
+        const askCtx = await resolveAskBusinessContext({
+          organisationId: input.organisationId,
+          request: run.request,
+        });
+        suppress = shouldSuppressBusinessClarification(planned.question, askCtx);
+      } catch {
+        suppress = false;
+      }
+
+      if (!suppress) {
+        await prisma.agentRun.updateMany({
+          where: { id: run.id, organisationId: input.organisationId },
+          data: {
+            status: "AWAITING_CLARIFICATION",
+            clarificationQuestion: planned.question,
+            clarificationOptions: planned.options,
+            plainEnglishPlan: null,
+            plan: Prisma.DbNull,
+          },
+        });
+        return {
+          runId: run.id,
           status: "AWAITING_CLARIFICATION",
-          clarificationQuestion: planned.question,
-          clarificationOptions: planned.options,
-          plainEnglishPlan: null,
-          plan: Prisma.DbNull,
+          finalOutput: null,
+          partialResults: null,
+          userFacingError: null,
+        };
+      }
+      // Known internally — re-plan without that clarification by treating request as actionable.
+      const replanned = await planAgentRun(
+        `${run.request}\n\n[Business context already on file]`,
+        {
+          organisationId: input.organisationId,
+          organisationName: org?.name,
+          referenceAssetId: run.referenceAssetId,
+          answerMode: run.answerMode ?? "EXECUTIVE",
         },
-      });
-      return {
-        runId: run.id,
-        status: "AWAITING_CLARIFICATION",
-        finalOutput: null,
-        partialResults: null,
-        userFacingError: null,
-      };
+      );
+      if (replanned.kind === "clarification") {
+        await prisma.agentRun.updateMany({
+          where: { id: run.id, organisationId: input.organisationId },
+          data: {
+            status: "AWAITING_CLARIFICATION",
+            clarificationQuestion: replanned.question,
+            clarificationOptions: replanned.options,
+            plainEnglishPlan: null,
+            plan: Prisma.DbNull,
+          },
+        });
+        return {
+          runId: run.id,
+          status: "AWAITING_CLARIFICATION",
+          finalOutput: null,
+          partialResults: null,
+          userFacingError: null,
+        };
+      }
+      plan = replanned.plan;
+    } else {
+      plan = planned.plan;
     }
 
-    plan = planned.plan;
     await prisma.agentRun.updateMany({
       where: { id: run.id, organisationId: input.organisationId },
       data: {
@@ -209,6 +289,26 @@ export async function executeAgentRun(input: {
         plainEnglishPlan: plan.plainEnglishPlan,
       },
     });
+  }
+
+  // Map answer mode into Compute Governor (single pipeline).
+  if (run.answerMode) {
+    try {
+      const hints = computeHintsForAnswerMode(run.answerMode);
+      await planCompute({
+        organisationId: input.organisationId,
+        taskType: "insight_generation",
+        ...hints,
+        evidenceState: {
+          hasBusinessState: businessContextKnownFacts.length > 0,
+        },
+      });
+    } catch (error) {
+      logger.warn("Compute governor plan for answer mode skipped", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
   }
 
   const stepsToRun = plan.steps.slice(0, maxSteps);
@@ -445,8 +545,8 @@ export async function executeAgentRun(input: {
       });
     }
 
-    const label = agent.userFacingLabel(parsedInput.data as never);
-    if (!label || !label.trim()) {
+    const agentLabel = agent.userFacingLabel(parsedInput.data as never);
+    if (!agentLabel || !agentLabel.trim()) {
       return finishRun({
         organisationId: input.organisationId,
         request: run.request,
@@ -458,6 +558,9 @@ export async function executeAgentRun(input: {
           "Something went wrong preparing progress updates. Please try again — no charge was made for this step.",
       });
     }
+
+    const progressLabel =
+      customerFacingLabelForAgent(agent.name) || agentLabel.trim();
 
     const estimate = agent.estimateCostCents(parsedInput.data as never);
     try {
@@ -504,7 +607,7 @@ export async function executeAgentRun(input: {
         agentRunId: run.id,
         position: i,
         agentName: agent.name,
-        userFacingLabel: label.trim(),
+        userFacingLabel: progressLabel,
         input: parsedInput.data as Prisma.InputJsonValue,
         status: "RUNNING",
         userFacingStatus: "In progress",
@@ -618,7 +721,7 @@ export async function executeAgentRun(input: {
       }
       stepOutputs.push({
         agentName: agent.name,
-        userFacingLabel: label.trim(),
+        userFacingLabel: progressLabel,
         output: result.output,
       });
 
@@ -738,6 +841,12 @@ export async function executeAgentRun(input: {
 
   // Truncated by maxSteps
   if (plan.steps.length > maxSteps) {
+    const shapedPartial = await finalizeModeOutput({
+      organisationId: input.organisationId,
+      agentRunId: run.id,
+      answerMode: run.answerMode,
+      raw: previousOutput,
+    });
     return finishRun({
       organisationId: input.organisationId,
       request: run.request,
@@ -745,11 +854,18 @@ export async function executeAgentRun(input: {
       status: "PARTIAL",
       totalCostCents,
       partialResults: { steps: stepOutputs },
-      finalOutput: previousOutput,
+      finalOutput: shapedPartial,
       error: "MAX_STEPS",
       userFacingError: `I completed ${stepOutputs.length} steps (the maximum for one run). Here's what I have — ask again if you need more.`,
     });
   }
+
+  const shapedFinal = await finalizeModeOutput({
+    organisationId: input.organisationId,
+    agentRunId: run.id,
+    answerMode: run.answerMode,
+    raw: previousOutput,
+  });
 
   return finishRun({
     organisationId: input.organisationId,
@@ -757,7 +873,36 @@ export async function executeAgentRun(input: {
     runId: run.id,
     status: "COMPLETED",
     totalCostCents,
-    finalOutput: previousOutput,
+    finalOutput: shapedFinal,
     partialResults: { steps: stepOutputs },
   });
+}
+
+async function finalizeModeOutput(input: {
+  organisationId: string;
+  agentRunId: string;
+  answerMode: import("@prisma/client").AgentAnswerMode | null;
+  raw: unknown;
+}): Promise<unknown> {
+  if (!input.answerMode || input.raw == null) return input.raw;
+  const shaped = shapeFinalOutputForMode(input.answerMode, input.raw);
+  if (!shaped) return input.raw;
+
+  if (shaped.mode === "action" || shaped.mode === "deep") {
+    try {
+      return await attachApprovalProposals({
+        organisationId: input.organisationId,
+        agentRunId: input.agentRunId,
+        answerMode: input.answerMode,
+        output: shaped as ActionAnswer | DeepAnswer,
+      });
+    } catch (error) {
+      logger.warn("Capability approval proposals skipped", {
+        agentRunId: input.agentRunId,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+      return shaped;
+    }
+  }
+  return shaped;
 }

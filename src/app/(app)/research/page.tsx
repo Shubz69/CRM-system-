@@ -61,6 +61,7 @@ type ResearchJob = {
 export default function ResearchPage() {
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [topic, setTopic] = useState("");
+  const [answerMode, setAnswerMode] = useState<"" | "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP">("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -94,6 +95,20 @@ export default function ResearchPage() {
             onChange={(e) => setTopic(e.target.value)}
             aria-label="Research topic"
           />
+          <select
+            className="input w-auto"
+            value={answerMode}
+            onChange={(e) =>
+              setAnswerMode(e.target.value as "" | "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP")
+            }
+            aria-label="Answer format"
+          >
+            <option value="">Ask me how to answer</option>
+            <option value="QUICK">Quick Answer</option>
+            <option value="EXECUTIVE">Executive Brief</option>
+            <option value="ACTION">Action Plan</option>
+            <option value="DEEP">Deep Report</option>
+          </select>
           <button
             className="btn btn-secondary"
             type="button"
@@ -130,11 +145,18 @@ export default function ResearchPage() {
                 const res = await fetch("/api/ask", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ request: `Research ${topic.trim()}` }),
+                  body: JSON.stringify({
+                    request: `Research ${topic.trim()}`,
+                    ...(answerMode ? { answerMode } : {}),
+                  }),
                 });
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error || "Ask failed");
-                toast.success("Research started — results will appear when ready");
+                toast.success(
+                  answerMode
+                    ? "Research started — results will appear when ready"
+                    : "Research started — you'll be asked how to format the answer",
+                );
                 setTopic("");
                 await load();
               } catch (e) {

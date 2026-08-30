@@ -21,6 +21,20 @@ enum MemberRole {
   READ_ONLY
 }
 
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum AgentAnswerMode {
+  QUICK
+  EXECUTIVE
+  ACTION
+  DEEP
+}
+
 enum QualificationStatus {
   UNKNOWN
   QUALIFYING
@@ -161,6 +175,7 @@ model Organisation {
   deletedAt      DateTime?
 
   members              OrganisationMember[]
+  invitations          OrganisationInvitation[]
   integrations         Integration[]
   messagingChannels    MessagingChannel[]
   socialConnections    SocialConnection[]
@@ -324,6 +339,7 @@ model User {
   accounts              Account[]
   sessions              Session[]
   memberships           OrganisationMember[]
+  invitationsSent       OrganisationInvitation[] @relation("InvitationInviter")
   assignedConversations ConversationAssignment[]
   notes                 Note[]
   auditLogs             AuditLog[]
@@ -384,6 +400,27 @@ model OrganisationMember {
 
   @@unique([organisationId, userId])
   @@index([userId])
+}
+
+model OrganisationInvitation {
+  id             String           @id @default(cuid())
+  organisationId String
+  email          String
+  role           MemberRole
+  tokenHash      String           @unique
+  status         InvitationStatus @default(PENDING)
+  invitedById    String
+  createdAt      DateTime         @default(now())
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, email, status])
+  @@index([organisationId, status])
+  @@index([email])
 }
 
 model Integration {
@@ -1561,6 +1598,8 @@ model AgentRun {
   clarificationQuestion   String?                 @db.Text
   clarificationOptions    Json?
   status                  AgentRunStatus          @default(PENDING)
+  /// Optional answer mode for Ask/agent runs (nullable for back-compat).
+  answerMode              AgentAnswerMode?
   startedAt               DateTime?
   finishedAt              DateTime?
   totalCostCents          Int                     @default(0)

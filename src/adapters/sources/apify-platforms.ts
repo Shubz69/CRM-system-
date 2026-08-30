@@ -20,6 +20,21 @@ import {
   runApifyActor,
 } from "@/adapters/sources/apify-client";
 import { addBillableCents, recordApifySpend } from "@/adapters/sources/apify-billing";
+import {
+  ApifyDeniedError,
+  assertApifyKillSwitchAllows,
+  assertProxyPolicy,
+  buildApifyProvenanceMetadata,
+  clampApifyMaxItems,
+  estimateMaxTotalChargeUsd,
+  findFreshPersistentApifyCache,
+  hashApifyCanonicalQuery,
+  hashApifyInput,
+  resolveApifyProgressiveLimit,
+  type ApifyPricingModel,
+  type ApifyProxyPolicy,
+  type ApifyRiskLevel,
+} from "@/adapters/sources/apify-hardening";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
@@ -27,18 +42,76 @@ import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 export type ApifyPlatformConfig = {
   platform: SourcePlatform;
   displayName: string;
+  /** Why this Actor is approved for Agent Desk. */
+  purpose: string;
+  /** Pinned Actor ID — only allowlisted IDs may run. */
+  actorId: string;
+  /**
+   * @deprecated Alias of actorId for older call sites / tests.
+   * Prefer actorId.
+   */
   defaultActorId: string;
-  /** Env override for actor id, e.g. APIFY_INSTAGRAM_ACTOR_ID */
+  /** Build / version pin passed to Apify API (e.g. "latest" or a build number). */
+  build: string;
+  /** When false, adapter denies all runs for this platform. */
+  enabled: boolean;
+  pricingModel: ApifyPricingModel;
+  /** USD per 1k results (or unit) at pricingSnapshotAt — estimate only. */
+  estimatedUnitCost: number;
+  pricingSnapshotAt: string;
+  risk: ApifyRiskLevel;
+  proxyPolicy: ApifyProxyPolicy;
+  defaultMaxItems: number;
+  hardMaxItems: number;
+  /** Per-run wall timeout (ms). */
+  timeout: number;
+  lastReviewedAt: string;
+  /** Optional memory pin (MB). */
+  memoryMb?: number;
+  /** Env override for actor id, e.g. APIFY_INSTAGRAM_ACTOR_ID — allowlisted only. */
   actorIdEnv: keyof ReturnType<typeof getEnv>;
   /** Env override for timeout ms */
   timeoutEnv: keyof ReturnType<typeof getEnv>;
-  /** Default per-run wall timeout (ms). LinkedIn is shorter — it fails more often. */
+  /**
+   * @deprecated Prefer timeout / estimatedUnitCost.
+   * Kept so older helpers keep compiling.
+   */
   defaultTimeoutMs: number;
-  /** USD per 1,000 results on free/PPE list price — used when Apify omits usageTotalUsd. */
+  /** @deprecated Prefer estimatedUnitCost. */
   defaultUsdPer1k: number;
   buildInput: (query: string, options: SourceSearchOptions, limit: number) => Record<string, unknown>;
   mapItem: (item: Record<string, unknown>) => SourceResult | null;
 };
+
+/** Approved Actor IDs only — unknown Store Actor IDs are denied. */
+const APPROVED_ACTOR_IDS = new Set<string>();
+
+export function registerApprovedApifyActor(actorId: string): void {
+  const id = actorId.trim();
+  if (id) APPROVED_ACTOR_IDS.add(id);
+}
+
+export function listApprovedApifyActors(): string[] {
+  return [...APPROVED_ACTOR_IDS].sort();
+}
+
+export function isApprovedApifyActor(actorId: string): boolean {
+  return APPROVED_ACTOR_IDS.has(actorId.trim());
+}
+
+/** Deny arbitrary Actor IDs from user/agent/env input. */
+export function assertApprovedApifyActor(
+  platform: SourcePlatform,
+  actorId: string,
+): void {
+  if (!isApprovedApifyActor(actorId)) {
+    throw new ApifyDeniedError(
+      platform,
+      "UNKNOWN_ACTOR",
+      `${platform} source rejected an unapproved actor.`,
+    );
+  }
+}
 
 function requireApifyToken(platform: SourcePlatform, displayName: string): string {
   const token = getEnv().APIFY_TOKEN;
@@ -51,19 +124,35 @@ function requireApifyToken(platform: SourcePlatform, displayName: string): strin
   return token;
 }
 
-function resolveActorId(config: ApifyPlatformConfig): string {
+/**
+ * Resolve Actor ID from pinned config. Env override is accepted ONLY when the
+ * override is itself on the allowlist — never arbitrary Store Actor IDs.
+ */
+export function resolveActorId(config: ApifyPlatformConfig): string {
+  const pinned = (config.actorId || config.defaultActorId).trim();
   const override = getEnv()[config.actorIdEnv];
-  if (typeof override === "string" && override.trim()) return override.trim();
-  return config.defaultActorId;
+  if (typeof override === "string" && override.trim()) {
+    const candidate = override.trim();
+    if (!isApprovedApifyActor(candidate)) {
+      throw new ApifyDeniedError(
+        config.platform,
+        "UNKNOWN_ACTOR",
+        `${config.platform} source rejected an unapproved actor override.`,
+      );
+    }
+    return candidate;
+  }
+  return pinned;
 }
 
 function resolveTimeoutMs(config: ApifyPlatformConfig): number {
   const global = Number(getEnv().APIFY_TIMEOUT_MS || 0);
   const perPlatform = Number(getEnv()[config.timeoutEnv] || 0);
+  const pinned = config.timeout || config.defaultTimeoutMs;
   const picked =
     (Number.isFinite(perPlatform) && perPlatform > 0 ? perPlatform : 0) ||
     (Number.isFinite(global) && global > 0 ? global : 0) ||
-    config.defaultTimeoutMs;
+    pinned;
   // Cap so a single actor cannot consume the default 10-minute supervisor budget alone.
   return Math.min(Math.max(5_000, Math.floor(picked)), 180_000);
 }
@@ -71,7 +160,7 @@ function resolveTimeoutMs(config: ApifyPlatformConfig): number {
 function resolveUsdPer1k(config: ApifyPlatformConfig): number {
   const override = Number(getEnv().APIFY_USD_PER_1K_RESULTS || 0);
   if (Number.isFinite(override) && override > 0) return override;
-  return config.defaultUsdPer1k;
+  return config.estimatedUnitCost || config.defaultUsdPer1k;
 }
 
 function estimateCostCents(input: {
@@ -80,6 +169,7 @@ function estimateCostCents(input: {
   usageTotalUsd: number | null;
   itemCount: number;
 }): number {
+  // Completed-run usage is authoritative when Apify reports it.
   if (input.usageTotalUsd != null && Number.isFinite(input.usageTotalUsd) && input.usageTotalUsd > 0) {
     return Math.max(1, Math.round(input.usageTotalUsd * 100));
   }
@@ -135,15 +225,41 @@ function slugHashtag(query: string): string {
 }
 
 export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAdapter {
+  registerApprovedApifyActor(config.actorId || config.defaultActorId);
+
   return {
     platform: config.platform,
     displayName: config.displayName,
 
     async search(query, options: SourceSearchOptions): Promise<SourceResult[]> {
       requireApifyToken(config.platform, config.displayName);
-      const limit = Math.min(Math.max(options.limit ?? 8, 1), 25);
+
+      if (!config.enabled) {
+        throw new ApifyDeniedError(
+          config.platform,
+          "DISABLED",
+          `${config.displayName} source is disabled.`,
+        );
+      }
+
+      await assertApifyKillSwitchAllows(config.platform, options.organisationId);
+
       const actorId = resolveActorId(config);
+      assertApprovedApifyActor(config.platform, actorId);
+
+      const progressiveLimit = resolveApifyProgressiveLimit({
+        defaultMaxItems: config.defaultMaxItems,
+        hardMaxItems: config.hardMaxItems,
+        requestedLimit: options.limit,
+        answerMode: options.answerMode,
+        qualityBudget: options.qualityBudget,
+        governorMode: options.governorMode,
+        broaden: options.broadenApify,
+      });
+      const limit = clampApifyMaxItems(progressiveLimit, config.hardMaxItems);
+
       const timeoutMs = resolveTimeoutMs(config);
+      const build = config.build;
 
       const cacheKey = hashSourceQuery({
         platform: config.platform,
@@ -154,10 +270,32 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
           recent: options.recent ?? true,
           nicheHint: options.nicheHint,
           actorId,
+          build,
         },
       });
       const cached = getCachedSourceResults(cacheKey);
       if (cached) return cached.slice(0, limit);
+
+      const canonicalQueryHash = hashApifyCanonicalQuery({
+        organisationId: options.organisationId,
+        platform: config.platform,
+        query,
+        actorId,
+        limit,
+        nicheHint: options.nicheHint,
+        recent: options.recent,
+      });
+
+      const persistent = await findFreshPersistentApifyCache({
+        organisationId: options.organisationId,
+        platform: config.platform,
+        canonicalQueryHash,
+        limit,
+      });
+      if (persistent?.length) {
+        setCachedSourceResults(cacheKey, persistent);
+        return persistent.slice(0, limit);
+      }
 
       acquire(config.platform, options.organisationId);
 
@@ -170,6 +308,13 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
       await assertWithinSpendCap(options.organisationId, estimatedCents);
 
       const actorInput = config.buildInput(query, options, limit);
+      assertProxyPolicy(config.platform, config.proxyPolicy, actorInput);
+
+      const inputHash = hashApifyInput(actorInput);
+      const maxTotalChargeUsd = estimateMaxTotalChargeUsd({
+        estimatedUnitCost: resolveUsdPer1k(config),
+        maxItems: limit,
+      });
       const started = Date.now();
 
       try {
@@ -179,6 +324,9 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
           actorInput,
           timeoutMs,
           maxItems: limit,
+          maxTotalChargeUsd,
+          memoryMb: config.memoryMb,
+          build,
         });
 
         const results: SourceResult[] = [];
@@ -197,6 +345,9 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
         });
         addBillableCents(options._billableCents, costCents);
 
+        const retrievedAt = new Date().toISOString();
+        const actorBuild = run.build || build;
+
         await recordApifySpend({
           organisationId: options.organisationId,
           platform: config.platform,
@@ -205,9 +356,12 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
           latencyMs: Date.now() - started,
           metadata: {
             actorId,
+            actorBuild,
             runId: run.runId,
+            inputHash,
             itemCount: results.length,
             usageTotalUsd: run.usageTotalUsd,
+            actualCostAuthoritative: run.usageTotalUsd != null,
           },
         });
 
@@ -226,11 +380,23 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
         }
 
         for (const r of results) {
-          r.rawMetadata = {
-            ...r.rawMetadata,
-            apifyCostCents: costCents,
-            apifyRunId: run.runId,
-          };
+          r.rawMetadata = buildApifyProvenanceMetadata({
+            existing: r.rawMetadata,
+            provenance: {
+              sourcePlatform: config.platform,
+              retrievalMechanism: "apify",
+              canonicalQueryHash,
+              actorId,
+              actorBuild,
+              runId: run.runId,
+              inputHash,
+              retrievedAt,
+              actualCost: {
+                usageTotalUsd: run.usageTotalUsd,
+                costCents,
+              },
+            },
+          });
         }
 
         setCachedSourceResults(cacheKey, results);
@@ -238,6 +404,10 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
       } catch (error) {
         const latencyMs = Date.now() - started;
         const message = error instanceof Error ? error.message : "unknown";
+
+        if (error instanceof ApifyDeniedError) {
+          throw error;
+        }
 
         // Still gate residual cost when Apify may have started billing.
         if (
@@ -283,13 +453,28 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
   };
 }
 
-/** --- Platform configs (recommended actors — review before production lock-in) --- */
+const REVIEWED = "2026-08-30";
+
+/** --- Platform configs (approved Actors only — review before production lock-in) --- */
 
 export const INSTAGRAM_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "instagram",
   displayName: "Instagram",
-  // Official Apify actor — highest usage, actively maintained; PPE from ~$1.50–$2.70 / 1k results.
+  purpose: "Hashtag / explore post retrieval for research & social listening",
+  actorId: "apify/instagram-scraper",
   defaultActorId: "apify/instagram-scraper",
+  build: "latest",
+  enabled: true,
+  pricingModel: "PPE",
+  estimatedUnitCost: 2.7,
+  pricingSnapshotAt: REVIEWED,
+  risk: "medium",
+  proxyPolicy: "DATACENTER",
+  defaultMaxItems: 8,
+  hardMaxItems: 25,
+  timeout: 75_000,
+  lastReviewedAt: REVIEWED,
+  memoryMb: 4096,
   actorIdEnv: "APIFY_INSTAGRAM_ACTOR_ID",
   timeoutEnv: "APIFY_INSTAGRAM_TIMEOUT_MS",
   defaultTimeoutMs: 75_000,
@@ -356,8 +541,21 @@ export const INSTAGRAM_APIFY_CONFIG: ApifyPlatformConfig = {
 export const TIKTOK_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "tiktok",
   displayName: "TikTok",
-  // clockworks/tiktok-scraper — widely used, searchQueries + hashtags, PPE ~$1.70 / 1k.
+  purpose: "Keyword / hashtag video search for research & social listening",
+  actorId: "clockworks/tiktok-scraper",
   defaultActorId: "clockworks/tiktok-scraper",
+  build: "latest",
+  enabled: true,
+  pricingModel: "PPE",
+  estimatedUnitCost: 1.7,
+  pricingSnapshotAt: REVIEWED,
+  risk: "medium",
+  proxyPolicy: "DATACENTER",
+  defaultMaxItems: 8,
+  hardMaxItems: 25,
+  timeout: 75_000,
+  lastReviewedAt: REVIEWED,
+  memoryMb: 4096,
   actorIdEnv: "APIFY_TIKTOK_ACTOR_ID",
   timeoutEnv: "APIFY_TIKTOK_TIMEOUT_MS",
   defaultTimeoutMs: 75_000,
@@ -418,8 +616,21 @@ export const TIKTOK_APIFY_CONFIG: ApifyPlatformConfig = {
 export const TWITTER_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "twitter",
   displayName: "Twitter/X",
-  // Tweet Scraper V2 — widely used, keyword search via searchTerms; PPE ~$0.30-1.00/1k tweets typical.
+  purpose: "Keyword tweet search for research & social listening",
+  actorId: "apidojo/tweet-scraper",
   defaultActorId: "apidojo/tweet-scraper",
+  build: "latest",
+  enabled: true,
+  pricingModel: "PPE",
+  estimatedUnitCost: 1.0,
+  pricingSnapshotAt: REVIEWED,
+  risk: "medium",
+  proxyPolicy: "DATACENTER",
+  defaultMaxItems: 8,
+  hardMaxItems: 25,
+  timeout: 60_000,
+  lastReviewedAt: REVIEWED,
+  memoryMb: 2048,
   actorIdEnv: "APIFY_TWITTER_ACTOR_ID",
   timeoutEnv: "APIFY_TWITTER_TIMEOUT_MS",
   defaultTimeoutMs: 60_000,
@@ -470,8 +681,21 @@ export const TWITTER_APIFY_CONFIG: ApifyPlatformConfig = {
 export const THREADS_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "threads",
   displayName: "Threads",
-  // Keyword/search-mode Threads actor — review before production lock-in (community actor, no official Meta API).
+  purpose: "Keyword Threads post search for research & social listening",
+  actorId: "automation-lab/threads-scraper",
   defaultActorId: "automation-lab/threads-scraper",
+  build: "latest",
+  enabled: true,
+  pricingModel: "PPE",
+  estimatedUnitCost: 1.5,
+  pricingSnapshotAt: REVIEWED,
+  risk: "high",
+  proxyPolicy: "DATACENTER",
+  defaultMaxItems: 8,
+  hardMaxItems: 25,
+  timeout: 60_000,
+  lastReviewedAt: REVIEWED,
+  memoryMb: 2048,
   actorIdEnv: "APIFY_THREADS_ACTOR_ID",
   timeoutEnv: "APIFY_THREADS_TIMEOUT_MS",
   defaultTimeoutMs: 60_000,
@@ -517,9 +741,21 @@ export const THREADS_APIFY_CONFIG: ApifyPlatformConfig = {
 export const LINKEDIN_APIFY_CONFIG: ApifyPlatformConfig = {
   platform: "linkedin",
   displayName: "LinkedIn",
-  // harvestapi/linkedin-post-search — keyword post search, no cookie rental; PPE ~$1.50–$2 / 1k.
-  // Expect higher failure rate than IG/TT; timeouts are shorter on purpose.
+  purpose: "Keyword LinkedIn post search — no cookie rental",
+  actorId: "harvestapi/linkedin-post-search",
   defaultActorId: "harvestapi/linkedin-post-search",
+  build: "latest",
+  enabled: true,
+  pricingModel: "PPE",
+  estimatedUnitCost: 2.0,
+  pricingSnapshotAt: REVIEWED,
+  risk: "high",
+  proxyPolicy: "DATACENTER",
+  defaultMaxItems: 6,
+  hardMaxItems: 15,
+  timeout: 55_000,
+  lastReviewedAt: REVIEWED,
+  memoryMb: 4096,
   actorIdEnv: "APIFY_LINKEDIN_ACTOR_ID",
   timeoutEnv: "APIFY_LINKEDIN_TIMEOUT_MS",
   defaultTimeoutMs: 55_000,
@@ -589,3 +825,14 @@ export const LINKEDIN_APIFY_CONFIG: ApifyPlatformConfig = {
     };
   },
 };
+
+// Register approved actors at module load (adapters also register on create).
+for (const cfg of [
+  INSTAGRAM_APIFY_CONFIG,
+  TIKTOK_APIFY_CONFIG,
+  TWITTER_APIFY_CONFIG,
+  THREADS_APIFY_CONFIG,
+  LINKEDIN_APIFY_CONFIG,
+]) {
+  registerApprovedApifyActor(cfg.actorId);
+}

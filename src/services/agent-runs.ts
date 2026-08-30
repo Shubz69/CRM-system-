@@ -1,4 +1,4 @@
-import { AgentDetailRetention, Prisma, type AgentRun, type AgentStep } from "@prisma/client";
+import { AgentAnswerMode, AgentDetailRetention, Prisma, type AgentRun, type AgentStep } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { ensureAgentsRegistered } from "@/agents";
@@ -13,11 +13,18 @@ import {
   getOrganisationPeriodSpendCents,
 } from "@/services/ai-spend-gate";
 import { ensureBuiltinToolsRegistered, listTools } from "@/kernel";
+import {
+  answerModeFromFormatOption,
+  detectAnswerModeFromLanguage,
+  isModeShapedOutput,
+  parseAnswerMode,
+} from "@/services/answer-modes";
 
 export type AgentRunProgress = {
   runId: string;
   status: AgentRun["status"];
   request: string;
+  answerMode: AgentAnswerMode | null;
   plainEnglishPlan: string | null;
   clarificationQuestion: string | null;
   clarificationOptions: string[] | null;
@@ -87,12 +94,15 @@ function parseOptions(value: unknown): string[] | null {
 function nextActionsFor(
   status: AgentRun["status"],
   finalOutput: unknown,
+  answerMode?: AgentAnswerMode | null,
 ): string[] {
+  const modeShaped = isModeShapedOutput(finalOutput);
   const looksLikeResearch =
-    finalOutput &&
-    typeof finalOutput === "object" &&
-    (Array.isArray((finalOutput as { claims?: unknown }).claims) ||
-      typeof (finalOutput as { researchJobId?: unknown }).researchJobId === "string");
+    modeShaped ||
+    (finalOutput &&
+      typeof finalOutput === "object" &&
+      (Array.isArray((finalOutput as { claims?: unknown }).claims) ||
+        typeof (finalOutput as { researchJobId?: unknown }).researchJobId === "string"));
   const looksLikeImage =
     finalOutput &&
     typeof finalOutput === "object" &&
@@ -101,6 +111,16 @@ function nextActionsFor(
 
   switch (status) {
     case "COMPLETED":
+      if (modeShaped && (finalOutput.mode === "action" || finalOutput.mode === "deep")) {
+        return [
+          "Create opportunity",
+          "Draft content",
+          "Save research",
+          "Create mission",
+          "Prepare outreach",
+          "Ask something else",
+        ];
+      }
       if (looksLikeResearch) {
         return [
           "Create opportunity",
@@ -137,7 +157,7 @@ function nextActionsFor(
     case "PENDING":
       return ["Sit tight — progress updates as each step finishes"];
     default:
-      return ["Ask something else"];
+      return answerMode ? ["Ask something else"] : ["Ask something else"];
   }
 }
 
@@ -190,6 +210,7 @@ export async function createAndEnqueueAgentRun(input: {
   request: string;
   triggeredBy?: "user" | "system" | "schedule";
   referenceAssetId?: string | null;
+  answerMode?: AgentAnswerMode | string | null;
 }): Promise<{ runId: string; jobId: string }> {
   ensureAgentsRegistered();
   const request = input.request.trim();
@@ -233,6 +254,9 @@ export async function createAndEnqueueAgentRun(input: {
     where: { organisationId: input.organisationId },
   });
 
+  const answerMode =
+    parseAnswerMode(input.answerMode) ?? detectAnswerModeFromLanguage(request);
+
   const run = await prisma.agentRun.create({
     data: {
       organisationId: input.organisationId,
@@ -240,6 +264,7 @@ export async function createAndEnqueueAgentRun(input: {
       triggeredBy: input.triggeredBy ?? "user",
       request,
       status: "PENDING",
+      answerMode: answerMode ?? null,
       maxSteps: limits?.maxSteps ?? 8,
       maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
       maxSpendCents: limits?.maxSpendCentsPerRun ?? null,
@@ -301,6 +326,7 @@ export async function clarifyAndEnqueueAgentRun(input: {
     throw new Error("Invalid clarification option");
   }
 
+  const formatMode = answerModeFromFormatOption(input.selectedOption);
   const combined = `${run.request}\n\n[User chose: ${input.selectedOption}]`;
 
   await prisma.agentRun.updateMany({
@@ -308,6 +334,7 @@ export async function clarifyAndEnqueueAgentRun(input: {
     data: {
       request: combined,
       status: "PENDING",
+      ...(formatMode ? { answerMode: formatMode } : {}),
       clarificationQuestion: null,
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,
@@ -513,6 +540,7 @@ export async function getAgentRunProgress(input: {
     runId: run.id,
     status: run.status,
     request: run.request,
+    answerMode: run.answerMode ?? null,
     plainEnglishPlan: run.plainEnglishPlan,
     clarificationQuestion: run.clarificationQuestion,
     clarificationOptions: parseOptions(run.clarificationOptions),
@@ -551,7 +579,7 @@ export async function getAgentRunProgress(input: {
       costCents: s.costCents,
       detailRetention: s.detailRetention,
     })),
-    nextActions: nextActionsFor(run.status, displayOutput),
+    nextActions: nextActionsFor(run.status, displayOutput, run.answerMode),
     kernel: {
       toolsInvoked,
       registeredTools: listTools().map((t) => ({
