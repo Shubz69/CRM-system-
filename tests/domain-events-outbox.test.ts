@@ -27,15 +27,19 @@ import { recoverMissionQueueJobs } from "@/services/domain-events/mission-queue-
 describe("Phase 12B transactional outbox", () => {
   let orgA: TestOrganisationFixture;
   let orgB: TestOrganisationFixture;
+  /** Isolated org for claim/dispatch tests — avoids cross-test PENDING queue contention. */
+  let claimOrg: TestOrganisationFixture;
 
   beforeAll(async () => {
     orgA = await createTestOrganisation("outbox-a");
     orgB = await createTestOrganisation("outbox-b");
+    claimOrg = await createTestOrganisation("outbox-claim");
   });
 
   afterAll(async () => {
     await destroyTestOrganisation(orgA);
     await destroyTestOrganisation(orgB);
+    await destroyTestOrganisation(claimOrg);
   });
 
   it("atomically commits business mutation + event", async () => {
@@ -89,20 +93,29 @@ describe("Phase 12B transactional outbox", () => {
   });
 
   it("two dispatchers: only one claim wins per event", async () => {
+    const token = `claim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const event = await prisma.$transaction(async (tx) =>
       appendDomainEvent(tx, {
-        organisationId: orgA.organisationId,
+        organisationId: claimOrg.organisationId,
         eventType: "DEAL_CREATED",
         aggregateType: "Deal",
-        aggregateId: `claim-${Date.now()}`,
-        payload: { dealId: `claim-${Date.now()}` },
-        dedupeKey: `claim-dupe-${Date.now()}`,
+        aggregateId: token,
+        payload: { dealId: token },
+        dedupeKey: `claim-dupe-${token}`,
       }),
     );
 
     const [a, b] = await Promise.all([
-      claimDomainEventBatch({ batchSize: 50, lockOwner: "worker-a" }),
-      claimDomainEventBatch({ batchSize: 50, lockOwner: "worker-b" }),
+      claimDomainEventBatch({
+        batchSize: 50,
+        lockOwner: "worker-a",
+        organisationId: claimOrg.organisationId,
+      }),
+      claimDomainEventBatch({
+        batchSize: 50,
+        lockOwner: "worker-b",
+        organisationId: claimOrg.organisationId,
+      }),
     ]);
     const idsA = new Set(a.map((e) => e.id));
     const idsB = new Set(b.map((e) => e.id));
@@ -112,16 +125,20 @@ describe("Phase 12B transactional outbox", () => {
   });
 
   it("idempotent consumer: second delivery does not re-run effect", async () => {
+    const token = `idem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const event = await prisma.$transaction(async (tx) =>
       appendDomainEvent(tx, {
-        organisationId: orgA.organisationId,
+        organisationId: claimOrg.organisationId,
         eventType: "DEAL_CREATED",
         aggregateType: "Deal",
-        aggregateId: `idem-${Date.now()}`,
-        payload: { dealId: `idem-${Date.now()}` },
+        aggregateId: token,
+        payload: { dealId: token },
       }),
     );
-    const claimed = await claimDomainEventBatch({ batchSize: 100 });
+    const claimed = await claimDomainEventBatch({
+      batchSize: 100,
+      organisationId: claimOrg.organisationId,
+    });
     const target = claimed.find((e) => e.id === event.id) ?? event;
     // Force PROCESSING if not claimed (race with other tests)
     if (target.status !== DomainEventStatus.PROCESSING) {
@@ -243,17 +260,21 @@ describe("Phase 12B transactional outbox", () => {
   });
 
   it("cancel prevents later execution", async () => {
+    const token = `cancel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const event = await prisma.$transaction(async (tx) =>
       appendDomainEvent(tx, {
-        organisationId: orgA.organisationId,
+        organisationId: claimOrg.organisationId,
         eventType: "DEAL_CREATED",
         aggregateType: "Deal",
-        aggregateId: `cancel-${Date.now()}`,
-        payload: { dealId: `cancel-${Date.now()}` },
+        aggregateId: token,
+        payload: { dealId: token },
       }),
     );
-    await cancelDomainEvent({ organisationId: orgA.organisationId, eventId: event.id });
-    const claimed = await claimDomainEventBatch({ batchSize: 100 });
+    await cancelDomainEvent({ organisationId: claimOrg.organisationId, eventId: event.id });
+    const claimed = await claimDomainEventBatch({
+      batchSize: 100,
+      organisationId: claimOrg.organisationId,
+    });
     expect(claimed.some((e) => e.id === event.id)).toBe(false);
   });
 
@@ -297,20 +318,23 @@ describe("Phase 12B transactional outbox", () => {
   });
 
   it("dispatch batch processes pending events", async () => {
-    await prisma.$transaction(async (tx) =>
+    const token = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const event = await prisma.$transaction(async (tx) =>
       appendDomainEvent(tx, {
-        organisationId: orgA.organisationId,
+        organisationId: claimOrg.organisationId,
         eventType: "DEAL_CREATED",
         aggregateType: "Deal",
-        aggregateId: `batch-${Date.now()}`,
-        payload: { dealId: `batch-${Date.now()}` },
+        aggregateId: token,
+        payload: { dealId: token },
       }),
     );
     const result = await dispatchDomainEventBatch({
-      organisationId: orgA.organisationId,
+      organisationId: claimOrg.organisationId,
       batchSize: 5,
     });
     expect(result.claimed).toBeGreaterThanOrEqual(1);
+    const after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(after.status).toBe(DomainEventStatus.PROCESSED);
   }, 20_000);
 
   it("parse rejects unsupported version", () => {

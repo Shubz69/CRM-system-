@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEnv } from "@/lib/env";
+import {
+  MetaInstagramNotConfiguredError,
+  assertMetaInstagramMessagingConfigured,
+  getEnv,
+  metaInstagramNotConfiguredResponse,
+} from "@/lib/env";
 import { requirePermission } from "@/lib/session";
 import {
   completeMetaInstagramConnection,
@@ -50,6 +55,15 @@ export async function GET(req: NextRequest) {
     consumed.userId !== session.userId
   ) {
     return redirectMeta("error", "connection could not be verified — try again");
+  }
+
+  try {
+    assertMetaInstagramMessagingConfigured();
+  } catch (error) {
+    if (error instanceof MetaInstagramNotConfiguredError) {
+      return metaInstagramNotConfiguredResponse(503);
+    }
+    throw error;
   }
 
   try {

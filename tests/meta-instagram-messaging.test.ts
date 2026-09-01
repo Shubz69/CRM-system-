@@ -35,7 +35,42 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/env", () => ({
   getEnv: () => mocks.getEnv(),
   assertProductionSecretsConfigured: () => undefined,
+  assertMetaInstagramMessagingConfigured: () => {
+    const env = mocks.getEnv() as {
+      INSTAGRAM_APP_ID?: string;
+      INSTAGRAM_APP_SECRET?: string;
+      META_APP_ID?: string;
+      META_APP_SECRET?: string;
+    };
+    const id = env.INSTAGRAM_APP_ID || env.META_APP_ID;
+    const secret = env.INSTAGRAM_APP_SECRET || env.META_APP_SECRET;
+    if (!id || !secret) {
+      const err = new Error("Meta Instagram is not configured") as Error & { code: string };
+      err.name = "MetaInstagramNotConfiguredError";
+      err.code = "META_NOT_CONFIGURED";
+      throw err;
+    }
+  },
+  MetaInstagramNotConfiguredError: class MetaInstagramNotConfiguredError extends Error {
+    code = "META_NOT_CONFIGURED" as const;
+    constructor(message = "Meta Instagram is not configured") {
+      super(message);
+      this.name = "MetaInstagramNotConfiguredError";
+    }
+  },
+  metaInstagramNotConfiguredResponse: (status = 503) =>
+    Response.json(
+      {
+        ok: false,
+        error: "Meta Instagram is not configured",
+        code: "META_NOT_CONFIGURED",
+        health: "NOT_CONFIGURED",
+      },
+      { status },
+    ),
+  META_INSTAGRAM_DEV_VERIFY_TOKEN: "dev-meta-instagram-verify-token",
 }));
+
 
 vi.mock("@/lib/crypto", () => ({
   encryptSecret: (...args: unknown[]) => mocks.encryptSecret(...(args as [string])),

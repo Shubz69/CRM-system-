@@ -98,4 +98,24 @@ describe("Production secret hard-fail", () => {
   it("no-ops outside production runtime", () => {
     expect(() => assertProductionSecretsConfigured()).not.toThrow();
   });
+
+  it("does not require optional Meta Instagram secrets globally", () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.ENCRYPTION_KEY = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    process.env.AUTH_SECRET = "production-auth-secret-ok";
+    process.env.NEXTAUTH_SECRET = "production-auth-secret-ok";
+    process.env.MANYCHAT_WEBHOOK_SECRET = "rotated-manychat-webhook-secret";
+    process.env.BOOKING_WEBHOOK_SECRET = "rotated-booking-webhook-secret";
+    process.env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN = "dev-meta-instagram-verify-token";
+    delete process.env.INSTAGRAM_APP_ID;
+    delete process.env.INSTAGRAM_APP_SECRET;
+    resetEnvCache();
+    try {
+      expect(() => assertProductionSecretsConfigured()).not.toThrow();
+    } finally {
+      process.env.NODE_ENV = previous;
+      resetEnvCache();
+    }
+  });
 });

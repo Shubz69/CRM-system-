@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import {
+  MetaInstagramNotConfiguredError,
+  assertMetaInstagramMessagingConfigured,
+} from "@/lib/env";
 import { jsonError, requirePermission } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
@@ -58,6 +62,22 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "validate_configuration") {
+      try {
+        assertMetaInstagramMessagingConfigured();
+      } catch (error) {
+        if (error instanceof MetaInstagramNotConfiguredError) {
+          return Response.json({
+            ok: false,
+            sent: false,
+            status: "Not configured",
+            detail: error.message,
+            health: "NOT_CONFIGURED",
+            code: error.code,
+            message: error.message,
+          });
+        }
+        throw error;
+      }
       const result = await validateMetaInstagramConnection(session.organisationId);
       await writeAuditLog({
         organisationId: session.organisationId,
@@ -78,6 +98,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "send_test_message") {
+      try {
+        assertMetaInstagramMessagingConfigured();
+      } catch (error) {
+        if (error instanceof MetaInstagramNotConfiguredError) {
+          return jsonError(error.message, 503);
+        }
+        throw error;
+      }
       const view = await getMetaInstagramConnectionView(session.organisationId);
       if (!view.isActive || view.health === "DISCONNECTED" || view.health === "NOT_CONFIGURED") {
         return jsonError("Instagram is not connected — reconnect before sending a test message", 400);

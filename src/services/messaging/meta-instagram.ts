@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { IntegrationType, Prisma } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
-import { getEnv } from "@/lib/env";
+import { assertMetaInstagramMessagingConfigured, getEnv, META_INSTAGRAM_DEV_VERIFY_TOKEN } from "@/lib/env";
 import { createOAuthState, verifyOAuthState } from "@/lib/social-oauth-state";
 import { writeAuditLog } from "@/services/audit";
 import {
@@ -358,6 +358,7 @@ export async function subscribeMetaInstagramWebhooks(input: {
   igUserId: string;
   accessToken: string;
 }): Promise<{ ok: boolean; error?: string }> {
+  assertMetaInstagramMessagingConfigured();
   const { apiVersion } = resolveMetaAppConfig();
   const url = `https://graph.instagram.com/${apiVersion}/${encodeURIComponent(input.igUserId)}/subscribed_apps`;
   const res = await fetch(url, {
@@ -827,6 +828,11 @@ export function verifyMetaWebhookChallenge(input: {
   challenge: string | null;
 }): string | null {
   const { verifyToken } = resolveMetaAppConfig();
+  if (!verifyToken) return null;
+  // Never accept the development default as a production verify token.
+  if (verifyToken === META_INSTAGRAM_DEV_VERIFY_TOKEN && process.env.NODE_ENV === "production") {
+    return null;
+  }
   if (input.mode !== "subscribe") return null;
   if (!input.token || !input.challenge) return null;
   const a = Buffer.from(input.token);

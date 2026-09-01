@@ -5,7 +5,7 @@ import type {
   OutboundMessage,
   OutboundResult,
 } from "@/adapters/messaging/types";
-import { getEnv } from "@/lib/env";
+import { assertMetaInstagramMessagingConfigured, getEnv } from "@/lib/env";
 import { getMetaGraphVersion } from "@/services/messaging/meta-instagram";
 import { MESSAGING_PROVIDER } from "@/services/messaging/providers";
 
@@ -29,6 +29,16 @@ export class MetaInstagramMessagingAdapter implements MessagingProviderAdapter {
   }
 
   async sendMessage(message: OutboundMessage): Promise<OutboundResult> {
+    try {
+      assertMetaInstagramMessagingConfigured();
+    } catch (error) {
+      return {
+        ok: false,
+        provider: this.name,
+        error: error instanceof Error ? error.message : "Meta Instagram is not configured",
+      };
+    }
+
     const token = message.apiToken;
     if (!token) {
       return {

@@ -171,11 +171,22 @@ export type AppEnv = z.infer<typeof envSchema>;
 
 let cached: AppEnv | null = null;
 
-const DEV_WEBHOOK_SECRETS = new Set([
+/** Globally mandatory webhook defaults — optional providers must not be listed here. */
+const GLOBAL_DEV_WEBHOOK_SECRETS = new Set([
   "dev-manychat-webhook-secret",
   "dev-booking-webhook-secret",
-  "dev-meta-instagram-verify-token",
 ]);
+
+/** Optional Meta Instagram default — never a worker/global production hard-fail. */
+export const META_INSTAGRAM_DEV_VERIFY_TOKEN = "dev-meta-instagram-verify-token";
+
+export class MetaInstagramNotConfiguredError extends Error {
+  readonly code = "META_NOT_CONFIGURED" as const;
+  constructor(message = "Meta Instagram is not configured") {
+    super(message);
+    this.name = "MetaInstagramNotConfiguredError";
+  }
+}
 
 export function getEnv(): AppEnv {
   if (cached) return cached;
@@ -232,16 +243,22 @@ export function getEnv(): AppEnv {
         "[env] NEXTAUTH_URL still points at localhost — set it to your Vercel URL to avoid auth callback 401s.",
       );
     }
-    if (DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
+    if (GLOBAL_DEV_WEBHOOK_SECRETS.has(data.MANYCHAT_WEBHOOK_SECRET)) {
       console.warn("[env] MANYCHAT_WEBHOOK_SECRET is still the default — rotate before production traffic.");
     }
-    if (DEV_WEBHOOK_SECRETS.has(data.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN)) {
-      console.warn(
-        "[env] META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN is still the default — rotate before Meta webhook traffic.",
-      );
-    }
-    if (DEV_WEBHOOK_SECRETS.has(data.BOOKING_WEBHOOK_SECRET)) {
+    if (GLOBAL_DEV_WEBHOOK_SECRETS.has(data.BOOKING_WEBHOOK_SECRET)) {
       console.warn("[env] BOOKING_WEBHOOK_SECRET is still the default — rotate before production traffic.");
+    }
+    const metaAppPresent = Boolean(
+      data.INSTAGRAM_APP_ID?.trim() ||
+        data.INSTAGRAM_APP_SECRET?.trim() ||
+        data.META_APP_ID?.trim() ||
+        data.META_APP_SECRET?.trim(),
+    );
+    if (metaAppPresent && data.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN === META_INSTAGRAM_DEV_VERIFY_TOKEN) {
+      console.warn(
+        "[env] META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN is still the default — rotate before Meta Instagram webhook traffic. This does not block worker startup.",
+      );
     }
     if (
       data.ENCRYPTION_KEY ===
@@ -265,29 +282,73 @@ export function requireDatabaseUrl(): string {
   return url;
 }
 
+/**
+ * Globally mandatory webhook secrets only (ManyChat + booking).
+ * Optional connectors (Meta Instagram, etc.) must not be asserted here —
+ * an unconfigured optional provider must never take down the worker.
+ */
 export function assertWebhookSecretsConfigured(): void {
   if (!isRuntimeProduction()) return;
   const env = getEnv();
-  if (DEV_WEBHOOK_SECRETS.has(env.MANYCHAT_WEBHOOK_SECRET)) {
+  if (GLOBAL_DEV_WEBHOOK_SECRETS.has(env.MANYCHAT_WEBHOOK_SECRET)) {
     throw new Error("MANYCHAT_WEBHOOK_SECRET must be rotated away from the default in production");
   }
-  if (DEV_WEBHOOK_SECRETS.has(env.BOOKING_WEBHOOK_SECRET)) {
+  if (GLOBAL_DEV_WEBHOOK_SECRETS.has(env.BOOKING_WEBHOOK_SECRET)) {
     throw new Error("BOOKING_WEBHOOK_SECRET must be rotated away from the default in production");
   }
-  if (DEV_WEBHOOK_SECRETS.has(env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN)) {
-    throw new Error(
-      "META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN must be rotated away from the default in production",
+}
+
+function metaInstagramAppCredentialsPresent(env: AppEnv): boolean {
+  const appId = env.INSTAGRAM_APP_ID?.trim() || env.META_APP_ID?.trim();
+  const appSecret = env.INSTAGRAM_APP_SECRET?.trim() || env.META_APP_SECRET?.trim();
+  return Boolean(appId && appSecret);
+}
+
+export function isMetaInstagramVerifyTokenProductionReady(token?: string | null): boolean {
+  const value = (token ?? getEnv().META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN ?? "").trim();
+  return Boolean(value) && value !== META_INSTAGRAM_DEV_VERIFY_TOKEN;
+}
+
+/**
+ * Provider-scoped Meta Instagram readiness.
+ * Call only from Meta OAuth, Meta webhooks, Meta validation, subscription, and Meta outbound.
+ * Missing configuration → META_NOT_CONFIGURED (never process.exit).
+ */
+export function assertMetaInstagramMessagingConfigured(): void {
+  const env = getEnv();
+  if (!metaInstagramAppCredentialsPresent(env)) {
+    throw new MetaInstagramNotConfiguredError(
+      "Meta Instagram app credentials are not configured (INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET)",
     );
   }
+  if (isRuntimeProduction() && !isMetaInstagramVerifyTokenProductionReady(env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN)) {
+    throw new MetaInstagramNotConfiguredError(
+      "META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN must be rotated away from the default before using Meta Instagram",
+    );
+  }
+}
+
+/** Safe JSON for Meta endpoints when the optional provider is not configured. */
+export function metaInstagramNotConfiguredResponse(status = 503) {
+  return Response.json(
+    {
+      ok: false,
+      error: "Meta Instagram is not configured",
+      code: "META_NOT_CONFIGURED",
+      health: "NOT_CONFIGURED",
+    },
+    { status },
+  );
 }
 
 const DEFAULT_ENCRYPTION_KEY =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /**
- * Production hard-fail for secrets that must never ship as defaults.
+ * Production hard-fail for secrets that are globally mandatory for the runtime.
+ * Optional providers (Meta Instagram, etc.) must use provider-scoped asserts.
  * Does NOT rotate ENCRYPTION_KEY — see docs/CREDENTIAL-ROTATION.md.
- * Call from webhook ingress and worker boot.
+ * Call from worker boot and globally required webhook ingress (ManyChat, booking).
  */
 export function assertProductionSecretsConfigured(): void {
   if (!isRuntimeProduction()) return;

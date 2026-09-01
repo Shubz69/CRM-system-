@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { getEnv } from "@/lib/env";
+import {
+  MetaInstagramNotConfiguredError,
+  assertMetaInstagramMessagingConfigured,
+  getEnv,
+  metaInstagramNotConfiguredResponse,
+} from "@/lib/env";
 import { jsonError, requirePermission } from "@/lib/session";
 import {
   buildMetaInstagramAuthorizeUrl,
@@ -23,10 +28,17 @@ export async function GET() {
     return jsonError(message, 403);
   }
 
+  try {
+    assertMetaInstagramMessagingConfigured();
+  } catch (error) {
+    if (error instanceof MetaInstagramNotConfiguredError) {
+      return metaInstagramNotConfiguredResponse(503);
+    }
+    throw error;
+  }
+
   if (!isMetaInstagramAppConfigured()) {
-    return NextResponse.redirect(
-      `${appUrl()}/integrations?meta_instagram=not_configured`,
-    );
+    return metaInstagramNotConfiguredResponse(503);
   }
 
   try {

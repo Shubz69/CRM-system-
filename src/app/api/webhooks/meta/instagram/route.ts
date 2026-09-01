@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
 import { normalizeAllMetaInstagramWebhookMessages } from "@/adapters/messaging/meta-instagram";
-import { assertProductionSecretsConfigured } from "@/lib/env";
+import {
+  MetaInstagramNotConfiguredError,
+  assertMetaInstagramMessagingConfigured,
+  metaInstagramNotConfiguredResponse,
+} from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { processInboundMessage } from "@/services/inbound-pipeline";
@@ -13,8 +17,23 @@ import {
 import { MESSAGING_PROVIDER } from "@/services/messaging/providers";
 import { recordUsage } from "@/services/usage";
 
+function metaWebhookConfigOrFail(): Response | null {
+  try {
+    assertMetaInstagramMessagingConfigured();
+    return null;
+  } catch (error) {
+    if (error instanceof MetaInstagramNotConfiguredError) {
+      return metaInstagramNotConfiguredResponse(503);
+    }
+    throw error;
+  }
+}
+
 /** GET — Meta webhook verification challenge. */
 export async function GET(req: NextRequest) {
+  const unconfigured = metaWebhookConfigOrFail();
+  if (unconfigured) return unconfigured;
+
   const url = req.nextUrl ?? new URL(req.url);
   const mode = url.searchParams.get("hub.mode");
   const token = url.searchParams.get("hub.verify_token");
@@ -29,7 +48,14 @@ export async function GET(req: NextRequest) {
 /** POST — Instagram messaging webhooks. Ack quickly; fail closed on unknown accounts. */
 export async function POST(req: NextRequest) {
   try {
-    assertProductionSecretsConfigured();
+    try {
+      assertMetaInstagramMessagingConfigured();
+    } catch (error) {
+      if (error instanceof MetaInstagramNotConfiguredError) {
+        return metaInstagramNotConfiguredResponse(503);
+      }
+      throw error;
+    }
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     if (!rateLimit(`meta-instagram:${ip}`, 180, 60_000)) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
