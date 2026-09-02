@@ -7,7 +7,7 @@ import { capabilityAllowsAuto, isAutopilotOperating } from "@/services/autopilot
 
 describe("autopilot config", () => {
   it("defaults are sensible", () => {
-    expect(DEFAULT_AUTOPILOT_CONFIG.aiResponses).toBe("automatic");
+    expect(DEFAULT_AUTOPILOT_CONFIG.aiResponses).toBe("approval_required");
     expect(DEFAULT_AUTOPILOT_CONFIG.followUps).toBe("approval_required");
     expect(DEFAULT_AUTOPILOT_CONFIG.booking).toBe("automatic");
   });
@@ -15,7 +15,7 @@ describe("autopilot config", () => {
   it("parses partial overrides", () => {
     const cfg = parseAutopilotConfig({ booking: "approval_required", unknown: "x" });
     expect(cfg.booking).toBe("approval_required");
-    expect(cfg.aiResponses).toBe("automatic");
+    expect(cfg.aiResponses).toBe("approval_required");
   });
 
   it("LIVE operates for any provider; TEST only simulator", () => {

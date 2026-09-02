@@ -14,7 +14,7 @@ export type AutopilotCapabilityMode = "automatic" | "approval_required" | "disab
 export type AutopilotConfig = Record<AutopilotCapability, AutopilotCapabilityMode>;
 
 export const DEFAULT_AUTOPILOT_CONFIG: AutopilotConfig = {
-  aiResponses: "automatic",
+  aiResponses: "approval_required",
   qualification: "automatic",
   pipelineManagement: "automatic",
   leadScoring: "automatic",

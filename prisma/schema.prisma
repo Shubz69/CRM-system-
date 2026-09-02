@@ -1199,7 +1199,7 @@ model AgentConfiguration {
   version                 Int      @default(1)
   publishedVersion        Int?
   aiProvider              String   @default("anthropic")
-  model                   String   @default("claude-sonnet-4-20250514")
+  model                   String   @default("claude-sonnet-4-6")
   brandTone               String   @default("professional, helpful, concise")
   formality               String   @default("professional")
   responseLength          String   @default("medium")

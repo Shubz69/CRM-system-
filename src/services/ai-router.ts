@@ -2,10 +2,13 @@ import { prisma } from "@/lib/db";
 import {
   DEFAULT_TASK_TIERS,
   getAiProviderDefaults,
+  isDeterministicAnthropicModelError,
   resolveModelForTier,
+  resolveOperationalAnthropicModel,
   type AiModelTier,
   type AiTaskType,
 } from "@/lib/ai-models";
+import { CUSTOMER_AI_UNAVAILABLE, toCustomerAiError } from "@/lib/customer-ai-errors";
 import { getAiProvider } from "@/adapters/ai";
 import { recordAiExecution } from "@/services/ai-execution";
 import { logger } from "@/lib/logger";
@@ -81,10 +84,6 @@ export function selectModelForTask(input: {
   confidence?: number;
   modelOverride?: string;
 }): { tier: AiModelTier; model: string; reason: string } {
-  if (input.modelOverride) {
-    return { tier: "default", model: input.modelOverride, reason: "explicit_override" };
-  }
-
   let tier: AiModelTier = input.router.taskTiers[input.taskType] || DEFAULT_TASK_TIERS[input.taskType] || "default";
   let reason = `task:${input.taskType}`;
 
@@ -104,6 +103,22 @@ export function selectModelForTask(input: {
   ) {
     tier = "advanced";
     reason = "high_value_lead";
+  }
+
+  // Platform router / env defaults are authoritative. Stale AgentConfiguration.model
+  // overrides (including retired dated IDs) are remapped — never sent to Anthropic as-is.
+  if (input.modelOverride) {
+    const remapped = resolveOperationalAnthropicModel(input.modelOverride, tier);
+    const canonical = resolveModelForTier(tier);
+    if (remapped !== input.modelOverride.trim()) {
+      return {
+        tier,
+        model: remapped || canonical,
+        reason: `retired_override_remapped:${reason}`,
+      };
+    }
+    // Allow non-retired explicit override only when it resolves operationally
+    return { tier, model: remapped, reason: `explicit_override:${reason}` };
   }
 
   return { tier, model: resolveModelForTier(tier), reason };
@@ -291,7 +306,22 @@ export async function routeAndAnalyse(input: {
       latencyMs,
       success: false,
       error: message,
+      metadata: {
+        deterministicModelError: isDeterministicAnthropicModelError(message),
+        customerSafe: CUSTOMER_AI_UNAVAILABLE,
+      },
     });
+    // Deterministic model failures: hand off safely — do not throw (avoids webhook retry storms)
+    if (isDeterministicAnthropicModelError(message)) {
+      return {
+        result: { ok: false as const, reason: toCustomerAiError(message) },
+        provider: provider.name,
+        model: selection.model,
+        tier: selection.tier,
+        taskType,
+        latencyMs,
+      };
+    }
     throw error;
   }
 }

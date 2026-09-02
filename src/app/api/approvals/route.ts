@@ -95,6 +95,7 @@ const decideSchema = z.union([
     id: z.string().min(1),
     decision: z.enum(["APPROVED", "REJECTED"]),
     note: z.string().max(2000).optional(),
+    editedContent: z.string().max(8000).optional(),
   }),
 ]);
 
@@ -203,6 +204,7 @@ export async function POST(req: NextRequest) {
       decision: body.decision,
       decidedByUserId: session.userId,
       note: body.note,
+      editedContent: "editedContent" in body ? body.editedContent : undefined,
     });
     return Response.json(result);
   } catch (error) {

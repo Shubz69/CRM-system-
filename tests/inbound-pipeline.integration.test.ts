@@ -82,8 +82,18 @@ describe.skipIf(!hasDatabase)("Inbound pipeline integration", () => {
     expect(first.contactId).toBeTruthy();
     expect(first.conversationId).toBeTruthy();
     expect(first.leadId).toBeTruthy();
-    expect(first.aiReplySent).toBe(true);
-    expect(mockOutboundLog.length).toBeGreaterThan(0);
+    // Beta policy: AI drafts require human Approve & Send — no provider send.
+    expect(first.aiReplySent).toBe(false);
+    expect(mockOutboundLog.length).toBe(0);
+    const pendingApproval = await prisma.approvalRequest.findFirst({
+      where: {
+        organisationId,
+        kind: "ai_outbound_message",
+        status: "PENDING",
+      },
+    });
+    expect(pendingApproval).toBeTruthy();
+    expect(String((pendingApproval?.payload as { originalDraft?: string })?.originalDraft || "")).toBeTruthy();
 
     const lead = await prisma.lead.findUnique({ where: { id: first.leadId! } });
     expect(lead?.score).toBeGreaterThan(0);

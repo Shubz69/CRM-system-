@@ -76,6 +76,7 @@ import {
 describe("messaging revenue engine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.AI_AUTO_SOCIAL_SEND = "true";
     mocks.isContactSuppressed.mockResolvedValue(false);
   });
 

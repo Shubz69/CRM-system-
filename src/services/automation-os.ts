@@ -3,7 +3,7 @@
  * Deterministic compile (no invented capabilities). Outbound stays approval-gated.
  */
 
-import { ApprovalRequestStatus, Prisma } from "@prisma/client";
+import { ApprovalRequestStatus, FollowUpStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ensureBuiltinToolsRegistered, evaluateToolPolicy } from "@/kernel";
 
@@ -218,7 +218,11 @@ export async function createApprovalRequest(input: {
   payload: Record<string, unknown>;
 }): Promise<string> {
   ensureBuiltinToolsRegistered();
-  if (input.kind === "outbound_message" || input.kind === "publish") {
+  if (
+    input.kind === "outbound_message" ||
+    input.kind === "ai_outbound_message" ||
+    input.kind === "publish"
+  ) {
     const tool = input.kind === "publish" ? "social.publish" : "messaging.send";
     const policy = evaluateToolPolicy(tool, { organisationId: input.organisationId });
     if (policy.effect === "deny") {
@@ -240,12 +244,56 @@ export async function createApprovalRequest(input: {
   return row.id;
 }
 
+export type AiOutboundApprovalPayload = {
+  originalDraft: string;
+  finalContent?: string;
+  conversationId: string;
+  contactId: string;
+  contactExternalId: string;
+  provider?: string;
+  channel?: string;
+  threadId?: string | null;
+  source: "AI" | "FOLLOW_UP" | "AUTOMATION" | "MISSION" | "REACTIVATION";
+  holder: string;
+  idempotencyKey: string;
+  agentVersion?: string;
+  inboundMessageId?: string;
+  followUpId?: string;
+  leadId?: string;
+  edited?: boolean;
+  approvedByUserId?: string | null;
+  approvedAt?: string;
+  outboundDispatchId?: string;
+};
+
+/** Queue an AI/automated social outbound for human Edit | Reject | Approve & Send. */
+export async function createAiOutboundApprovalRequest(input: {
+  organisationId: string;
+  title: string;
+  summary?: string;
+  payload: AiOutboundApprovalPayload;
+}): Promise<string> {
+  return createApprovalRequest({
+    organisationId: input.organisationId,
+    kind: "ai_outbound_message",
+    title: input.title,
+    summary: input.summary ?? input.payload.originalDraft.slice(0, 280),
+    payload: {
+      ...input.payload,
+      finalContent: input.payload.finalContent ?? input.payload.originalDraft,
+      actionDescription: input.payload.originalDraft,
+    },
+  });
+}
+
 export async function decideApprovalRequest(input: {
   organisationId: string;
   approvalId: string;
   decision: "APPROVED" | "REJECTED";
   decidedByUserId?: string | null;
   note?: string | null;
+  /** Optional human edit applied before Approve & Send. */
+  editedContent?: string | null;
 }): Promise<{ status: ApprovalRequestStatus; payload: unknown; actionsRun: number }> {
   const existing = await prisma.approvalRequest.findFirst({
     where: { id: input.approvalId, organisationId: input.organisationId },
@@ -268,9 +316,11 @@ export async function decideApprovalRequest(input: {
       leadId?: string;
       triggerType: string;
       payload?: Record<string, unknown>;
+      approvalRequestId?: string;
+      editedContent?: string;
     };
     actions?: Array<{ type: string; [key: string]: unknown }>;
-  };
+  } & Partial<AiOutboundApprovalPayload>;
 
   if (
     status === ApprovalRequestStatus.APPROVED &&
@@ -284,6 +334,37 @@ export async function decideApprovalRequest(input: {
     }
   }
 
+  const editedTrimmed =
+    typeof input.editedContent === "string" ? input.editedContent.trim() : "";
+  let auditPayload: Prisma.InputJsonValue = existing.payload as Prisma.InputJsonValue;
+
+  if (existing.kind === "ai_outbound_message" && status === ApprovalRequestStatus.APPROVED) {
+    const originalDraft = String(payload.originalDraft || "");
+    const finalContent =
+      editedTrimmed ||
+      String(payload.finalContent || payload.originalDraft || "").trim();
+    if (!finalContent) {
+      throw new Error("Cannot approve empty outbound message");
+    }
+    auditPayload = {
+      ...(payload as Record<string, unknown>),
+      originalDraft,
+      finalContent,
+      edited: finalContent !== originalDraft,
+      approvedByUserId: input.decidedByUserId ?? null,
+      approvedAt: new Date().toISOString(),
+      actionDescription: finalContent,
+    } as Prisma.InputJsonValue;
+  } else if (editedTrimmed && status === ApprovalRequestStatus.APPROVED) {
+    auditPayload = {
+      ...(payload as Record<string, unknown>),
+      finalContent: editedTrimmed,
+      edited: true,
+      approvedByUserId: input.decidedByUserId ?? null,
+      approvedAt: new Date().toISOString(),
+    } as Prisma.InputJsonValue;
+  }
+
   await prisma.approvalRequest.update({
     where: { id: existing.id },
     data: {
@@ -291,21 +372,89 @@ export async function decideApprovalRequest(input: {
       decidedByUserId: input.decidedByUserId ?? null,
       decidedAt: new Date(),
       decisionNote: input.note ?? null,
+      payload: auditPayload,
     },
   });
 
   let actionsRun = 0;
-  if (
+  if (status === ApprovalRequestStatus.APPROVED && existing.kind === "ai_outbound_message") {
+    const p = auditPayload as unknown as AiOutboundApprovalPayload;
+    const { dispatchOutboundMessage } = await import("@/services/messaging/outbound");
+    const send = await dispatchOutboundMessage({
+      organisationId: input.organisationId,
+      conversationId: p.conversationId,
+      contactId: p.contactId,
+      contactExternalId: p.contactExternalId,
+      content: p.finalContent || p.originalDraft,
+      source: p.source,
+      idempotencyKey: p.idempotencyKey,
+      holder: p.holder,
+      provider: p.provider,
+      channel: p.channel ?? p.provider,
+      threadId: p.threadId ?? undefined,
+      agentVersion: p.agentVersion,
+      actorId: input.decidedByUserId ?? undefined,
+      metadata: {
+        approvalRequestId: existing.id,
+        originalDraft: p.originalDraft,
+        finalContent: p.finalContent || p.originalDraft,
+        approvedByUserId: input.decidedByUserId ?? null,
+        provider: p.provider,
+        conversationId: p.conversationId,
+        followUpId: p.followUpId,
+        inboundMessageId: p.inboundMessageId,
+      },
+    });
+    if (!send.ok) {
+      throw new Error(
+        typeof send.code === "string"
+          ? `Approve & Send failed: ${send.code}`
+          : "Approve & Send failed",
+      );
+    }
+    actionsRun = 1;
+    await prisma.approvalRequest.update({
+      where: { id: existing.id },
+      data: {
+        payload: {
+          ...(p as Record<string, unknown>),
+          outboundDispatchId: send.dispatch?.id ?? null,
+          outboundMessageId: send.dispatch?.messageId ?? null,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    if (p.followUpId) {
+      await prisma.followUp.updateMany({
+        where: {
+          id: p.followUpId,
+          organisationId: input.organisationId,
+        },
+        data: {
+          status: FollowUpStatus.SENT,
+          sentAt: new Date(),
+          cancelReason: null,
+        },
+      });
+    }
+  } else if (
     status === ApprovalRequestStatus.APPROVED &&
     payload?.context &&
     Array.isArray(payload.actions)
   ) {
     const { executeAction } = await import("@/services/automations");
     for (const action of payload.actions) {
-      await executeAction(action as never, payload.context);
+      const actionWithEdit =
+        editedTrimmed && (action.type === "send_message" || action.type === "send_booking_link")
+          ? { ...action, message: editedTrimmed }
+          : action;
+      await executeAction(actionWithEdit as never, {
+        ...payload.context,
+        approvalRequestId: existing.id,
+        editedContent: editedTrimmed || undefined,
+      });
       actionsRun += 1;
     }
   }
 
-  return { status, payload: existing.payload, actionsRun };
+  return { status, payload: auditPayload, actionsRun };
 }

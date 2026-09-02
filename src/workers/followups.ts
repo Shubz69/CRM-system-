@@ -6,6 +6,8 @@ import { writeAuditLog } from "@/services/audit";
 import { recordFailedJob } from "@/services/failed-jobs";
 import { assertContactable } from "@/services/messaging/contactability";
 import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+import { createAiOutboundApprovalRequest } from "@/services/automation-os";
+import { isAiAutoSocialSendEnabled } from "@/lib/ai-auto-social-send";
 import { isContactSuppressed } from "@/services/messaging/suppression";
 
 // Re-export enqueue from jobs layer (no-op — Postgres sweep is authoritative).
@@ -107,6 +109,42 @@ export async function processDueFollowUps(): Promise<number> {
     const body =
       followUp.messageBody ||
       "Just checking in — happy to answer any questions or share a booking link when you are ready.";
+
+    if (!isAiAutoSocialSendEnabled()) {
+      await createAiOutboundApprovalRequest({
+        organisationId: followUp.organisationId,
+        title: "Approve AI follow-up message",
+        summary: body.slice(0, 280),
+        payload: {
+          originalDraft: body,
+          finalContent: body,
+          conversationId: followUp.conversationId!,
+          contactId: followUp.contactId,
+          contactExternalId: externalId,
+          source: "FOLLOW_UP",
+          holder: `followup:${followUp.id}`,
+          idempotencyKey: `followup:${followUp.id}`,
+          threadId: followUp.conversation.externalThreadId ?? undefined,
+          followUpId: followUp.id,
+          leadId: followUp.leadId ?? undefined,
+        },
+      });
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: {
+          status: FollowUpStatus.CANCELLED,
+          cancelReason: "Awaiting human approval before send",
+        },
+      });
+      await writeAuditLog({
+        organisationId: followUp.organisationId,
+        action: "followup.outbound_approval_required",
+        entityType: "FollowUp",
+        entityId: followUp.id,
+        metadata: { conversationId: followUp.conversationId },
+      });
+      continue;
+    }
 
     const sendResult = await prepareAndSendOutbound({
       organisationId: followUp.organisationId,

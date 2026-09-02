@@ -30,10 +30,58 @@ export type AiTaskType =
   | "sentiment";
 
 const DEFAULT_MODELS: Record<AiModelTier, string> = {
-  default: "claude-sonnet-4-5-20250929",
+  // Canonical Anthropic defaults — override via ANTHROPIC_*_MODEL env / platform AI router.
+  default: "claude-sonnet-4-6",
   economy: "claude-haiku-4-5-20251001",
   advanced: "claude-opus-4-5",
 };
+
+/**
+ * Retired / legacy Anthropic model IDs that must never be sent to the API.
+ * Mapped to the operational tier so call sites keep using central resolution.
+ */
+export const RETIRED_ANTHROPIC_MODELS: Record<string, AiModelTier> = {
+  "claude-sonnet-4-20250514": "default",
+  "claude-sonnet-4-5-20250929": "default",
+  "claude-opus-4-20250514": "advanced",
+  "claude-3-5-sonnet-latest": "default",
+  "claude-3-5-sonnet-20241022": "default",
+  "claude-3-5-haiku-latest": "economy",
+  "claude-3-opus-20240229": "advanced",
+};
+
+export function isRetiredAnthropicModel(model?: string | null): boolean {
+  if (!model) return false;
+  return Boolean(RETIRED_ANTHROPIC_MODELS[model.trim()]);
+}
+
+/**
+ * Resolve an operational Anthropic model ID.
+ * - Env / platform defaults win for tiers
+ * - Retired dated IDs remap to the current tier default (never sent to Anthropic)
+ * - Does not invent a different provider
+ */
+export function resolveOperationalAnthropicModel(
+  requested?: string | null,
+  fallbackTier: AiModelTier = "default",
+): string {
+  const models = getAiModels();
+  const trimmed = requested?.trim();
+  if (!trimmed) return models[fallbackTier] || models.default;
+
+  const retiredTier = RETIRED_ANTHROPIC_MODELS[trimmed];
+  if (retiredTier) return models[retiredTier] || models.default;
+
+  // Any other dated claude-* snapshot that isn't the active configured default → remap
+  if (/^claude-/i.test(trimmed) && /-\d{8}$/.test(trimmed)) {
+    const active = new Set(Object.values(models));
+    if (!active.has(trimmed)) {
+      return models[fallbackTier] || models.default;
+    }
+  }
+
+  return trimmed;
+}
 
 /** Formal → legacy mapping. Every provider must implement all three formal tiers. */
 export const FORMAL_TO_LEGACY_TIER: Record<FormalAiTier, AiModelTier> = {
@@ -96,9 +144,20 @@ export function getAiProviderDefaults() {
 export function resolveModelForTier(tier: AiModelTier | FormalAiTier): string {
   const models = getAiModels();
   if (tier === "cheap" || tier === "balanced" || tier === "heavy") {
-    return models[tier] || models.balanced;
+    return resolveOperationalAnthropicModel(models[tier] || models.balanced, "default");
   }
-  return models[tier] || models.default;
+  return resolveOperationalAnthropicModel(models[tier] || models.default, tier);
+}
+
+/** True when an Anthropic HTTP error is a deterministic model/config failure (do not retry). */
+export function isDeterministicAnthropicModelError(message: string): boolean {
+  return (
+    /\(404\)/.test(message) ||
+    /model[_ ]?not[_ ]?found/i.test(message) ||
+    /not_found_error/i.test(message) ||
+    /invalid[_ ]?model/i.test(message) ||
+    /\(400\).*(model|deprecated|retired)/i.test(message)
+  );
 }
 
 export function toLegacyTier(tier: FormalAiTier | AiModelTier): AiModelTier {

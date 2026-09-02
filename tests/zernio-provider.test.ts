@@ -280,6 +280,7 @@ describe("Zernio webhook route idempotency", () => {
     prismaMocks.webhookEvent.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
       id: "we_1",
       idempotencyKey: "evt_dup_1",
+      status: "PROCESSED",
     });
     prismaMocks.zernioProfile.findUnique.mockResolvedValue({
       organisationId: "org_1",

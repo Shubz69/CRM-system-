@@ -86,6 +86,8 @@ function mockLeaseOk() {
 describe("outbound dispatch hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Existing hardening cases exercise post-approval dispatch paths.
+    process.env.AI_AUTO_SOCIAL_SEND = "true";
     mockContactableOk();
     mockLeaseOk();
     mocks.resolveCredential.mockResolvedValue({

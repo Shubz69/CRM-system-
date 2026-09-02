@@ -12,6 +12,7 @@ import {
   isOutboundAction,
 } from "@/services/automation-os";
 import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+import { isAiAutoSocialSendEnabled } from "@/lib/ai-auto-social-send";
 
 function hashAutomationBody(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
@@ -24,6 +25,9 @@ export type AutomationContext = {
   leadId?: string;
   triggerType: string;
   payload?: Record<string, unknown>;
+  /** Set when executing gated actions after human approval. */
+  approvalRequestId?: string;
+  editedContent?: string;
 };
 
 type AutomationAction = {
@@ -84,7 +88,8 @@ export async function runAutomations(context: AutomationContext): Promise<number
         }
 
         let approvalRequestId: string | null = null;
-        if (gated.length && rule.requiresApproval !== false) {
+        const forceApprovalGate = !isAiAutoSocialSendEnabled();
+        if (gated.length && (forceApprovalGate || rule.requiresApproval !== false)) {
           approvalRequestId = await createApprovalRequest({
             organisationId: context.organisationId,
             kind: "outbound_message",
@@ -96,7 +101,7 @@ export async function runAutomations(context: AutomationContext): Promise<number
               actions: gated,
             },
           });
-        } else if (gated.length) {
+        } else if (gated.length && isAiAutoSocialSendEnabled()) {
           for (const action of gated) {
             await executeAction(action, context);
           }
@@ -314,6 +319,9 @@ export async function executeAction(
         if (!bookingUrl) break;
       }
       const text =
+        (typeof context.editedContent === "string" && context.editedContent.trim()
+          ? context.editedContent.trim()
+          : null) ||
         action.message ||
         (action.type === "send_booking_link"
           ? `You can book a call here: ${bookingUrl}`
@@ -330,6 +338,9 @@ export async function executeAction(
         holder: `automation:${context.triggerType}:${conversation.id}`,
         idempotencyKey: `automation:${context.triggerType}:${conversation.id}:${action.type}:${hashAutomationBody(text)}`,
         threadId: conversation.externalThreadId ?? undefined,
+        metadata: context.approvalRequestId
+          ? { approvalRequestId: context.approvalRequestId }
+          : undefined,
       });
       break;
     }

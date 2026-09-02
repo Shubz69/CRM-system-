@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebhookProcessingStatus } from "@prisma/client";
 import { resetEnvCache } from "@/lib/env";
 import { MESSAGING_PROVIDER } from "@/services/messaging/providers";
 import { assertContactable } from "@/services/messaging/contactability";
@@ -183,7 +184,10 @@ describe("Zernio inbound normalize + webhook → inbox", () => {
 
   it("duplicate webhook delivery is idempotent", async () => {
     prismaMocks.zernioProfile.findFirst.mockResolvedValue({ organisationId: "org_1" });
-    prismaMocks.webhookEvent.findUnique.mockResolvedValue({ id: "we_existing" });
+    prismaMocks.webhookEvent.findUnique.mockResolvedValue({
+      id: "we_existing",
+      status: WebhookProcessingStatus.PROCESSED,
+    });
     const body = JSON.stringify({
       id: "evt_dup",
       event: "account.connected",

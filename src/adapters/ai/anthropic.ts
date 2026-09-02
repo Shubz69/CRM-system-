@@ -1,5 +1,10 @@
 import type { AiCompletionRequest, AiProvider } from "@/adapters/ai/types";
-import { getAiProviderDefaults, resolveModelForTier } from "@/lib/ai-models";
+import {
+  getAiProviderDefaults,
+  isDeterministicAnthropicModelError,
+  resolveModelForTier,
+  resolveOperationalAnthropicModel,
+} from "@/lib/ai-models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { CLAUDE_DECISION_JSON_INSTRUCTIONS } from "@/schemas/ai";
@@ -22,7 +27,10 @@ export class AnthropicProvider implements AiProvider {
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
 
     const defaults = getAiProviderDefaults();
-    const model = request.model || resolveModelForTier("default");
+    const model = resolveOperationalAnthropicModel(
+      request.model || resolveModelForTier("default"),
+      "default",
+    );
     const system = request.messages
       .filter((m) => m.role === "system")
       .map((m) => m.content)
@@ -57,8 +65,9 @@ export class AnthropicProvider implements AiProvider {
 
         if (!response.ok) {
           const body = await response.text();
-          // Never log the API key
-          throw new Error(`Anthropic request failed (${response.status}): ${body.slice(0, 300)}`);
+          throw new Error(
+            `Anthropic request failed (${response.status}): ${body.slice(0, 300)}`,
+          );
         }
 
         const json = (await response.json()) as {
@@ -76,8 +85,18 @@ export class AnthropicProvider implements AiProvider {
         return text;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error("Anthropic error");
+        if (isDeterministicAnthropicModelError(lastError.message)) {
+          logger.error("Anthropic deterministic model error — no retry", {
+            model,
+            message: lastError.message.slice(0, 200),
+          });
+          throw lastError;
+        }
         if (attempt < retries) {
-          logger.warn("Anthropic request retry", { attempt: attempt + 1, message: lastError.message });
+          logger.warn("Anthropic request retry", {
+            attempt: attempt + 1,
+            message: lastError.message,
+          });
           continue;
         }
       } finally {

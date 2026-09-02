@@ -12,6 +12,7 @@ import { getBookingProvider } from "@/adapters/booking";
 import { hashForIdempotency } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { toCustomerAiError } from "@/lib/customer-ai-errors";
 import { evaluateMessagingWindow, openMessagingWindows } from "@/lib/messaging-window";
 import type { InboundMessageInput } from "@/schemas/webhook";
 import { writeAuditLog } from "@/services/audit";
@@ -41,6 +42,8 @@ import { isIntelligenceFlagEnabled } from "@/services/intelligence-flags";
 import { decideNextBestAction } from "@/services/messaging/nba";
 import { recordObjection } from "@/services/messaging/objections";
 import { prepareAndSendOutbound } from "@/services/messaging/outbound";
+import { createAiOutboundApprovalRequest } from "@/services/automation-os";
+import { isAiAutoSocialSendEnabled } from "@/lib/ai-auto-social-send";
 import {
   classifyInboundL0,
   persistUnderstanding,
@@ -677,13 +680,14 @@ export async function processInboundMessage(
       payload: { text: input.message.text },
     });
 
-    const aiEnabled =
+    const aiMayDraft =
       autopilotActive &&
-      capabilityAllowsAuto(autopilotConfig, "aiResponses") &&
+      (capabilityAllowsAuto(autopilotConfig, "aiResponses") ||
+        capabilityRequiresApproval(autopilotConfig, "aiResponses")) &&
       !result.conversation.aiPaused &&
       result.conversation.handlingMode === HandlingMode.AI;
 
-    if (!aiEnabled) {
+    if (!aiMayDraft) {
       await prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
         data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },
@@ -727,7 +731,9 @@ export async function processInboundMessage(
       organisationId: input.organisationId,
       taskType: "conversation",
       agentProvider: agentConfig?.aiProvider || "anthropic",
-      modelOverride: agentConfig?.model?.startsWith("claude") ? agentConfig.model : null,
+      // Platform AI router / env defaults are authoritative — do not pass stale
+      // AgentConfiguration.model (may still hold retired dated Anthropic IDs).
+      modelOverride: null,
       leadScore: result.lead.score ?? 0,
       systemPrompt,
       conversationTranscript: transcript,
@@ -745,7 +751,8 @@ export async function processInboundMessage(
           needsHumanReview: true,
           handlingMode: HandlingMode.HUMAN,
           aiPaused: true,
-          handoffReason: analysisResult.reason,
+          handoffReason: toCustomerAiError(analysisResult.reason),
+
         },
       });
       await prisma.knowledgeRecommendation.create({
@@ -753,7 +760,7 @@ export async function processInboundMessage(
           organisationId: input.organisationId,
           conversationId: result.conversation.id,
           question: input.message.text.slice(0, 280),
-          reason: `AI validation failed: ${analysisResult.reason}`,
+          reason: `AI validation failed: ${toCustomerAiError(analysisResult.reason)}`,
           status: "NEW",
         },
       });
@@ -1151,6 +1158,47 @@ export async function processInboundMessage(
         }
       }
 
+      const mustRequireApproval =
+        !isAiAutoSocialSendEnabled() ||
+        capabilityRequiresApproval(autopilotConfig, "aiResponses");
+
+      if (mustRequireApproval) {
+        await createAiOutboundApprovalRequest({
+          organisationId: input.organisationId,
+          title: "Approve AI Instagram reply",
+          summary: reply.slice(0, 280),
+          payload: {
+            originalDraft: reply,
+            finalContent: reply,
+            conversationId: result.conversation.id,
+            contactId: result.contact.id,
+            contactExternalId: input.contact.externalId,
+            provider: messagingProvider,
+            channel: messagingProvider,
+            threadId: result.conversation.externalThreadId ?? undefined,
+            source: "AI",
+            holder: `ai:${result.conversation.id}`,
+            idempotencyKey: `ai-reply:${result.inboundMessage.id}`,
+            agentVersion: routed.model,
+            inboundMessageId: result.inboundMessage.id,
+            leadId: result.lead.id,
+          },
+        });
+        await prisma.conversation.update({
+          where: { id: result.conversation.id },
+          data: { needsHumanReview: true },
+        });
+        await writeAuditLog({
+          organisationId: input.organisationId,
+          action: "ai.outbound_approval_required",
+          entityType: "Conversation",
+          entityId: result.conversation.id,
+          metadata: {
+            inboundMessageId: result.inboundMessage.id,
+            provider: messagingProvider,
+          },
+        });
+      } else {
       const sendResult = await prepareAndSendOutbound({
         organisationId: input.organisationId,
         conversationId: result.conversation.id,
@@ -1216,6 +1264,7 @@ export async function processInboundMessage(
             metadata: { conversationId: result.conversation.id },
           });
         }
+      }
       }
 
       const delays = Array.isArray(agentConfig?.followUpDelaysMinutes)

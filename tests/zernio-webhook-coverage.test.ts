@@ -377,7 +377,10 @@ describe("Zernio webhook coverage completion", () => {
   });
 
   it("duplicate events are idempotent", async () => {
-    prismaMocks.webhookEvent.findUnique.mockResolvedValue({ id: "we_existing" });
+    prismaMocks.webhookEvent.findUnique.mockResolvedValue({
+      id: "we_existing",
+      status: "PROCESSED",
+    });
     const res = await postWebhook({
       id: "evt_dup_cov",
       event: "comment.received",

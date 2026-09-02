@@ -48,6 +48,7 @@ async function markWebhook(
  * lifecycle / engagement / publish events → webhook-coverage handlers.
  */
 export async function POST(req: NextRequest) {
+  let eventIdForTerminal: string | null = null;
   try {
     const ip = req.headers.get("x-forwarded-for") || "unknown";
     if (!rateLimit(`zernio:${ip}`, 120, 60_000)) {
@@ -88,6 +89,7 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-zernio-event-id") ||
       req.headers.get("x-late-event-id") ||
       createHash("sha256").update(rawBody).digest("hex");
+    eventIdForTerminal = eventId;
 
     const eventType = String(payload.event || payload.type || "zernio.event");
     if (eventType === "webhook.test") {
@@ -128,20 +130,37 @@ export async function POST(req: NextRequest) {
         },
       },
     });
-    if (existing) {
+    if (
+      existing &&
+      (existing.status === WebhookProcessingStatus.PROCESSED ||
+        existing.status === WebhookProcessingStatus.DUPLICATE ||
+        existing.status === WebhookProcessingStatus.IGNORED)
+    ) {
       return Response.json({ ok: true, duplicate: true });
     }
 
-    await prisma.webhookEvent.create({
-      data: {
-        organisationId,
-        provider: "ZERNIO",
-        eventType,
-        idempotencyKey: eventId,
-        payload: payload as Prisma.InputJsonValue,
-        status: "RECEIVED",
-      },
-    });
+    if (!existing) {
+      await prisma.webhookEvent.create({
+        data: {
+          organisationId,
+          provider: "ZERNIO",
+          eventType,
+          idempotencyKey: eventId,
+          payload: payload as Prisma.InputJsonValue,
+          status: WebhookProcessingStatus.RECEIVED,
+        },
+      });
+    } else {
+      // RECEIVED / PROCESSING / FAILED — allow honest retry without leaving stuck RECEIVED
+      await prisma.webhookEvent.update({
+        where: { id: existing.id },
+        data: {
+          status: WebhookProcessingStatus.PROCESSING,
+          error: null,
+          payload: payload as Prisma.InputJsonValue,
+        },
+      });
+    }
 
     if (eventType === "message.received") {
       const normalized = normalizeZernioInboundMessage(payload);
@@ -154,49 +173,61 @@ export async function POST(req: NextRequest) {
       }
 
       const raw = (normalized.raw || {}) as Record<string, unknown>;
-      const result = await processInboundMessage(
-        {
-          organisationId,
-          channelExternalId: typeof raw.accountId === "string" ? raw.accountId : accountId || undefined,
-          idempotencyKey: normalized.externalMessageId || eventId,
-          contact: {
-            externalId: normalized.contactExternalId,
-            fullName: typeof raw.displayName === "string" ? raw.displayName : undefined,
-            instagramUsername: typeof raw.username === "string" ? raw.username : undefined,
-          },
-          message: {
-            text: normalized.text,
-            externalId: normalized.externalMessageId,
-            sentAt: normalized.sentAt,
-          },
-          threadId: normalized.threadId,
-          leadSource: "instagram_zernio",
-          metadata: {
-            zernio: {
-              conversationId: raw.zernioConversationId,
-              accountId: raw.accountId,
-              profileId: tenant.zernioProfileId,
-              provider: "ZERNIO",
-              network: "INSTAGRAM",
+      try {
+        const result = await processInboundMessage(
+          {
+            organisationId,
+            channelExternalId: typeof raw.accountId === "string" ? raw.accountId : accountId || undefined,
+            idempotencyKey: normalized.externalMessageId || eventId,
+            contact: {
+              externalId: normalized.contactExternalId,
+              fullName: typeof raw.displayName === "string" ? raw.displayName : undefined,
+              instagramUsername: typeof raw.username === "string" ? raw.username : undefined,
+            },
+            message: {
+              text: normalized.text,
+              externalId: normalized.externalMessageId,
+              sentAt: normalized.sentAt,
+            },
+            threadId: normalized.threadId,
+            leadSource: "instagram_zernio",
+            metadata: {
+              zernio: {
+                conversationId: raw.zernioConversationId,
+                accountId: raw.accountId,
+                profileId: tenant.zernioProfileId,
+                provider: "ZERNIO",
+                network: "INSTAGRAM",
+              },
             },
           },
-        },
-        { provider: MESSAGING_PROVIDER.ZERNIO, rawPayload: payload },
-      );
+          { provider: MESSAGING_PROVIDER.ZERNIO, rawPayload: payload },
+        );
 
-      await markWebhook(eventId, {
-        status: result.duplicate ? WebhookProcessingStatus.DUPLICATE : WebhookProcessingStatus.PROCESSED,
-      });
+        await markWebhook(eventId, {
+          status: result.duplicate
+            ? WebhookProcessingStatus.DUPLICATE
+            : WebhookProcessingStatus.PROCESSED,
+        });
 
-      return Response.json({
-        ok: true,
-        inbound: {
-          duplicate: result.duplicate,
-          contactId: result.contactId,
-          conversationId: result.conversationId,
-          messageId: result.messageId,
-        },
-      });
+        return Response.json({
+          ok: true,
+          inbound: {
+            duplicate: result.duplicate,
+            contactId: result.contactId,
+            conversationId: result.conversationId,
+            messageId: result.messageId,
+          },
+        });
+      } catch (inboundError) {
+        const message =
+          inboundError instanceof Error ? inboundError.message : "Inbound processing failed";
+        await markWebhook(eventId, {
+          status: WebhookProcessingStatus.FAILED,
+          error: message.slice(0, 1000),
+        });
+        throw inboundError;
+      }
     }
 
     if (eventType === "account.connected" || eventType === "account.disconnected") {
@@ -314,9 +345,14 @@ export async function POST(req: NextRequest) {
       eventType,
     });
   } catch (error) {
-    logger.error("Zernio webhook failed", {
-      message: error instanceof Error ? error.message : "unknown",
-    });
+    const message = error instanceof Error ? error.message : "unknown";
+    logger.error("Zernio webhook failed", { message });
+    if (eventIdForTerminal) {
+      await markWebhook(eventIdForTerminal, {
+        status: WebhookProcessingStatus.FAILED,
+        error: message.slice(0, 1000),
+      }).catch(() => undefined);
+    }
     return Response.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }

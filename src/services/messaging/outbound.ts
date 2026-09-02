@@ -222,6 +222,29 @@ export async function dispatchOutboundMessage(
   const actionType = sourceToActionType(source);
   const text = input.content;
 
+  // Gate #0 — AI / automated social outbound requires approved ApprovalRequest
+  // unless AI_AUTO_SOCIAL_SEND is explicitly enabled (platform/ops only; default off).
+  if (source !== "HUMAN") {
+    const { isAiAutoSocialSendEnabled } = await import("@/lib/ai-auto-social-send");
+    if (!isAiAutoSocialSendEnabled()) {
+      const approvalId = input.metadata?.approvalRequestId;
+      if (typeof approvalId !== "string" || !approvalId.trim()) {
+        return { ok: false as const, code: "APPROVAL_REQUIRED" as const };
+      }
+      const approval = await prisma.approvalRequest.findFirst({
+        where: {
+          id: approvalId,
+          organisationId: input.organisationId,
+          status: "APPROVED",
+        },
+        select: { id: true },
+      });
+      if (!approval) {
+        return { ok: false as const, code: "APPROVAL_REQUIRED" as const };
+      }
+    }
+  }
+
   const existing = await prisma.outboundDispatch.findUnique({
     where: {
       organisationId_idempotencyKey: {
@@ -630,6 +653,7 @@ export async function prepareAndSendOutbound(input: {
   agentVersion?: string;
   source?: OutboundSource;
   actorId?: string;
+  metadata?: Record<string, unknown>;
 }) {
   const source: OutboundSource =
     input.source ??
@@ -657,5 +681,6 @@ export async function prepareAndSendOutbound(input: {
     threadId: input.threadId,
     agentVersion: input.agentVersion,
     actorId: input.actorId,
+    metadata: input.metadata,
   });
 }

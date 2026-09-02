@@ -57,6 +57,7 @@ export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [publishingJobs, setPublishingJobs] = useState<PubJob[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
+  const [editDrafts, setEditDrafts] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const res = await fetch("/api/approvals");
@@ -65,6 +66,19 @@ export default function ApprovalsPage() {
     setApprovals(json.approvals ?? []);
     setPublishingJobs(json.publishingJobs ?? []);
     setMissions(json.missions ?? []);
+    const drafts: Record<string, string> = {};
+    for (const a of (json.approvals ?? []) as Approval[]) {
+      if (a.kind === "ai_outbound_message" || a.kind === "outbound_message") {
+        const original =
+          (typeof a.payload?.finalContent === "string" && a.payload.finalContent) ||
+          (typeof a.payload?.originalDraft === "string" && a.payload.originalDraft) ||
+          (typeof a.payload?.actionDescription === "string" && a.payload.actionDescription) ||
+          a.summary ||
+          "";
+        drafts[a.id] = original;
+      }
+    }
+    setEditDrafts((prev) => ({ ...drafts, ...prev }));
   }, []);
 
   useEffect(() => {
@@ -107,21 +121,40 @@ export default function ApprovalsPage() {
                   Rule: {a.automationRule.name} ({a.automationRule.triggerType})
                 </p>
               )}
+              {(a.kind === "ai_outbound_message" || a.kind === "outbound_message") && (
+                <label className="block space-y-1">
+                  <span className="text-xs text-[var(--muted)]">Edit message before send</span>
+                  <textarea
+                    className="w-full min-h-[96px] rounded-md border border-[var(--border)] bg-transparent p-2 text-sm"
+                    value={editDrafts[a.id] ?? ""}
+                    onChange={(e) =>
+                      setEditDrafts((prev) => ({ ...prev, [a.id]: e.target.value }))
+                    }
+                  />
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   className="btn btn-primary"
                   type="button"
                   onClick={async () => {
                     try {
+                      const isOutbound =
+                        a.kind === "ai_outbound_message" || a.kind === "outbound_message";
                       const result = await decide({
                         id: a.id,
                         decision: "APPROVED",
+                        ...(isOutbound
+                          ? { editedContent: editDrafts[a.id] ?? undefined }
+                          : {}),
                       });
                       toast.success(
                         result.message ||
                           (a.kind === "publish"
                             ? "Approved — queued, not externally confirmed"
-                            : "Approved"),
+                            : isOutbound
+                              ? "Approved & sent"
+                              : "Approved"),
                       );
                       await load();
                     } catch (e) {
@@ -129,7 +162,9 @@ export default function ApprovalsPage() {
                     }
                   }}
                 >
-                  Approve
+                  {a.kind === "ai_outbound_message" || a.kind === "outbound_message"
+                    ? "Approve & Send"
+                    : "Approve"}
                 </button>
                 <button
                   className="btn btn-secondary"
