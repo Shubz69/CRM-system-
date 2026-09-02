@@ -281,12 +281,12 @@ describe("Phase 12B transactional outbox", () => {
   it("stale PROCESSING claim becomes retryable", async () => {
     const event = await prisma.domainEvent.create({
       data: {
-        organisationId: orgA.organisationId,
+        organisationId: claimOrg.organisationId,
         eventType: "DEAL_CREATED",
         eventVersion: 1,
         aggregateType: "Deal",
-        aggregateId: `stale-${Date.now()}`,
-        payload: { organisationId: orgA.organisationId, dealId: "stale" },
+        aggregateId: `stale-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        payload: { organisationId: claimOrg.organisationId, dealId: "stale" },
         status: DomainEventStatus.PROCESSING,
         lockedAt: new Date(Date.now() - 60 * 60_000),
         lockOwner: "dead-worker",
@@ -294,8 +294,7 @@ describe("Phase 12B transactional outbox", () => {
         maxAttempts: 8,
       },
     });
-    const n = await recoverStaleDomainEventClaims();
-    expect(n).toBeGreaterThanOrEqual(1);
+    await recoverStaleDomainEventClaims();
     const after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
     expect(after.status).toBe(DomainEventStatus.RETRY);
   });

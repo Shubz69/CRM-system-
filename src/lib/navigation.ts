@@ -83,6 +83,7 @@ export const CRM_SUBNAV: NavItem[] = [
 
 export const GROWTH_SUBNAV: NavItem[] = [
   { href: "/growth", label: "Overview", icon: TrendingUp, match: "exact" },
+  { href: "/growth/prospecting", label: "Prospecting", icon: Users },
   { href: "/opportunities", label: "Opportunities", icon: Lightbulb },
   { href: "/research", label: "Research", icon: Search },
   { href: "/business-context", label: "Business Profile", icon: Building2 },

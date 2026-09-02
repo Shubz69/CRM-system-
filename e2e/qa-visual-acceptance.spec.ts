@@ -8,9 +8,13 @@ import path from "path";
 import fs from "fs";
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000";
-const EMAIL = process.env.E2E_EMAIL || "1230shobhit@gmail.com";
-const PASSWORD = process.env.E2E_PASSWORD || "AcceptQA-2026-ux!";
+const EMAIL = process.env.E2E_EMAIL || "";
+const PASSWORD = process.env.E2E_PASSWORD || "";
 const OUT = path.join(process.cwd(), "QA", "screenshots");
+
+if (!EMAIL || !PASSWORD) {
+  throw new Error("E2E_EMAIL and E2E_PASSWORD are required (no hardcoded QA credentials)");
+}
 
 const DESKTOP_PAGES: Array<{ name: string; path: string }> = [
   { name: "home", path: "/home" },

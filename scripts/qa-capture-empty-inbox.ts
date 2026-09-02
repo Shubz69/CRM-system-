@@ -9,8 +9,11 @@ import path from "path";
 
 const prisma = new PrismaClient();
 const BASE = process.env.APP_URL || "http://localhost:3000";
-const EMAIL = process.env.E2E_EMAIL || "1230shobhit@gmail.com";
-const PASSWORD = process.env.E2E_PASSWORD || "AcceptQA-2026-ux!";
+const EMAIL = process.env.E2E_EMAIL || "";
+const PASSWORD = process.env.E2E_PASSWORD || "";
+if (!EMAIL || !PASSWORD) {
+  throw new Error("E2E_EMAIL and E2E_PASSWORD are required (no hardcoded QA credentials)");
+}
 const OUT = path.join(process.cwd(), "QA", "final-product-acceptance");
 const MARKER = new Date("2099-01-01T00:00:00.000Z");
 

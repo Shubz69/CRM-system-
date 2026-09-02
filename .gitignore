@@ -39,6 +39,11 @@ yarn-error.log*
 /test-results/
 /playwright-report/
 
+# local hosted Playwright artifacts (may contain hostnames; never secrets — still keep local)
+QA/hosted-production-acceptance-report.json
+QA/**/trace.zip
+QA/**/*.webm
+
 # vercel
 .vercel
 

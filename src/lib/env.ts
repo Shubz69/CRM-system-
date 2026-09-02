@@ -146,6 +146,20 @@ const envSchema = z.object({
   TIKTOK_CLIENT_KEY: z.string().optional(),
   TIKTOK_CLIENT_SECRET: z.string().optional(),
   TIKTOK_REDIRECT_URI: z.string().optional(),
+  /** Ayrshare primary API key — SERVER ONLY. Never expose to browser. */
+  AYRSHARE_API_KEY: z.string().optional(),
+  AYRSHARE_DOMAIN: z.string().optional(),
+  AYRSHARE_PRIVATE_KEY: z.string().optional(),
+  AYRSHARE_WEBHOOK_SECRET: z.string().optional(),
+  /**
+   * LinkedIn restricted communication APIs — NOT user-settable product toggles.
+   * Require BOTH the capability flag AND ALLOW_LINKEDIN_RESTRICTED_APIS=1.
+   * Default: disabled (Version 1 Open/Copy workflow).
+   */
+  LINKEDIN_INVITATIONS_API_APPROVED: z.string().optional(),
+  LINKEDIN_CONNECTIONS_API_APPROVED: z.string().optional(),
+  LINKEDIN_MESSAGES_API_APPROVED: z.string().optional(),
+  ALLOW_LINKEDIN_RESTRICTED_APIS: z.string().optional(),
   BOOKING_PROVIDER: z.string().default("link"),
   BOOKING_WEBHOOK_SECRET: z.string().default("dev-booking-webhook-secret"),
   DEFAULT_BOOKING_URL: z.string().optional(),

@@ -143,6 +143,12 @@ export default function IntegrationsClient() {
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<ManyChatStatus | null>(null);
   const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
+  const [ayrshare, setAyrshare] = useState<{
+    configured?: boolean;
+    serverConfigured?: boolean;
+    status?: string;
+    connectedNetworks?: unknown;
+  } | null>(null);
   const [metaTestContactId, setMetaTestContactId] = useState("");
   const [metaTestConversationId, setMetaTestConversationId] = useState("");
   const [metaTestText, setMetaTestText] = useState("");
@@ -193,6 +199,15 @@ export default function IntegrationsClient() {
     setReadiness(json);
   }, []);
 
+  const loadAyrshare = useCallback(async () => {
+    const res = await fetch("/api/integrations/ayrshare");
+    if (!res.ok) {
+      setAyrshare(null);
+      return;
+    }
+    setAyrshare(await res.json());
+  }, []);
+
   const loadManyChat = useCallback(async () => {
     const res = await fetch("/api/integrations/manychat");
     const json = await res.json();
@@ -228,6 +243,7 @@ export default function IntegrationsClient() {
       await Promise.all([
         loadManyChat(),
         loadMetaInstagram(),
+        loadAyrshare(),
         loadReadiness(),
         loadSocial(),
         loadMesh(),
@@ -242,7 +258,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadManyChat, loadMetaInstagram, loadReadiness, loadSocial, loadMesh]);
+  }, [loadManyChat, loadMetaInstagram, loadAyrshare, loadReadiness, loadSocial, loadMesh]);
 
   useEffect(() => {
     void load();
@@ -562,6 +578,50 @@ export default function IntegrationsClient() {
                 Set up with ManyChat
               </button>
             </div>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] p-4">
+            <p className="font-medium">Social accounts (Ayrshare)</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Recommended multi-network connect for publish / schedule / analytics
+            </p>
+            <p className="mt-3 text-sm">
+              {ayrshare?.status === "CONNECTED" ? (
+                <span className="badge badge-success">Connected</span>
+              ) : ayrshare?.serverConfigured || ayrshare?.configured ? (
+                <span className="badge">Configured</span>
+              ) : (
+                <span className="badge badge-warn">Not configured</span>
+              )}
+            </p>
+            <button
+              type="button"
+              className="btn btn-secondary mt-3 text-xs"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const res = await fetch("/api/integrations/ayrshare", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "create_social_link" }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json.error || "Could not start social link");
+                  if (json.url) {
+                    window.location.href = json.url;
+                    return;
+                  }
+                  toast.success("Social link ready");
+                  await loadAyrshare();
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Ayrshare link failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Connect social accounts
+            </button>
           </div>
           <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">AI provider</p>

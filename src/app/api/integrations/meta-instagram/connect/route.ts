@@ -3,7 +3,6 @@ import {
   MetaInstagramNotConfiguredError,
   assertMetaInstagramMessagingConfigured,
   getEnv,
-  metaInstagramNotConfiguredResponse,
 } from "@/lib/env";
 import { jsonError, requirePermission } from "@/lib/session";
 import {
@@ -32,13 +31,16 @@ export async function GET() {
     assertMetaInstagramMessagingConfigured();
   } catch (error) {
     if (error instanceof MetaInstagramNotConfiguredError) {
-      return metaInstagramNotConfiguredResponse(503);
+      // Browser-friendly: Integrations UI shows customer copy; APIs can still call assert directly.
+      return NextResponse.redirect(
+        `${appUrl()}/integrations?meta_instagram=not_configured`,
+      );
     }
     throw error;
   }
 
   if (!isMetaInstagramAppConfigured()) {
-    return metaInstagramNotConfiguredResponse(503);
+    return NextResponse.redirect(`${appUrl()}/integrations?meta_instagram=not_configured`);
   }
 
   try {

@@ -37,8 +37,7 @@ export default function LoginClient() {
   return (
     <AuthFrame title="Sign in">
       <p className="mt-2 text-sm text-[var(--muted)]">
-        Use your workspace account. Platform admins can be bootstrapped via{" "}
-        <code>/api/admin/bootstrap</code> when needed.
+        Sign in with the email and password for your Agent Desk workspace.
       </p>
       <form onSubmit={onSubmit}>
         <label className="mt-6 block text-sm font-medium">

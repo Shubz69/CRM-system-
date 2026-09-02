@@ -24,7 +24,12 @@ export class SmtpEmailAdapter implements EmailAdapter {
   async send(input: EmailDeliveryInput): Promise<EmailDeliveryResult> {
     const env = getEnv();
     if (!env.EMAIL_SMTP_URL) {
-      return new MockEmailAdapter().send(input);
+      // Never pretend delivery succeeded when SMTP is absent.
+      return {
+        ok: false,
+        provider: this.name,
+        error: "EMAIL_SMTP_URL is not configured",
+      };
     }
 
     let parsed: URL;
@@ -61,7 +66,14 @@ export class SmtpEmailAdapter implements EmailAdapter {
       auth: user ? { user, pass: pass || "" } : undefined,
     });
 
-    const from = env.EMAIL_FROM || user || "noreply@localhost";
+    const from = (env.EMAIL_FROM || "").trim() || (user ? String(user) : "");
+    if (!from || /localhost/i.test(from)) {
+      return {
+        ok: false,
+        provider: this.name,
+        error: "EMAIL_FROM must be set to a real production address before sending mail",
+      };
+    }
     try {
       const info = await transporter.sendMail({
         from,

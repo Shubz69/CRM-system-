@@ -142,10 +142,9 @@ describe("Optional Meta Instagram must not take down global runtime", () => {
     }
 
     const res = await metaInstagramConnectGet();
-    expect(res.status).toBe(503);
-    const json = await res.json();
-    expect(json.code).toBe("META_NOT_CONFIGURED");
-    expect(json.health).toBe("NOT_CONFIGURED");
+    expect([302, 303, 307]).toContain(res.status);
+    const location = res.headers.get("location") || "";
+    expect(location).toMatch(/meta_instagram=not_configured/);
   });
 
   it("Meta webhook verification fails safely if Meta verify configuration is missing", async () => {
@@ -199,5 +198,79 @@ describe("Optional Meta Instagram must not take down global runtime", () => {
       code: "META_NOT_CONFIGURED",
       health: "NOT_CONFIGURED",
     });
+  });
+
+  it("ManyChat bad secret → rejected for ManyChat reason (not Meta)", async () => {
+    setMandatoryGlobalProductionSecrets();
+    const req = new Request("http://localhost/api/webhooks/manychat", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-manychat-secret": "wrong-manychat-secret",
+        "x-webhook-timestamp": String(Math.floor(Date.now() / 1000)),
+      },
+      body: JSON.stringify({
+        organisationId: "org-does-not-matter",
+        subscriber_id: "sub-1",
+        text: "hello",
+      }),
+    });
+    const res = await manyChatWebhookPost(req as never);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(JSON.stringify(body).toLowerCase()).toMatch(/secret|webhook|channel/);
+    expect(JSON.stringify(body)).not.toMatch(/META_NOT_CONFIGURED|META_INSTAGRAM/);
+  });
+
+  it("Booking bad secret → rejected for booking reason (not Meta)", async () => {
+    setMandatoryGlobalProductionSecrets();
+    const req = new Request("http://localhost/api/webhooks/booking", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-booking-secret": "wrong-booking-secret",
+        "x-webhook-timestamp": String(Math.floor(Date.now() / 1000)),
+      },
+      body: JSON.stringify({ event: "invitee.created" }),
+    });
+    const res = await handleBookingWebhook(req as never);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(JSON.stringify(body).toLowerCase()).toMatch(/invalid webhook secret/);
+    expect(JSON.stringify(body)).not.toMatch(/META_NOT_CONFIGURED|META_INSTAGRAM|MANYCHAT/);
+  });
+
+  it("Meta bad/missing signature → rejected for Meta reason when configured", async () => {
+    setMandatoryGlobalProductionSecrets();
+    process.env.INSTAGRAM_APP_ID = "ig-app-id";
+    process.env.INSTAGRAM_APP_SECRET = "ig-app-secret";
+    process.env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN = "rotated-meta-verify-token";
+    process.env.META_INSTAGRAM_MESSAGING_REDIRECT_URI =
+      "https://example.com/api/integrations/meta-instagram/callback";
+    process.env.APP_URL = "https://example.com";
+    resetEnvCache();
+
+    const res = await metaInstagramWebhookPost(
+      new Request("http://localhost/api/webhooks/meta/instagram", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ object: "instagram", entry: [] }),
+      }) as never,
+    );
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(JSON.stringify(body).toLowerCase()).toMatch(/signature|invalid/);
+    expect(JSON.stringify(body)).not.toMatch(/MANYCHAT|BOOKING_WEBHOOK/);
+  });
+
+  it("assertProductionSecretsConfigured must never list optional Meta in its global contract", () => {
+    setMandatoryGlobalProductionSecrets();
+    // Guard against future connectors being added to the global assert by accident:
+    // Meta defaults must remain tolerable for worker boot.
+    process.env.META_INSTAGRAM_WEBHOOK_VERIFY_TOKEN = META_INSTAGRAM_DEV_VERIFY_TOKEN;
+    delete process.env.INSTAGRAM_APP_ID;
+    delete process.env.INSTAGRAM_APP_SECRET;
+    resetEnvCache();
+    expect(() => assertProductionSecretsConfigured()).not.toThrow();
   });
 });

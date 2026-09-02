@@ -58,6 +58,13 @@ export default function GrowthHubPage() {
             <p className="metric-value mt-1 text-3xl">{snap.goals}</p>
             <p className="meta mt-1">Targets tracked</p>
           </Link>
+          <Link href="/growth/prospecting" className="surface surface-interactive p-4 sm:col-span-3">
+            <p className="caption">Social prospecting</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Who would you like Agent Desk to find? Research-backed prospects with LinkedIn Open/Copy
+              outreach (V1).
+            </p>
+          </Link>
         </div>
       ) : null}
 
@@ -110,6 +117,8 @@ export default function GrowthHubPage() {
 
 function growthHint(href: string): string {
   switch (href) {
+    case "/growth/prospecting":
+      return "Research-backed prospects and manual LinkedIn/Instagram outreach.";
     case "/opportunities":
       return "Commercial moves Agent Desk recommends you review.";
     case "/research":

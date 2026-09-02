@@ -94,6 +94,7 @@ enum WebhookProcessingStatus {
 enum IntegrationType {
   MANYCHAT
   META_INSTAGRAM
+  AYRSHARE
   OPENAI
   ANTHROPIC
   BOOKING
@@ -315,6 +316,12 @@ model Organisation {
   conversationUnderstandings ConversationUnderstanding[]
   outboundDispatches   OutboundDispatch[]
   conversationSendLeases ConversationSendLease[]
+  // Social Prospecting + Outreach OS
+  ayrshareProfiles     AyrshareProfile[]
+  socialProspects      SocialProspect[]
+  socialOutreachThreads SocialOutreachThread[]
+  socialProviderUsages  SocialProviderUsage[]
+  socialMetricFacts    SocialMetricFact[]
 }
 
 model User {
@@ -677,6 +684,8 @@ model Contact {
   followUps        FollowUp[]
   attributions     Attribution[]
   suppressions     ContactSuppression[]
+  socialProspects  SocialProspect[]
+  socialOutreachThreads SocialOutreachThread[]
 
   @@index([organisationId, lastContactAt])
   @@index([organisationId, email])
@@ -3317,6 +3326,7 @@ enum BusinessOpportunityType {
   AUTOMATION
   OPERATIONAL
   RESEARCH
+  SOCIAL_PROSPECT
   CUSTOM
 }
 
@@ -4645,6 +4655,184 @@ model ConversationSendLease {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, expiresAt])
+}
+
+// ─── Social Prospecting + Outreach OS (Ayrshare + LinkedIn V1/V2) ─────────────
+
+enum SocialProspectStatus {
+  DISCOVERED
+  RESEARCHED
+  QUALIFIED
+  OUTREACH_READY
+  CONNECTION_READY
+  CONNECTION_SENT
+  CONNECTED
+  FOLLOWUP_READY
+  MESSAGE_SENT
+  REPLIED
+  QUALIFIED_LEAD
+  OPPORTUNITY
+  WON
+  LOST
+  DISMISSED
+}
+
+enum SocialNetworkKind {
+  LINKEDIN
+  INSTAGRAM
+  X
+  TIKTOK
+  FACEBOOK
+  YOUTUBE
+  THREADS
+  OTHER
+}
+
+enum SocialActionMode {
+  /// User copies message / opens profile — system did not send
+  HUMAN_ACTION_REQUIRED
+  /// Provider API allowed and executed
+  PROVIDER_API
+  /// Capability blocked pending LinkedIn (or other) approval
+  REQUIRES_PROVIDER_APPROVAL
+  /// Instagram/provider messaging window required
+  PROVIDER_WINDOW_REQUIRED
+}
+
+/// One Ayrshare User Profile per organisation (tenant-safe mapping).
+model AyrshareProfile {
+  id                 String   @id @default(cuid())
+  organisationId     String   @unique
+  /// Ayrshare profile / ref id (never the primary API key).
+  ayrshareProfileId  String?
+  /// Encrypted profile key / JWT material when issued — never returned to browser.
+  encryptedProfileKey String? @db.Text
+  connectedNetworks  Json     @default("[]")
+  status             String   @default("NOT_CONFIGURED")
+  lastSyncAt         DateTime?
+  lastError          String?
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([ayrshareProfileId])
+}
+
+/// Canonical social prospect candidate (research-sourced; not LinkedIn Marketing API member data).
+model SocialProspect {
+  id               String               @id @default(cuid())
+  organisationId   String
+  status           SocialProspectStatus @default(DISCOVERED)
+  personName       String?
+  companyName      String?
+  role             String?
+  companyWebsite   String?
+  location         String?
+  linkedinUrl      String?
+  instagramUrl     String?
+  otherSocialUrls  Json                 @default("[]")
+  /// Provider-independent identities: SocialProfileIdentity[] (verified/likely only for UX links)
+  socialIdentities Json                 @default("[]")
+  /// Evidence objects: { source, url?, excerpt?, retrievedAt }
+  sourceEvidence   Json                 @default("[]")
+  sourceQuality    String?
+  confidence       Float?
+  fitScore         Float?
+  reasonSelected   String?              @db.Text
+  uncertaintyFlags Json                 @default("[]")
+  preferredNetworks Json                @default("[]")
+  icpSnapshot      Json                 @default("{}")
+  researchJobId    String?
+  contactId        String?
+  companyId        String?
+  opportunityId    String?
+  dedupeKey        String
+  retrievedAt      DateTime             @default(now())
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  outreachThreads SocialOutreachThread[]
+
+  @@unique([organisationId, dedupeKey])
+  @@index([organisationId, status, fitScore])
+  @@index([organisationId, retrievedAt])
+  @@index([contactId])
+}
+
+/// Manual LinkedIn V1 / Instagram copy-open workflow + future approved API outcomes.
+model SocialOutreachThread {
+  id               String           @id @default(cuid())
+  organisationId   String
+  prospectId       String
+  contactId        String?
+  network          SocialNetworkKind
+  status           SocialProspectStatus @default(OUTREACH_READY)
+  actionMode       SocialActionMode @default(HUMAN_ACTION_REQUIRED)
+  connectionNote   String?          @db.Text
+  followUpOne      String?          @db.Text
+  followUpTwo      String?          @db.Text
+  profileUrl       String?
+  /// True only when a permitted provider API actually sent; never for manual copy/open.
+  providerSent     Boolean          @default(false)
+  markedConnectionSentAt DateTime?
+  markedConnectedAt      DateTime?
+  markedFollowUpSentAt   DateTime?
+  lastOutcome      String?
+  metadata         Json             @default("{}")
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  organisation Organisation   @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  prospect     SocialProspect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  contact      Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([organisationId, network, status])
+  @@index([prospectId])
+  @@index([contactId])
+}
+
+/// Cost / usage ledger for social providers (Ayrshare, etc.).
+model SocialProviderUsage {
+  id             String   @id @default(cuid())
+  organisationId String
+  provider       String
+  network        String?
+  capability     String
+  requestCount   Int      @default(1)
+  costCents      Int?
+  latencyMs      Int?
+  errorCode      String?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([organisationId, provider, createdAt])
+  @@index([organisationId, capability, createdAt])
+}
+
+/// Normalized social analytics — missing metrics stay NULL (never fabricate 0).
+model SocialMetricFact {
+  id             String   @id @default(cuid())
+  organisationId String
+  platform       String
+  externalPostId String?
+  metric         String
+  /// NULL when provider did not return the metric — never coerce to 0.
+  value          Float?
+  source         String
+  retrievedAt    DateTime @default(now())
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, platform, externalPostId, metric, source, retrievedAt])
+  @@index([organisationId, platform, retrievedAt])
 }
 
 

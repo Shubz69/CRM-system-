@@ -3,8 +3,8 @@
  * Local auth only. Hosted E2E remains separate.
  *
  *   $env:PLAYWRIGHT_SKIP_WEBSERVER="1"
- *   $env:E2E_EMAIL="1230shobhit@gmail.com"
- *   $env:E2E_PASSWORD="AcceptQA-2026-ux!"
+ *   $env:E2E_EMAIL="..."
+ *   $env:E2E_PASSWORD="..."
  *   npx playwright test e2e/qa-final-product-acceptance.spec.ts
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -12,8 +12,11 @@ import path from "path";
 import fs from "fs";
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || process.env.APP_URL || "http://localhost:3000";
-const EMAIL = process.env.E2E_EMAIL || "1230shobhit@gmail.com";
-const PASSWORD = process.env.E2E_PASSWORD || "AcceptQA-2026-ux!";
+const EMAIL = process.env.E2E_EMAIL || "";
+const PASSWORD = process.env.E2E_PASSWORD || "";
+if (!EMAIL || !PASSWORD) {
+  throw new Error("E2E_EMAIL and E2E_PASSWORD are required (no hardcoded QA credentials)");
+}
 const OUT = path.join(process.cwd(), "QA", "final-product-acceptance");
 
 const VIEWPORTS = {
