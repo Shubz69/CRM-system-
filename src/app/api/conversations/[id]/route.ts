@@ -244,6 +244,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           sendResult.code === "CONVERSATION_CLOSED" ||
           sendResult.code === "MESSAGING_WINDOW_CLOSED" ||
           sendResult.code === "META_INSTAGRAM_NO_PRIOR_INBOUND" ||
+          sendResult.code === "ZERNIO_NO_PRIOR_INBOUND" ||
           sendResult.code === "PROVIDER_POLICY_BLOCKED"
         ) {
           return jsonError(sendResult.code, 403);

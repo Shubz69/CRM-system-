@@ -27,10 +27,173 @@ export function isZernioConfigured(): boolean {
   return Boolean(getEnv().ZERNIO_API_KEY?.trim());
 }
 
+export function isZernioWebhookConfigured(): boolean {
+  return Boolean(getEnv().ZERNIO_WEBHOOK_SECRET?.trim());
+}
+
 export function assertZernioConfigured(): void {
   if (!isZernioConfigured()) {
     throw Object.assign(new Error("Zernio is not configured"), { code: "ZERNIO_NOT_CONFIGURED" });
   }
+}
+
+export function assertZernioWebhookConfigured(): void {
+  if (!isZernioWebhookConfigured()) {
+    throw Object.assign(new Error("Zernio webhook secret is not configured"), {
+      code: "ZERNIO_NOT_CONFIGURED",
+    });
+  }
+}
+
+/** Signed, expiry-bound connect state — binds callback to the requesting organisation. */
+export function createZernioConnectState(organisationId: string, ttlSeconds = 900): string {
+  const secret = getEnv().AUTH_SECRET || getEnv().NEXTAUTH_SECRET || getEnv().ENCRYPTION_KEY;
+  if (!secret) throw new Error("Cannot sign Zernio connect state without AUTH_SECRET");
+  const payload = {
+    orgId: organisationId,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+    nonce: createHmac("sha256", secret).update(`${organisationId}:${Date.now()}`).digest("hex").slice(0, 16),
+  };
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+export function verifyZernioConnectState(
+  state: string | null | undefined,
+  expectedOrganisationId: string,
+): { ok: true } | { ok: false; code: string } {
+  if (!state || !state.includes(".")) return { ok: false, code: "STATE_MISSING" };
+  const secret = getEnv().AUTH_SECRET || getEnv().NEXTAUTH_SECRET || getEnv().ENCRYPTION_KEY;
+  if (!secret) return { ok: false, code: "STATE_UNCONFIGURED" };
+  const [body, sig] = state.split(".");
+  if (!body || !sig) return { ok: false, code: "STATE_MALFORMED" };
+  const expected = createHmac("sha256", secret).update(body).digest("base64url");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(sig);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, code: "STATE_TAMPERED" };
+  try {
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
+      orgId?: string;
+      exp?: number;
+    };
+    if (!payload.orgId || payload.orgId !== expectedOrganisationId) {
+      return { ok: false, code: "STATE_ORG_MISMATCH" };
+    }
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+      return { ok: false, code: "STATE_EXPIRED" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, code: "STATE_MALFORMED" };
+  }
+}
+
+/**
+ * Resolve tenant only from stored ZernioProfile mapping.
+ * Requires profileId; optionally verifies accountId belongs to that profile.
+ * Never trusts a bare user-controlled org field.
+ */
+export async function resolveZernioWebhookTenant(input: {
+  profileId?: string | null;
+  accountId?: string | null;
+}): Promise<
+  | { ok: true; organisationId: string; zernioProfileId: string; accountBound: boolean }
+  | { ok: false; code: "UNKNOWN_PROFILE" | "UNKNOWN_ACCOUNT" | "PROFILE_ACCOUNT_MISMATCH" }
+> {
+  if (!input.profileId) {
+    if (input.accountId) {
+      const hit = await findOrganisationIdByZernioAccountId(input.accountId);
+      if (!hit) return { ok: false, code: "UNKNOWN_ACCOUNT" };
+      // Account-only resolution is allowed only when the account was previously synced
+      // into a stored ZernioProfile.connectedAccounts (not a free-form user field alone).
+      const profile = await prisma.zernioProfile.findUnique({
+        where: { organisationId: hit.organisationId },
+      });
+      if (!profile?.zernioProfileId) return { ok: false, code: "UNKNOWN_PROFILE" };
+      return {
+        ok: true,
+        organisationId: hit.organisationId,
+        zernioProfileId: profile.zernioProfileId,
+        accountBound: true,
+      };
+    }
+    return { ok: false, code: "UNKNOWN_PROFILE" };
+  }
+
+  const organisationId = await findOrganisationIdByZernioProfileId(input.profileId);
+  if (!organisationId) return { ok: false, code: "UNKNOWN_PROFILE" };
+
+  if (input.accountId) {
+    const profile = await prisma.zernioProfile.findUnique({ where: { organisationId } });
+    const accounts = Array.isArray(profile?.connectedAccounts)
+      ? (profile!.connectedAccounts as ZernioConnectedAccount[])
+      : [];
+    if (accounts.length && !accounts.some((a) => a.accountId === input.accountId)) {
+      // Soft allow when accounts not yet synced (first connect race), but require profile match.
+      // Still never invent a different org.
+      if (accounts.length > 0) return { ok: false, code: "PROFILE_ACCOUNT_MISMATCH" };
+    }
+  }
+
+  return {
+    ok: true,
+    organisationId,
+    zernioProfileId: input.profileId,
+    accountBound: Boolean(input.accountId),
+  };
+}
+
+function networkHealthFromAccounts(
+  accounts: ZernioConnectedAccount[],
+  platformNeedle: string,
+): "NOT_CONFIGURED" | "CONNECTED" | "DEGRADED" | "REAUTH_REQUIRED" | "DISCONNECTED" {
+  if (!isZernioConfigured()) return "NOT_CONFIGURED";
+  const matches = accounts.filter((a) => String(a.platform).toLowerCase().includes(platformNeedle));
+  if (matches.length === 0) return "DISCONNECTED";
+  const statuses = matches.map((a) => String(a.status || "").toLowerCase());
+  if (statuses.some((s) => s.includes("reauth") || s.includes("expired") || s === "needs_reauth")) {
+    return "REAUTH_REQUIRED";
+  }
+  if (statuses.some((s) => s.includes("degraded") || s.includes("error") || s === "limited")) {
+    return "DEGRADED";
+  }
+  if (statuses.every((s) => s.includes("disconnect") || s === "revoked" || s === "inactive")) {
+    return "DISCONNECTED";
+  }
+  return "CONNECTED";
+}
+
+export function getZernioNetworkHealth(profile: {
+  status: string;
+  connectedAccounts: unknown;
+  metadata?: unknown;
+}): {
+  overall: string;
+  instagram: string;
+  linkedin: string;
+} {
+  const accounts = Array.isArray(profile.connectedAccounts)
+    ? (profile.connectedAccounts as ZernioConnectedAccount[])
+    : [];
+  const instagram = networkHealthFromAccounts(accounts, "instagram");
+  const linkedin = networkHealthFromAccounts(accounts, "linkedin");
+  const networkStates = [instagram, linkedin];
+  let overall: string;
+  if (!isZernioConfigured()) {
+    overall = "NOT_CONFIGURED";
+  } else if (profile.status === "DISCONNECTED" || networkStates.every((s) => s === "DISCONNECTED")) {
+    overall = "DISCONNECTED";
+  } else if (networkStates.some((s) => s === "REAUTH_REQUIRED") || profile.status === "REAUTH_REQUIRED") {
+    overall = "REAUTH_REQUIRED";
+  } else if (networkStates.some((s) => s === "DEGRADED") || profile.status === "DEGRADED") {
+    overall = "DEGRADED";
+  } else if (networkStates.some((s) => s === "CONNECTED")) {
+    overall = "CONNECTED";
+  } else {
+    overall = "DISCONNECTED";
+  }
+  return { overall, instagram, linkedin };
 }
 
 function apiKey(): string {
@@ -175,9 +338,21 @@ export async function createZernioConnectUrl(input: {
   }
 
   const headless = input.headless === true;
+  const state = createZernioConnectState(input.organisationId);
+  const redirectWithState = (() => {
+    try {
+      const u = new URL(input.redirectUrl);
+      u.searchParams.set("state", state);
+      return u.toString();
+    } catch {
+      const join = input.redirectUrl.includes("?") ? "&" : "?";
+      return `${input.redirectUrl}${join}state=${encodeURIComponent(state)}`;
+    }
+  })();
+
   const params = new URLSearchParams({
     profileId: ensured.zernioProfileId,
-    redirect_url: input.redirectUrl,
+    redirect_url: redirectWithState,
   });
   if (headless) params.set("headless", "true");
 
@@ -291,11 +466,70 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
       metadata: {
         instagramConnected: hasIg,
         linkedinConnected: hasLi,
+        instagramStatus: hasIg ? "CONNECTED" : "DISCONNECTED",
+        linkedinStatus: hasLi ? "CONNECTED" : "DISCONNECTED",
         requiresFacebookPage: false,
         instagramRequiresProfessionalAccount: true,
       },
     },
   });
+  await ensureZernioMessagingBindings(organisationId, accounts);
+}
+
+/**
+ * Upsert Integration + MessagingChannel rows for Instagram accounts so inbox
+ * ingestion and outbound routing stay tenant-scoped.
+ */
+export async function ensureZernioMessagingBindings(
+  organisationId: string,
+  accounts: ZernioConnectedAccount[],
+) {
+  const { IntegrationType } = await import("@prisma/client");
+  const { MESSAGING_PROVIDER } = await import("@/services/messaging/providers");
+
+  await prisma.integration.upsert({
+    where: {
+      organisationId_type_name: {
+        organisationId,
+        type: IntegrationType.ZERNIO,
+        name: "default",
+      },
+    },
+    create: {
+      organisationId,
+      type: IntegrationType.ZERNIO,
+      name: "default",
+      isActive: accounts.length > 0,
+      config: { provider: "ZERNIO" },
+    },
+    update: { isActive: accounts.length > 0 },
+  });
+
+  for (const account of accounts) {
+    if (!account.platform.includes("instagram")) continue;
+    await prisma.messagingChannel.upsert({
+      where: {
+        organisationId_provider_externalId: {
+          organisationId,
+          provider: MESSAGING_PROVIDER.ZERNIO,
+          externalId: account.accountId,
+        },
+      },
+      create: {
+        organisationId,
+        provider: MESSAGING_PROVIDER.ZERNIO,
+        externalId: account.accountId,
+        displayName: account.displayName || account.username || "Instagram (Zernio)",
+        instagramUsername: account.username || null,
+        isActive: true,
+      },
+      update: {
+        displayName: account.displayName || account.username || undefined,
+        instagramUsername: account.username || undefined,
+        isActive: true,
+      },
+    });
+  }
 }
 
 export async function publishViaZernio(input: {

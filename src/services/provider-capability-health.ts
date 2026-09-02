@@ -127,7 +127,9 @@ export function getPublicProviderCapabilityHealth(): {
     label: "Zernio (validation social)",
     status: envConfigured(env.ZERNIO_API_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",
     detail: envConfigured(env.ZERNIO_API_KEY)
-      ? "API key present — org profile CONNECTED state is per-workspace"
+      ? envConfigured(env.ZERNIO_WEBHOOK_SECRET)
+        ? "API key + webhook secret present — org CONNECTED is per-workspace / per-network"
+        : "API key present but ZERNIO_WEBHOOK_SECRET missing — webhooks fail closed"
       : "Optional validation social provider (preferred when configured)",
     liveConnectionAware: false,
   });

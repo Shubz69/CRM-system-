@@ -2,6 +2,7 @@
 export const MESSAGING_PROVIDER = {
   MANYCHAT: "manychat",
   META_INSTAGRAM: "meta_instagram",
+  ZERNIO: "zernio",
 } as const;
 
 export type MessagingProviderId =
@@ -20,8 +21,21 @@ export function isMetaInstagramProvider(provider: string | null | undefined): bo
   return provider === MESSAGING_PROVIDER.META_INSTAGRAM;
 }
 
+export function isZernioMessagingProvider(provider: string | null | undefined): boolean {
+  return provider === MESSAGING_PROVIDER.ZERNIO;
+}
+
+/** Providers that forbid cold DM — require prior inbound on the conversation. */
+export function providerRequiresPriorInbound(provider: string | null | undefined): boolean {
+  return isMetaInstagramProvider(provider) || isZernioMessagingProvider(provider);
+}
+
 export function metaInstagramIdentifier(igsid: string): string {
   return `${MESSAGING_PROVIDER.META_INSTAGRAM}:${igsid}`;
+}
+
+export function zernioContactIdentifier(externalContactId: string): string {
+  return `${MESSAGING_PROVIDER.ZERNIO}:${externalContactId}`;
 }
 
 export function stripProviderPrefix(identifier: string, provider: string): string {

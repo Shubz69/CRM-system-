@@ -3,7 +3,11 @@ import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { resolveMetaInstagramSendCredential } from "@/services/messaging/meta-instagram";
-import { isMetaInstagramProvider } from "@/services/messaging/providers";
+import {
+  isMetaInstagramProvider,
+  isZernioMessagingProvider,
+} from "@/services/messaging/providers";
+import { isZernioConfigured } from "@/adapters/zernio";
 
 const API_TOKEN_KEY = "api_token";
 
@@ -258,6 +262,50 @@ export async function resolveMessagingSendCredential(
   igUserId?: string | null;
 }> {
   const prepared = options?.preparedConnectionRef;
+  const wantZernio =
+    isZernioMessagingProvider(options?.provider) ||
+    Boolean(prepared?.startsWith("zernio:"));
+
+  if (wantZernio) {
+    if (!isZernioConfigured()) {
+      return { token: null, source: "none", connectionRef: prepared ?? null, igUserId: null };
+    }
+    const integration = await prisma.integration.findUnique({
+      where: {
+        organisationId_type_name: {
+          organisationId,
+          type: IntegrationType.ZERNIO,
+          name: "default",
+        },
+      },
+    });
+    const profile = await prisma.zernioProfile.findUnique({
+      where: { organisationId },
+      select: { id: true, status: true, connectedAccounts: true },
+    });
+    if (!integration?.isActive && !profile) {
+      return { token: null, source: "none", connectionRef: prepared ?? null, igUserId: null };
+    }
+    if (profile && ["DISCONNECTED", "NOT_CONFIGURED"].includes(profile.status)) {
+      return {
+        token: null,
+        source: "revoked",
+        connectionRef: `zernio:${profile.id}`,
+        igUserId: null,
+      };
+    }
+    const accounts = Array.isArray(profile?.connectedAccounts)
+      ? (profile!.connectedAccounts as Array<{ accountId?: string; platform?: string }>)
+      : [];
+    const ig = accounts.find((a) => String(a.platform || "").toLowerCase().includes("instagram"));
+    return {
+      token: getEnv().ZERNIO_API_KEY!.trim(),
+      source: "organisation",
+      connectionRef: `zernio:${profile?.id || integration?.id || organisationId}`,
+      igUserId: ig?.accountId ?? null,
+    };
+  }
+
   const wantMeta =
     isMetaInstagramProvider(options?.provider) ||
     Boolean(prepared?.startsWith("meta_instagram:"));

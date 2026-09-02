@@ -1,23 +1,32 @@
 import { createHash } from "crypto";
 import { NextRequest } from "next/server";
 import { Prisma } from "@prisma/client";
-import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { prisma } from "@/lib/db";
 import { appendDomainEvent } from "@/services/domain-events/append";
+import { processInboundMessage } from "@/services/inbound-pipeline";
+import { normalizeZernioInboundMessage } from "@/adapters/messaging/zernio";
+import { MESSAGING_PROVIDER } from "@/services/messaging/providers";
 import {
-  findOrganisationIdByZernioAccountId,
-  findOrganisationIdByZernioProfileId,
+  assertZernioWebhookConfigured,
+  isZernioWebhookConfigured,
+  resolveZernioWebhookTenant,
   syncZernioConnectedAccounts,
   verifyZernioWebhookSignature,
   type ZernioConnectedAccount,
 } from "@/adapters/zernio";
 
+function pickString(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 /**
- * Zernio webhooks — HMAC signature, profile/account → organisation mapping.
- * Idempotent via WebhookEvent unique (provider, idempotencyKey).
- * No new BullMQ worker; DomainEvent outbox for durable fan-out.
+ * Zernio webhooks — fail-closed auth, tenant from stored Profile/account map,
+ * Instagram message.received → canonical processInboundMessage.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -26,19 +35,27 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
     }
 
-    const env = getEnv();
-    if (!env.ZERNIO_WEBHOOK_SECRET?.trim()) {
+    if (!isZernioWebhookConfigured()) {
+      // Provider-scoped NOT_CONFIGURED — does not affect CRM / other webhooks / worker.
       return Response.json(
-        { ok: false, code: "ZERNIO_NOT_CONFIGURED", error: "Zernio webhook secret not configured" },
+        {
+          ok: false,
+          code: "ZERNIO_NOT_CONFIGURED",
+          error: "Zernio webhook secret not configured",
+        },
         { status: 503 },
       );
     }
+    assertZernioWebhookConfigured();
 
     const rawBody = await req.text();
     const signature =
       req.headers.get("x-zernio-signature") || req.headers.get("x-late-signature") || null;
+    if (!signature) {
+      return Response.json({ error: "Missing signature", code: "SIGNATURE_MISSING" }, { status: 401 });
+    }
     if (!verifyZernioWebhookSignature(rawBody, signature)) {
-      return Response.json({ error: "Invalid signature" }, { status: 401 });
+      return Response.json({ error: "Invalid signature", code: "SIGNATURE_INVALID" }, { status: 401 });
     }
 
     let payload: Record<string, unknown>;
@@ -59,34 +76,32 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, test: true });
     }
 
+    const account = (payload.account && typeof payload.account === "object"
+      ? (payload.account as Record<string, unknown>)
+      : {}) as Record<string, unknown>;
     const profileId =
-      (typeof payload.profileId === "string" && payload.profileId) ||
+      pickString(payload.profileId, account.profileId) ||
       (payload.profile && typeof (payload.profile as { id?: string }).id === "string"
         ? (payload.profile as { id: string }).id
         : null);
-
     const accountId =
-      (typeof payload.accountId === "string" && payload.accountId) ||
-      (payload.account && typeof (payload.account as { id?: string }).id === "string"
-        ? (payload.account as { id: string }).id
-        : null);
+      pickString(payload.accountId, account.id, account.accountId) || null;
 
-    let organisationId: string | null = null;
-    if (profileId) {
-      organisationId = await findOrganisationIdByZernioProfileId(profileId);
-    }
-    if (!organisationId && accountId) {
-      const hit = await findOrganisationIdByZernioAccountId(accountId);
-      organisationId = hit?.organisationId ?? null;
-    }
-
-    if (!organisationId) {
-      logger.warn("Zernio webhook unresolved tenant", {
+    const tenant = await resolveZernioWebhookTenant({ profileId, accountId });
+    if (!tenant.ok) {
+      logger.warn("Zernio webhook tenant rejected", {
         eventType,
         eventId: eventId.slice(0, 12),
+        code: tenant.code,
       });
-      return Response.json({ ok: true, ignored: true, reason: "unknown_tenant" });
+      // Quarantine without inventing an organisation
+      return Response.json(
+        { ok: false, ignored: true, reason: tenant.code },
+        { status: tenant.code === "UNKNOWN_PROFILE" || tenant.code === "UNKNOWN_ACCOUNT" ? 404 : 400 },
+      );
     }
+
+    const organisationId = tenant.organisationId;
 
     const existing = await prisma.webhookEvent.findUnique({
       where: {
@@ -111,9 +126,72 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    if (eventType === "message.received") {
+      const normalized = normalizeZernioInboundMessage(payload);
+      if (!normalized) {
+        await prisma.webhookEvent.update({
+          where: { provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId } },
+          data: {
+            status: "IGNORED",
+            error: "unnormalizable_or_non_instagram_or_missing_sender",
+            processedAt: new Date(),
+          },
+        });
+        return Response.json({ ok: true, ignored: true, reason: "unnormalizable_message" });
+      }
+
+      const raw = (normalized.raw || {}) as Record<string, unknown>;
+      const result = await processInboundMessage(
+        {
+          organisationId,
+          channelExternalId: typeof raw.accountId === "string" ? raw.accountId : accountId || undefined,
+          idempotencyKey: normalized.externalMessageId || eventId,
+          contact: {
+            externalId: normalized.contactExternalId,
+            fullName: typeof raw.displayName === "string" ? raw.displayName : undefined,
+            instagramUsername: typeof raw.username === "string" ? raw.username : undefined,
+          },
+          message: {
+            text: normalized.text,
+            externalId: normalized.externalMessageId,
+            sentAt: normalized.sentAt,
+          },
+          threadId: normalized.threadId,
+          leadSource: "instagram_zernio",
+          metadata: {
+            zernio: {
+              conversationId: raw.zernioConversationId,
+              accountId: raw.accountId,
+              profileId: tenant.zernioProfileId,
+              provider: "ZERNIO",
+              network: "INSTAGRAM",
+            },
+          },
+        },
+        { provider: MESSAGING_PROVIDER.ZERNIO, rawPayload: payload },
+      );
+
+      await prisma.webhookEvent.update({
+        where: { provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId } },
+        data: {
+          status: result.duplicate ? "DUPLICATE" : "PROCESSED",
+          processedAt: new Date(),
+        },
+      });
+
+      return Response.json({
+        ok: true,
+        inbound: {
+          duplicate: result.duplicate,
+          contactId: result.contactId,
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+        },
+      });
+    }
+
     if (eventType === "account.connected" || eventType === "account.disconnected") {
       await syncZernioConnectedAccounts(organisationId).catch(async () => {
-        // Soft fallback: mutate from webhook payload when sync API unavailable
         const profile = await prisma.zernioProfile.findUnique({ where: { organisationId } });
         if (!profile) return;
         const accounts = Array.isArray(profile.connectedAccounts)
@@ -123,10 +201,11 @@ export async function POST(req: NextRequest) {
           if (!accounts.some((a) => a.accountId === accountId)) {
             accounts.push({
               accountId,
-              platform: String(payload.platform || "unknown"),
+              platform: String(payload.platform || account.platform || "unknown"),
               status: "connected",
             });
           }
+          const { ensureZernioMessagingBindings } = await import("@/adapters/zernio");
           await prisma.zernioProfile.update({
             where: { organisationId },
             data: {
@@ -136,6 +215,7 @@ export async function POST(req: NextRequest) {
               lastError: null,
             },
           });
+          await ensureZernioMessagingBindings(organisationId, accounts);
         }
         if (eventType === "account.disconnected" && accountId) {
           const next = accounts.filter((a) => a.accountId !== accountId);
@@ -162,7 +242,7 @@ export async function POST(req: NextRequest) {
           providerKey: "ZERNIO",
           zernioEvent: eventType,
           accountId,
-          profileId,
+          profileId: tenant.zernioProfileId,
         },
         dedupeKey: `zernio:${organisationId}:${eventId}`,
       });

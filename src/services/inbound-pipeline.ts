@@ -96,7 +96,9 @@ export async function processInboundMessage(
   // Channel storage provider: Meta Instagram uses its own channel; simulator /
   // integration_test / unknown keep ManyChat channel semantics for compatibility.
   const messagingProvider =
-    options?.provider === "manychat" || options?.provider === "meta_instagram"
+    options?.provider === "manychat" ||
+    options?.provider === "meta_instagram" ||
+    options?.provider === "zernio"
       ? options.provider
       : "manychat";
   const idempotencyKey =
@@ -349,6 +351,7 @@ export async function processInboundMessage(
               lastInboundAt: windows.lastInboundAt,
               messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
               humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
+              metadata: (input.metadata || {}) as Prisma.InputJsonValue,
             },
           });
           conversationCreated = true;
@@ -372,6 +375,10 @@ export async function processInboundMessage(
       }
       if (!conversationCreated && conversation) {
         const windows = openMessagingWindows();
+        const prevMeta =
+          conversation.metadata && typeof conversation.metadata === "object" && !Array.isArray(conversation.metadata)
+            ? (conversation.metadata as Record<string, unknown>)
+            : {};
         conversation = await tx.conversation.update({
           where: { id: conversation.id },
           data: {
@@ -383,6 +390,14 @@ export async function processInboundMessage(
             lastInboundAt: windows.lastInboundAt,
             messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
             humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
+            ...(input.metadata
+              ? {
+                  metadata: {
+                    ...prevMeta,
+                    ...input.metadata,
+                  } as Prisma.InputJsonValue,
+                }
+              : {}),
           },
         });
       }

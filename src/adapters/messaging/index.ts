@@ -1,11 +1,17 @@
 import { MockManyChatAdapter } from "@/adapters/messaging/mock-manychat";
 import { createMetaInstagramMessagingAdapter } from "@/adapters/messaging/meta-instagram";
+import { createZernioMessagingAdapter } from "@/adapters/messaging/zernio";
 import type { MessagingAdapter, OutboundMessage, OutboundResult } from "@/adapters/messaging/types";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { allowMockTransports, isProductionRuntime } from "@/lib/runtime";
 import { resolveMessagingSendCredential } from "@/services/messaging/credentials";
-import { isMetaInstagramProvider, MESSAGING_PROVIDER } from "@/services/messaging/providers";
+import {
+  isMetaInstagramProvider,
+  isZernioMessagingProvider,
+  MESSAGING_PROVIDER,
+} from "@/services/messaging/providers";
+import { isZernioConfigured } from "@/adapters/zernio";
 
 /**
  * Live ManyChat adapter.
@@ -114,6 +120,29 @@ export async function getMessagingAdapterForOrganisation(
   provider?: string,
 ): Promise<MessagingAdapter> {
   const credential = await resolveMessagingSendCredential(organisationId, { provider });
+  const useZernio =
+    isZernioMessagingProvider(provider) ||
+    Boolean(credential.connectionRef?.startsWith("zernio:"));
+  if (useZernio) {
+    if (!isZernioConfigured() || !credential.token) {
+      return new NotConfiguredMessagingAdapter(MESSAGING_PROVIDER.ZERNIO);
+    }
+    const live = createZernioMessagingAdapter();
+    return {
+      name: live.name,
+      sendMessage(message) {
+        return live.sendMessage({
+          ...message,
+          apiToken: message.apiToken ?? credential.token!,
+          metadata: {
+            ...(message.metadata ?? {}),
+            ...(credential.igUserId ? { zernioAccountId: credential.igUserId } : {}),
+          },
+        });
+      },
+    };
+  }
+
   const useMeta =
     isMetaInstagramProvider(provider) ||
     Boolean(credential.connectionRef?.startsWith("meta_instagram:"));
@@ -172,6 +201,12 @@ export {
   normalizeMetaInstagramWebhookMessage,
   normalizeAllMetaInstagramWebhookMessages,
 } from "@/adapters/messaging/meta-instagram";
+export {
+  ZernioMessagingAdapter,
+  createZernioMessagingAdapter,
+  normalizeZernioInboundMessage,
+  zernioColdInstagramOutreachMode,
+} from "@/adapters/messaging/zernio";
 export {
   clearMockOutboundLog,
   mockOutboundLog,

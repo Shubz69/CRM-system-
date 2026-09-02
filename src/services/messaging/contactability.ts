@@ -1,7 +1,7 @@
 import { MessageDirection } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
-import { isMetaInstagramProvider } from "@/services/messaging/providers";
+import { providerRequiresPriorInbound } from "@/services/messaging/providers";
 import { isContactSuppressed } from "@/services/messaging/suppression";
 
 export type ContactabilityActionType =
@@ -22,7 +22,8 @@ export type ContactabilityCode =
   | "AI_PAUSED"
   | "MESSAGING_WINDOW_CLOSED"
   | "PROVIDER_POLICY_BLOCKED"
-  | "META_INSTAGRAM_NO_PRIOR_INBOUND";
+  | "META_INSTAGRAM_NO_PRIOR_INBOUND"
+  | "ZERNIO_NO_PRIOR_INBOUND";
 
 export class ContactabilityError extends Error {
   constructor(
@@ -110,8 +111,8 @@ export async function assertContactable(input: {
     );
   }
 
-  // Meta Instagram: no cold DMs — require prior customer inbound on this conversation.
-  if (isMetaInstagramProvider(input.channel)) {
+  // Instagram (Meta native or Zernio): no cold DMs — require prior customer inbound.
+  if (providerRequiresPriorInbound(input.channel)) {
     const priorInbound = await prisma.message.findFirst({
       where: {
         organisationId: input.organisationId,
@@ -122,8 +123,8 @@ export async function assertContactable(input: {
     });
     if (!priorInbound) {
       throw new ContactabilityError(
-        "META_INSTAGRAM_NO_PRIOR_INBOUND",
-        "Meta Instagram forbids outbound without a prior customer message on this conversation",
+        input.channel === "zernio" ? "ZERNIO_NO_PRIOR_INBOUND" : "META_INSTAGRAM_NO_PRIOR_INBOUND",
+        "Instagram forbids outbound without a prior customer message on this conversation",
       );
     }
   }

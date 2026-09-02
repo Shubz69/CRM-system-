@@ -2,8 +2,11 @@ import { NextRequest } from "next/server";
 import { jsonError, requirePermission } from "@/lib/session";
 import {
   createZernioConnectUrl,
+  getOrCreateZernioProfile,
+  getZernioNetworkHealth,
   getZernioProfileView,
   isZernioConfigured,
+  isZernioWebhookConfigured,
   preferredProviderForCapability,
   syncZernioConnectedAccounts,
   zernioInstagramMessagingCapability,
@@ -13,11 +16,14 @@ import {
 } from "@/adapters/zernio";
 import { resolveProviderPlatformCapability } from "@/services/social-prospecting/capabilities";
 import { getEnv } from "@/lib/env";
+import { zernioColdInstagramOutreachMode } from "@/adapters/messaging/zernio";
 
 export async function GET() {
   try {
     const session = await requirePermission("settings:read");
     const view = await getZernioProfileView(session.organisationId);
+    const profile = await getOrCreateZernioProfile(session.organisationId);
+    const health = getZernioNetworkHealth(profile);
     const accounts = view.connectedAccounts as ZernioConnectedAccount[];
     const igConnected = accounts.some((a) => String(a.platform).includes("instagram"));
     const liConnected = accounts.some((a) => String(a.platform).includes("linkedin"));
@@ -25,14 +31,18 @@ export async function GET() {
     return Response.json({
       ok: true,
       serverConfigured: isZernioConfigured(),
+      webhookConfigured: isZernioWebhookConfigured(),
       ...view,
+      health,
       networks: {
         instagram: {
           connected: igConnected,
+          status: health.instagram,
           requiresProfessionalAccount: true,
           requiresFacebookPage: false,
           connectMethod: "instagram_login",
           messaging: zernioInstagramMessagingCapability(igConnected),
+          coldOutreach: zernioColdInstagramOutreachMode(),
           preferredProvider: preferredProviderForCapability({
             network: "INSTAGRAM",
             capability: "CONNECT_ACCOUNT",
@@ -40,6 +50,7 @@ export async function GET() {
         },
         linkedin: {
           connected: liConnected,
+          status: health.linkedin,
           messaging: zernioLinkedInMessagingCapability(),
           outreach: "OPEN_COPY",
           preferredProvider: preferredProviderForCapability({
@@ -52,6 +63,13 @@ export async function GET() {
             capability: "DIRECT_MESSAGES",
           }),
         },
+      },
+      routes: {
+        profile: "GET/POST /api/integrations/zernio",
+        connectUrl: "POST /api/integrations/zernio { action: connect, platform }",
+        callback: "GET /api/integrations/zernio/callback?state=",
+        sync: "POST /api/integrations/zernio { action: sync }",
+        webhook: "POST /api/webhooks/zernio",
       },
       /** Diagnostics only — not shown as product branding */
       providerId: "ZERNIO",

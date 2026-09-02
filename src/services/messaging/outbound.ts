@@ -276,6 +276,8 @@ export async function dispatchOutboundMessage(
     },
     select: {
       activityVersion: true,
+      metadata: true,
+      externalThreadId: true,
       messages: {
         orderBy: { sentAt: "desc" },
         take: 1,
@@ -286,6 +288,15 @@ export async function dispatchOutboundMessage(
   if (!conversation) {
     return { ok: false as const, code: "CONVERSATION_NOT_FOUND" as const };
   }
+
+  const conversationMeta =
+    conversation.metadata && typeof conversation.metadata === "object" && !Array.isArray(conversation.metadata)
+      ? (conversation.metadata as Record<string, unknown>)
+      : {};
+  const zernioMeta =
+    conversationMeta.zernio && typeof conversationMeta.zernio === "object"
+      ? (conversationMeta.zernio as Record<string, unknown>)
+      : {};
 
   const expectedLastMessageId = conversation.messages[0]?.id ?? null;
   const expectedActivityVersion =
@@ -481,9 +492,21 @@ export async function dispatchOutboundMessage(
         organisationId: input.organisationId,
         contactExternalId: input.contactExternalId,
         text,
-        threadId: input.threadId,
+        threadId: input.threadId ?? conversation.externalThreadId ?? undefined,
         apiToken: credential.token ?? undefined,
-        metadata: { dispatchId, source },
+        metadata: {
+          dispatchId,
+          source,
+          ...(input.metadata || {}),
+          zernioAccountId:
+            (input.metadata?.zernioAccountId as string | undefined) ||
+            (typeof zernioMeta.accountId === "string" ? zernioMeta.accountId : undefined) ||
+            credential.igUserId ||
+            undefined,
+          zernioConversationId:
+            (input.metadata?.zernioConversationId as string | undefined) ||
+            (typeof zernioMeta.conversationId === "string" ? zernioMeta.conversationId : undefined),
+        },
       });
     } catch (error) {
       // Transport threw after possible provider accept — do not retry blindly.
