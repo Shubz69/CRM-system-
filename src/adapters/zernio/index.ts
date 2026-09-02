@@ -390,10 +390,143 @@ export async function createZernioConnectUrl(input: {
   return { ok: true, url, headless };
 }
 
+export type ZernioNetworkStatus =
+  | "NOT_CONFIGURED"
+  | "CONNECTING"
+  | "CONNECTED"
+  | "DEGRADED"
+  | "REAUTH_REQUIRED"
+  | "DISCONNECTED";
+
+export type ZernioCanonicalNetwork = {
+  network: "INSTAGRAM" | "LINKEDIN";
+  status: ZernioNetworkStatus;
+  provider: "ZERNIO";
+  /** Server/diagnostics only — UI must not show this to normal users */
+  providerProfileId: string | null;
+  providerAccountId: string | null;
+  username: string | null;
+  displayName: string | null;
+  accountType: string | null;
+  connectedAt: string | null;
+  lastSyncAt: string | null;
+  health: ZernioNetworkStatus;
+  /** Convenience for older UI consumers */
+  connected: boolean;
+};
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function platformNeedle(platform: ZernioConnectPlatform): string {
+  return platform === "instagram" ? "instagram" : "linkedin";
+}
+
+function accountMatchesPlatform(account: ZernioConnectedAccount, platform: ZernioConnectPlatform) {
+  return account.platform.toLowerCase().includes(platformNeedle(platform));
+}
+
+function isActivelyConnectedAccount(account: ZernioConnectedAccount): boolean {
+  const status = String(account.status || "connected").toLowerCase();
+  if (status.includes("disconnect") || status === "revoked" || status === "inactive") return false;
+  if (status.includes("reauth") || status.includes("expired")) return false;
+  return true;
+}
+
+function pickPrimaryAccount(
+  accounts: ZernioConnectedAccount[],
+  platform: ZernioConnectPlatform,
+): ZernioConnectedAccount | null {
+  const matches = accounts.filter((a) => accountMatchesPlatform(a, platform));
+  return matches.find(isActivelyConnectedAccount) || matches[0] || null;
+}
+
+function deriveNetworkStatus(
+  profileStatus: string,
+  accounts: ZernioConnectedAccount[],
+  platform: ZernioConnectPlatform,
+): ZernioNetworkStatus {
+  if (!isZernioConfigured()) return "NOT_CONFIGURED";
+  if (profileStatus === "CONNECTING") {
+    const active = pickPrimaryAccount(accounts, platform);
+    if (active && isActivelyConnectedAccount(active)) return "CONNECTED";
+    return "CONNECTING";
+  }
+  const matches = accounts.filter((a) => accountMatchesPlatform(a, platform));
+  if (matches.length === 0) {
+    if (profileStatus === "DEGRADED") return "DEGRADED";
+    return "DISCONNECTED";
+  }
+  const statuses = matches.map((a) => String(a.status || "").toLowerCase());
+  if (statuses.some((s) => s.includes("reauth") || s.includes("expired") || s === "needs_reauth")) {
+    return "REAUTH_REQUIRED";
+  }
+  if (statuses.some((s) => s.includes("degraded") || s.includes("error") || s === "limited")) {
+    return "DEGRADED";
+  }
+  if (statuses.every((s) => s.includes("disconnect") || s === "revoked" || s === "inactive")) {
+    return "DISCONNECTED";
+  }
+  return "CONNECTED";
+}
+
+function accountTypeLabel(account: ZernioConnectedAccount | null, platform: ZernioConnectPlatform) {
+  if (!account) return null;
+  const mode = String(account.authMode || "").toLowerCase();
+  if (platform === "instagram") {
+    if (mode.includes("creator")) return "Creator";
+    if (mode.includes("business") || mode.includes("instagram_login")) return "Business / Creator";
+    return "Business / Creator";
+  }
+  if (mode.includes("organization") || mode.includes("page") || mode.includes("company")) return "Page";
+  if (mode.includes("personal")) return "Personal";
+  return null;
+}
+
+export function buildCanonicalZernioNetworks(input: {
+  profile: {
+    status: string;
+    zernioProfileId: string | null;
+    connectedAccounts: unknown;
+    lastSyncAt: Date | null;
+  };
+}): { instagram: ZernioCanonicalNetwork; linkedin: ZernioCanonicalNetwork } {
+  const accounts = Array.isArray(input.profile.connectedAccounts)
+    ? (input.profile.connectedAccounts as ZernioConnectedAccount[])
+    : [];
+  const lastSyncAt = input.profile.lastSyncAt?.toISOString() ?? null;
+
+  const build = (platform: ZernioConnectPlatform): ZernioCanonicalNetwork => {
+    const account = pickPrimaryAccount(accounts, platform);
+    const status = deriveNetworkStatus(input.profile.status, accounts, platform);
+    const username = account?.username
+      ? account.username.replace(/^@/, "")
+      : null;
+    return {
+      network: platform === "instagram" ? "INSTAGRAM" : "LINKEDIN",
+      status,
+      provider: "ZERNIO",
+      providerProfileId: input.profile.zernioProfileId,
+      providerAccountId: account?.accountId ?? null,
+      username,
+      displayName: account?.displayName ?? null,
+      accountType: accountTypeLabel(account, platform),
+      connectedAt: account?.connectedAt ?? null,
+      lastSyncAt,
+      health: status,
+      connected: status === "CONNECTED",
+    };
+  };
+
+  return { instagram: build("instagram"), linkedin: build("linkedin") };
+}
+
 export async function syncZernioConnectedAccounts(organisationId: string): Promise<{
   ok: boolean;
   accounts: ZernioConnectedAccount[];
   error?: string;
+  source?: string;
 }> {
   if (!isZernioConfigured()) {
     return { ok: false, accounts: [], error: "Zernio not configured" };
@@ -403,34 +536,139 @@ export async function syncZernioConnectedAccounts(organisationId: string): Promi
     return { ok: false, accounts: [], error: "Zernio profile not linked" };
   }
 
-  const res = await zernioFetch(`/profiles/${local.zernioProfileId}/accounts`, {
+  // Official list endpoint (authoritative). Profile-nested paths are fallbacks only.
+  const listRes = await zernioFetch(
+    `/accounts?profileId=${encodeURIComponent(local.zernioProfileId)}`,
+    {
+      method: "GET",
+      organisationId,
+      capability: "CONNECT_ACCOUNT",
+    },
+  );
+
+  if (listRes.ok) {
+    const data = (listRes.json.data || listRes.json) as Record<string, unknown> | unknown[];
+    const raw = (
+      Array.isArray(data)
+        ? data
+        : (data as Record<string, unknown>).accounts ||
+          (data as Record<string, unknown>).items ||
+          []
+    ) as unknown[];
+    const accounts = normalizeAccounts(raw);
+    await persistAccounts(organisationId, accounts);
+    return { ok: true, accounts, source: "accounts_list" };
+  }
+
+  const nestedRes = await zernioFetch(`/profiles/${local.zernioProfileId}/accounts`, {
     method: "GET",
     organisationId,
     capability: "CONNECT_ACCOUNT",
   });
+  if (nestedRes.ok) {
+    const data = (nestedRes.json.data || nestedRes.json) as Record<string, unknown> | unknown[];
+    const raw = (
+      Array.isArray(data)
+        ? data
+        : (data as Record<string, unknown>).accounts ||
+          (data as Record<string, unknown>).items ||
+          []
+    ) as unknown[];
+    const accounts = normalizeAccounts(raw);
+    await persistAccounts(organisationId, accounts);
+    return { ok: true, accounts, source: "profile_accounts" };
+  }
 
-  if (!res.ok) {
-    // Fallback: some API shapes list accounts under profile get
-    const profileRes = await zernioFetch(`/profiles/${local.zernioProfileId}`, {
-      method: "GET",
-      organisationId,
-      capability: "CONNECT_ACCOUNT",
-    });
-    if (!profileRes.ok) {
-      return { ok: false, accounts: [], error: `Account sync failed (${res.status})` };
-    }
+  const profileRes = await zernioFetch(`/profiles/${local.zernioProfileId}`, {
+    method: "GET",
+    organisationId,
+    capability: "CONNECT_ACCOUNT",
+  });
+  if (profileRes.ok) {
     const pdata = (profileRes.json.data || profileRes.json) as Record<string, unknown>;
     const raw = (pdata.accounts || pdata.socialAccounts || []) as unknown[];
     const accounts = normalizeAccounts(raw);
     await persistAccounts(organisationId, accounts);
-    return { ok: true, accounts };
+    return { ok: true, accounts, source: "profile_get" };
   }
 
-  const data = (res.json.data || res.json) as Record<string, unknown>;
-  const raw = (Array.isArray(data) ? data : data.accounts || data.items || []) as unknown[];
-  const accounts = normalizeAccounts(raw);
-  await persistAccounts(organisationId, accounts);
-  return { ok: true, accounts };
+  await prisma.zernioProfile.update({
+    where: { organisationId },
+    data: {
+      status: local.status === "CONNECTING" ? "DEGRADED" : local.status,
+      lastError: `Account sync failed (${listRes.status}/${nestedRes.status})`,
+      lastSyncAt: new Date(),
+    },
+  });
+  return {
+    ok: false,
+    accounts: [],
+    error: `Account sync failed (${listRes.status})`,
+  };
+}
+
+/** Bounded retries for post-OAuth / webhook races (provider eventual consistency). */
+export async function syncZernioConnectedAccountsWithRetry(
+  organisationId: string,
+  opts?: { attempts?: number; delayMs?: number; requireConnected?: boolean },
+): Promise<{
+  ok: boolean;
+  accounts: ZernioConnectedAccount[];
+  error?: string;
+  attempts: number;
+}> {
+  const attempts = Math.min(Math.max(opts?.attempts ?? 3, 1), 5);
+  const delayMs = Math.min(Math.max(opts?.delayMs ?? 700, 200), 3000);
+  const requireConnected = opts?.requireConnected === true;
+  let last: { ok: boolean; accounts: ZernioConnectedAccount[]; error?: string } = {
+    ok: false,
+    accounts: [],
+  };
+  for (let i = 0; i < attempts; i++) {
+    last = await syncZernioConnectedAccounts(organisationId);
+    if (last.ok) {
+      if (!requireConnected || last.accounts.some(isActivelyConnectedAccount)) {
+        return { ...last, attempts: i + 1 };
+      }
+    }
+    if (i < attempts - 1) await sleep(delayMs);
+  }
+  return { ...last, attempts };
+}
+
+/**
+ * Heal empty/stale local state from provider truth — rate-limited, never infinite poll.
+ */
+export async function maybeHealZernioAccountState(organisationId: string): Promise<{
+  healed: boolean;
+  profile: Awaited<ReturnType<typeof getOrCreateZernioProfile>>;
+}> {
+  let profile = await getOrCreateZernioProfile(organisationId);
+  if (!isZernioConfigured() || !profile.zernioProfileId) {
+    return { healed: false, profile };
+  }
+  const accounts = Array.isArray(profile.connectedAccounts)
+    ? (profile.connectedAccounts as ZernioConnectedAccount[])
+    : [];
+  const staleMs = 12_000;
+  const lastSyncAge = profile.lastSyncAt ? Date.now() - profile.lastSyncAt.getTime() : Infinity;
+  const shouldHeal =
+    profile.status === "CONNECTING" ||
+    profile.status === "DEGRADED" ||
+    (accounts.length === 0 &&
+      profile.status !== "DISCONNECTED" &&
+      profile.status !== "NOT_CONFIGURED" &&
+      lastSyncAge > staleMs);
+
+  if (!shouldHeal) return { healed: false, profile };
+
+  await syncZernioConnectedAccountsWithRetry(organisationId, {
+    attempts: 2,
+    delayMs: 500,
+    requireConnected: true,
+  });
+  profile = await getOrCreateZernioProfile(organisationId);
+  return { healed: true, profile };
 }
 
 function normalizeAccounts(raw: unknown[]): ZernioConnectedAccount[] {
@@ -440,27 +678,57 @@ function normalizeAccounts(raw: unknown[]): ZernioConnectedAccount[] {
       const o = item as Record<string, unknown>;
       const accountId = String(o._id || o.id || o.accountId || "");
       if (!accountId) return null;
+      const usernameRaw =
+        typeof o.username === "string"
+          ? o.username
+          : typeof o.handle === "string"
+            ? o.handle
+            : undefined;
+      let status = typeof o.status === "string" ? o.status : undefined;
+      if (!status && typeof o.isActive === "boolean") {
+        status = o.isActive ? "connected" : "disconnected";
+      }
       return {
         accountId,
-        platform: String(o.platform || o.type || "unknown").toLowerCase(),
-        displayName: typeof o.displayName === "string" ? o.displayName : undefined,
-        username: typeof o.username === "string" ? o.username : undefined,
-        authMode: typeof o.authMode === "string" ? o.authMode : undefined,
-        status: typeof o.status === "string" ? o.status : "connected",
-        connectedAt: typeof o.connectedAt === "string" ? o.connectedAt : undefined,
+        platform: String(o.platform || o.type || o.network || "unknown").toLowerCase(),
+        displayName:
+          typeof o.displayName === "string"
+            ? o.displayName
+            : typeof o.name === "string"
+              ? o.name
+              : undefined,
+        username: usernameRaw ? usernameRaw.replace(/^@/, "") : undefined,
+        authMode:
+          typeof o.authMode === "string"
+            ? o.authMode
+            : typeof o.accountType === "string"
+              ? o.accountType
+              : undefined,
+        status: status || "connected",
+        connectedAt:
+          typeof o.connectedAt === "string"
+            ? o.connectedAt
+            : typeof o.createdAt === "string"
+              ? o.createdAt
+              : undefined,
       } satisfies ZernioConnectedAccount;
     })
     .filter(Boolean) as ZernioConnectedAccount[];
 }
 
 async function persistAccounts(organisationId: string, accounts: ZernioConnectedAccount[]) {
-  const hasIg = accounts.some((a) => a.platform.includes("instagram"));
-  const hasLi = accounts.some((a) => a.platform.includes("linkedin"));
+  const hasIg = accounts.some(
+    (a) => accountMatchesPlatform(a, "instagram") && isActivelyConnectedAccount(a),
+  );
+  const hasLi = accounts.some(
+    (a) => accountMatchesPlatform(a, "linkedin") && isActivelyConnectedAccount(a),
+  );
+  const status = hasIg || hasLi ? "CONNECTED" : "CONFIGURED";
   await prisma.zernioProfile.update({
     where: { organisationId },
     data: {
       connectedAccounts: accounts,
-      status: accounts.length ? "CONNECTED" : "CONFIGURED",
+      status,
       lastSyncAt: new Date(),
       lastError: null,
       metadata: {
@@ -479,6 +747,7 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
 /**
  * Upsert Integration + MessagingChannel rows for Instagram accounts so inbox
  * ingestion and outbound routing stay tenant-scoped.
+ * Disconnect deactivates channels — never deletes CRM history.
  */
 export async function ensureZernioMessagingBindings(
   organisationId: string,
@@ -486,6 +755,10 @@ export async function ensureZernioMessagingBindings(
 ) {
   const { IntegrationType } = await import("@prisma/client");
   const { MESSAGING_PROVIDER } = await import("@/services/messaging/providers");
+
+  const activeIg = accounts.filter(
+    (a) => accountMatchesPlatform(a, "instagram") && isActivelyConnectedAccount(a),
+  );
 
   await prisma.integration.upsert({
     where: {
@@ -499,14 +772,15 @@ export async function ensureZernioMessagingBindings(
       organisationId,
       type: IntegrationType.ZERNIO,
       name: "default",
-      isActive: accounts.length > 0,
+      isActive: accounts.some(isActivelyConnectedAccount),
       config: { provider: "ZERNIO" },
     },
-    update: { isActive: accounts.length > 0 },
+    update: { isActive: accounts.some(isActivelyConnectedAccount) },
   });
 
-  for (const account of accounts) {
-    if (!account.platform.includes("instagram")) continue;
+  const activeIds: string[] = [];
+  for (const account of activeIg) {
+    activeIds.push(account.accountId);
     await prisma.messagingChannel.upsert({
       where: {
         organisationId_provider_externalId: {
@@ -519,7 +793,7 @@ export async function ensureZernioMessagingBindings(
         organisationId,
         provider: MESSAGING_PROVIDER.ZERNIO,
         externalId: account.accountId,
-        displayName: account.displayName || account.username || "Instagram (Zernio)",
+        displayName: account.displayName || account.username || "Instagram",
         instagramUsername: account.username || null,
         isActive: true,
       },
@@ -530,6 +804,161 @@ export async function ensureZernioMessagingBindings(
       },
     });
   }
+
+  await prisma.messagingChannel.updateMany({
+    where: {
+      organisationId,
+      provider: MESSAGING_PROVIDER.ZERNIO,
+      ...(activeIds.length ? { externalId: { notIn: activeIds } } : {}),
+    },
+    data: { isActive: false },
+  });
+}
+
+/**
+ * Disconnect one network via Zernio DELETE /accounts/{accountId}.
+ * Resolves account server-side from org-scoped ZernioProfile — never trusts browser ownership.
+ */
+export async function disconnectZernioPlatformAccount(input: {
+  organisationId: string;
+  platform: ZernioConnectPlatform;
+  userId?: string | null;
+}): Promise<{
+  ok: boolean;
+  code?: string;
+  error?: string;
+  network?: ZernioCanonicalNetwork;
+  remote?: "disconnected" | "already_disconnected" | "unknown";
+}> {
+  if (!isZernioConfigured()) {
+    return { ok: false, code: "ZERNIO_NOT_CONFIGURED", error: "Zernio is not configured" };
+  }
+
+  const profile = await getOrCreateZernioProfile(input.organisationId);
+  const accounts = Array.isArray(profile.connectedAccounts)
+    ? ([...profile.connectedAccounts] as ZernioConnectedAccount[])
+    : [];
+  const target = pickPrimaryAccount(accounts, input.platform);
+  if (!target?.accountId) {
+    // Idempotent local success when already empty for this network
+    const networks = buildCanonicalZernioNetworks({ profile });
+    return {
+      ok: true,
+      remote: "already_disconnected",
+      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+    };
+  }
+
+  const res = await zernioFetch(`/accounts/${encodeURIComponent(target.accountId)}`, {
+    method: "DELETE",
+    organisationId: input.organisationId,
+    capability: "CONNECT_ACCOUNT",
+    network: input.platform.toUpperCase(),
+  });
+
+  if (res.status === 404) {
+    const remaining = accounts.filter((a) => a.accountId !== target.accountId);
+    await persistAccounts(input.organisationId, remaining);
+    const { writeAuditLog } = await import("@/services/audit");
+    await writeAuditLog({
+      organisationId: input.organisationId,
+      userId: input.userId,
+      action: "zernio.account.disconnect",
+      entityType: "ZernioProfile",
+      entityId: profile.id,
+      metadata: {
+        platform: input.platform,
+        accountId: target.accountId,
+        remote: "already_disconnected",
+      },
+    });
+    await prisma.$transaction(async (tx) => {
+      const { appendDomainEvent } = await import("@/services/domain-events/append");
+      await appendDomainEvent(tx, {
+        organisationId: input.organisationId,
+        eventType: "INTEGRATION_DISCONNECTED",
+        aggregateType: "ZernioProfile",
+        aggregateId: input.organisationId,
+        payload: {
+          organisationId: input.organisationId,
+          providerKey: "ZERNIO",
+          connectionRef: `${input.platform}:${target.accountId}`,
+        },
+        dedupeKey: `zernio:disconnect:${input.organisationId}:${input.platform}:${target.accountId}:${Date.now()}`,
+      });
+    });
+    const refreshed = await getOrCreateZernioProfile(input.organisationId);
+    const networks = buildCanonicalZernioNetworks({ profile: refreshed });
+    return {
+      ok: true,
+      remote: "already_disconnected",
+      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+    };
+  }
+
+  if (!res.ok) {
+    await prisma.zernioProfile.update({
+      where: { organisationId: input.organisationId },
+      data: {
+        status: "DEGRADED",
+        lastError: `Disconnect remote unknown (${res.status})`,
+        lastSyncAt: new Date(),
+      },
+    });
+    // Bounded resync — do not claim DISCONNECTED without provider confirmation
+    await syncZernioConnectedAccounts(input.organisationId).catch(() => undefined);
+    const refreshed = await getOrCreateZernioProfile(input.organisationId);
+    const networks = buildCanonicalZernioNetworks({ profile: refreshed });
+    return {
+      ok: false,
+      code: "RECONCILIATION_REQUIRED",
+      error: "Provider disconnect outcome unknown — status not marked disconnected",
+      remote: "unknown",
+      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+    };
+  }
+
+  const remaining = accounts.filter((a) => a.accountId !== target.accountId);
+  await persistAccounts(input.organisationId, remaining);
+  // Confirm against provider truth
+  await syncZernioConnectedAccounts(input.organisationId).catch(() => undefined);
+
+  const { writeAuditLog } = await import("@/services/audit");
+  await writeAuditLog({
+    organisationId: input.organisationId,
+    userId: input.userId,
+    action: "zernio.account.disconnect",
+    entityType: "ZernioProfile",
+    entityId: profile.id,
+    metadata: {
+      platform: input.platform,
+      accountId: target.accountId,
+      remote: "disconnected",
+    },
+  });
+  await prisma.$transaction(async (tx) => {
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "INTEGRATION_DISCONNECTED",
+      aggregateType: "ZernioProfile",
+      aggregateId: input.organisationId,
+      payload: {
+        organisationId: input.organisationId,
+        providerKey: "ZERNIO",
+        connectionRef: `${input.platform}:${target.accountId}`,
+      },
+      dedupeKey: `zernio:disconnect:${input.organisationId}:${input.platform}:${target.accountId}:${Date.now()}`,
+    });
+  });
+
+  const refreshed = await getOrCreateZernioProfile(input.organisationId);
+  const networks = buildCanonicalZernioNetworks({ profile: refreshed });
+  return {
+    ok: true,
+    remote: "disconnected",
+    network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+  };
 }
 
 export async function publishViaZernio(input: {

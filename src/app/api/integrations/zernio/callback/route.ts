@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server";
 import { requireSession } from "@/lib/session";
-import { syncZernioConnectedAccounts, verifyZernioConnectState } from "@/adapters/zernio";
+import {
+  buildCanonicalZernioNetworks,
+  getOrCreateZernioProfile,
+  syncZernioConnectedAccountsWithRetry,
+  verifyZernioConnectState,
+} from "@/adapters/zernio";
 import { logger } from "@/lib/logger";
 
 /**
@@ -10,9 +15,9 @@ import { logger } from "@/lib/logger";
  * - GET /api/integrations/zernio/callback?state=...
  *
  * Contract:
- * 1. Session org must match signed `state` (HMAC + expiry) — prevents cross-org profile assignment
- * 2. Sync connected accounts into that org's ZernioProfile only
- * 3. Never expose ZERNIO_API_KEY
+ * 1. Session org must match signed `state` (HMAC + expiry)
+ * 2. Bounded sync of connected accounts into that org's ZernioProfile only
+ * 3. Redirect with deterministic success / sync-needed state for UI revalidation
  */
 export async function GET(req: NextRequest) {
   const destBase = new URL("/integrations", req.nextUrl.origin);
@@ -29,19 +34,45 @@ export async function GET(req: NextRequest) {
       return Response.redirect(destBase);
     }
 
-    await syncZernioConnectedAccounts(session.organisationId).catch((error) => {
-      logger.warn("Zernio callback sync soft-failed", {
-        message: error instanceof Error ? error.message : "unknown",
-        organisationId: session.organisationId,
-      });
-    });
-
-    const error = req.nextUrl.searchParams.get("error");
-    if (error) {
-      destBase.searchParams.set("social_error", error);
-    } else {
-      destBase.searchParams.set("social_connected", "1");
+    const oauthError = req.nextUrl.searchParams.get("error");
+    if (oauthError) {
+      destBase.searchParams.set("social_error", oauthError);
+      return Response.redirect(destBase);
     }
+
+    const sync = await syncZernioConnectedAccountsWithRetry(session.organisationId, {
+      attempts: 3,
+      delayMs: 800,
+      requireConnected: true,
+    });
+    const profile = await getOrCreateZernioProfile(session.organisationId);
+    const networks = buildCanonicalZernioNetworks({ profile });
+
+    const connectedNetworks = [
+      networks.instagram.connected ? "instagram" : null,
+      networks.linkedin.connected ? "linkedin" : null,
+    ].filter(Boolean);
+
+    if (connectedNetworks.length > 0) {
+      destBase.searchParams.set("social_connected", connectedNetworks.join(","));
+      destBase.searchParams.set("social_status", "CONNECTED");
+    } else if (!sync.ok) {
+      destBase.searchParams.set("social_sync", "needed");
+      destBase.searchParams.set("social_status", "DEGRADED");
+      destBase.searchParams.set(
+        "social_error",
+        sync.error || "Connected with provider but local sync failed — retrying on page load",
+      );
+      logger.warn("Zernio callback sync failed after OAuth", {
+        organisationId: session.organisationId,
+        error: sync.error,
+      });
+    } else {
+      // Provider eventual consistency — UI will bounded-resync
+      destBase.searchParams.set("social_sync", "needed");
+      destBase.searchParams.set("social_status", "CONNECTING");
+    }
+
     return Response.redirect(destBase);
   } catch {
     const dest = new URL("/login", req.nextUrl.origin);

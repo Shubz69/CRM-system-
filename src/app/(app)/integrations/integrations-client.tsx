@@ -151,12 +151,30 @@ export default function IntegrationsClient() {
   const [socialAccounts, setSocialAccounts] = useState<{
     serverConfigured?: boolean;
     status?: string;
+    healed?: boolean;
     networks?: {
-      instagram?: { connected?: boolean; requiresFacebookPage?: boolean };
-      linkedin?: { connected?: boolean; dmCapability?: string };
+      instagram?: {
+        connected?: boolean;
+        status?: string;
+        username?: string | null;
+        displayName?: string | null;
+        accountType?: string | null;
+        health?: string;
+        requiresFacebookPage?: boolean;
+      };
+      linkedin?: {
+        connected?: boolean;
+        status?: string;
+        username?: string | null;
+        displayName?: string | null;
+        accountType?: string | null;
+        health?: string;
+        dmCapability?: string;
+      };
     };
-    connectedAccounts?: Array<{ platform?: string; displayName?: string }>;
+    connectedAccounts?: Array<{ platform?: string; displayName?: string; username?: string }>;
   } | null>(null);
+  const [disconnectConfirm, setDisconnectConfirm] = useState<"instagram" | "linkedin" | null>(null);
   const [metaTestContactId, setMetaTestContactId] = useState("");
   const [metaTestConversationId, setMetaTestConversationId] = useState("");
   const [metaTestText, setMetaTestText] = useState("");
@@ -305,28 +323,58 @@ export default function IntegrationsClient() {
     }
   }, [loading, searchParams, focusManyChatSetup]);
 
-  // /api/social/[platform]/callback and Meta Instagram OAuth redirect here —
-  // surface once, then strip from the URL so a refresh doesn't repeat it.
+  // /api/social/[platform]/callback, Zernio OAuth, and Meta Instagram OAuth redirect here —
+  // surface once, force social revalidation, then strip from the URL so a refresh doesn't repeat it.
   useEffect(() => {
     const connected = searchParams.get("social_connected");
     const error = searchParams.get("social_error");
+    const socialSync = searchParams.get("social_sync");
+    const socialStatus = searchParams.get("social_status");
     const metaStatus = searchParams.get("meta_instagram");
     const metaError = searchParams.get("meta_instagram_error");
-    if (!connected && !error && !metaStatus) return;
-    if (connected) toast.success(`${connected} connected`);
-    if (error) toast.error(error);
-    if (metaStatus === "connected") toast.success("Instagram messaging connected");
-    else if (metaStatus === "incomplete")
-      toast.error(metaError || "Instagram connected but setup is incomplete");
-    else if (metaStatus === "not_configured")
-      toast.error("Meta Instagram app is not configured on the server");
-    else if (metaStatus === "denied") toast.error(metaError || "Instagram connection denied");
-    else if (metaStatus === "error") toast.error(metaError || "Instagram connection failed");
-    if (metaStatus === "connected" || metaStatus === "incomplete") {
-      void loadMetaInstagram();
-    }
-    router.replace("/integrations");
-  }, [searchParams, router, loadMetaInstagram]);
+    if (!connected && !error && !metaStatus && !socialSync) return;
+
+    void (async () => {
+      if (connected || socialSync === "needed") {
+        try {
+          await fetch("/api/integrations/zernio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "sync" }),
+          });
+        } catch {
+          /* bounded sync best-effort */
+        }
+        await loadSocialAccounts();
+      }
+      if (connected) {
+        const label = connected
+          .split(",")
+          .map((p) => (p === "instagram" ? "Instagram" : p === "linkedin" ? "LinkedIn" : p))
+          .join(" & ");
+        toast.success(`${label} connected`);
+      } else if (socialSync === "needed") {
+        if (socialStatus === "DEGRADED") {
+          toast.error(error || "Account linked but sync needs attention — status refreshed");
+        } else {
+          toast.message("Finishing account sync…");
+        }
+      } else if (error) {
+        toast.error(error);
+      }
+      if (metaStatus === "connected") toast.success("Instagram messaging connected");
+      else if (metaStatus === "incomplete")
+        toast.error(metaError || "Instagram connected but setup is incomplete");
+      else if (metaStatus === "not_configured")
+        toast.error("Meta Instagram app is not configured on the server");
+      else if (metaStatus === "denied") toast.error(metaError || "Instagram connection denied");
+      else if (metaStatus === "error") toast.error(metaError || "Instagram connection failed");
+      if (metaStatus === "connected" || metaStatus === "incomplete") {
+        void loadMetaInstagram();
+      }
+      router.replace("/integrations");
+    })();
+  }, [searchParams, router, loadMetaInstagram, loadSocialAccounts]);
 
   async function disconnectSocial(id: string) {
     setDisconnectingId(id);
@@ -603,89 +651,160 @@ export default function IntegrationsClient() {
               Connect Instagram (Business/Creator — Instagram Login, no Facebook Page required) and
               LinkedIn for publishing and analytics. Prospect outreach stays Open + Copy.
             </p>
-            <div className="mt-3 space-y-2 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>
-                  Instagram{" "}
-                  {socialAccounts?.networks?.instagram?.connected ? (
-                    <span className="badge badge-success">Connected</span>
-                  ) : (
-                    <span className="badge">Not connected</span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-secondary text-xs"
-                  disabled={busy || !socialAccounts?.serverConfigured}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      const res = await fetch("/api/integrations/zernio", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ action: "connect", platform: "instagram" }),
-                      });
-                      const json = await res.json();
-                      if (!res.ok) throw new Error(json.error || "Could not start Instagram connect");
-                      if (json.url) {
-                        window.location.href = json.url;
-                        return;
-                      }
-                      toast.success("Connect ready");
-                      await loadSocialAccounts();
-                    } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Connect failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Connect
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>
-                  LinkedIn{" "}
-                  {socialAccounts?.networks?.linkedin?.connected ? (
-                    <span className="badge badge-success">Connected</span>
-                  ) : (
-                    <span className="badge">Not connected</span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-secondary text-xs"
-                  disabled={busy || !socialAccounts?.serverConfigured}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      const res = await fetch("/api/integrations/zernio", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ action: "connect", platform: "linkedin" }),
-                      });
-                      const json = await res.json();
-                      if (!res.ok) throw new Error(json.error || "Could not start LinkedIn connect");
-                      if (json.url) {
-                        window.location.href = json.url;
-                        return;
-                      }
-                      toast.success("Connect ready");
-                      await loadSocialAccounts();
-                    } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Connect failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Connect
-                </button>
-              </div>
+            <div className="mt-3 space-y-3 text-sm">
+              {(["instagram", "linkedin"] as const).map((platform) => {
+                const net =
+                  platform === "instagram"
+                    ? socialAccounts?.networks?.instagram
+                    : socialAccounts?.networks?.linkedin;
+                const label = platform === "instagram" ? "Instagram" : "LinkedIn";
+                const status = net?.status || (net?.connected ? "CONNECTED" : "DISCONNECTED");
+                const connected = status === "CONNECTED";
+                const degraded = status === "DEGRADED" || status === "REAUTH_REQUIRED" || status === "CONNECTING";
+                const identity =
+                  platform === "instagram"
+                    ? net?.username
+                      ? `@${net.username.replace(/^@/, "")}`
+                      : net?.displayName || null
+                    : net?.displayName || (net?.username ? net.username : null);
+                const typeHint = net?.accountType;
+                return (
+                  <div key={platform} className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>{label}</span>
+                        {connected ? (
+                          <span className="badge badge-success">Connected</span>
+                        ) : degraded ? (
+                          <span className="badge">{status.replace(/_/g, " ")}</span>
+                        ) : (
+                          <span className="badge">Not connected</span>
+                        )}
+                      </div>
+                      {identity ? (
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          {identity}
+                          {typeHint ? ` · ${typeHint}` : ""}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {connected || status === "REAUTH_REQUIRED" ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary text-xs"
+                          disabled={busy || !socialAccounts?.serverConfigured}
+                          onClick={() => setDisconnectConfirm(platform)}
+                        >
+                          Disconnect
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-secondary text-xs"
+                          disabled={busy || !socialAccounts?.serverConfigured}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              const res = await fetch("/api/integrations/zernio", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "connect", platform }),
+                              });
+                              const json = await res.json();
+                              if (!res.ok) throw new Error(json.error || `Could not start ${label} connect`);
+                              if (json.url) {
+                                window.location.href = json.url;
+                                return;
+                              }
+                              toast.success("Connect ready");
+                              await loadSocialAccounts();
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : "Connect failed");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          Connect
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               {!socialAccounts?.serverConfigured ? (
                 <p className="text-xs text-[var(--muted)]">Social account linking is not configured on this server.</p>
               ) : null}
             </div>
+            {disconnectConfirm ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-lg"
+                >
+                  <p className="text-lg font-medium">
+                    Disconnect {disconnectConfirm === "instagram" ? "Instagram" : "LinkedIn"}?
+                  </p>
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    This stops Agent Desk from publishing, receiving new provider messages, and accessing
+                    this account until you reconnect. Existing CRM history and previous conversations will
+                    remain.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary text-xs"
+                      disabled={busy}
+                      onClick={() => setDisconnectConfirm(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary text-xs"
+                      disabled={busy}
+                      onClick={async () => {
+                        const platform = disconnectConfirm;
+                        setBusy(true);
+                        try {
+                          const res = await fetch("/api/integrations/zernio", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "disconnect", platform }),
+                          });
+                          const json = await res.json();
+                          if (!res.ok) {
+                            if (json.code === "RECONCILIATION_REQUIRED") {
+                              toast.error(
+                                json.error ||
+                                  "Disconnect could not be confirmed with the provider — status not changed to disconnected",
+                              );
+                              await loadSocialAccounts();
+                              setDisconnectConfirm(null);
+                              return;
+                            }
+                            throw new Error(json.error || "Disconnect failed");
+                          }
+                          toast.success(
+                            `${platform === "instagram" ? "Instagram" : "LinkedIn"} disconnected`,
+                          );
+                          setDisconnectConfirm(null);
+                          await loadSocialAccounts();
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : "Disconnect failed");
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Disconnect account
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
           {ayrshare?.serverConfigured || ayrshare?.configured ? (
             <div className="rounded-xl border border-[var(--border)] p-4">

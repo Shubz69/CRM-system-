@@ -12,7 +12,7 @@ import {
   assertZernioWebhookConfigured,
   isZernioWebhookConfigured,
   resolveZernioWebhookTenant,
-  syncZernioConnectedAccounts,
+  syncZernioConnectedAccountsWithRetry,
   verifyZernioWebhookSignature,
   type ZernioConnectedAccount,
 } from "@/adapters/zernio";
@@ -200,44 +200,59 @@ export async function POST(req: NextRequest) {
     }
 
     if (eventType === "account.connected" || eventType === "account.disconnected") {
-      await syncZernioConnectedAccounts(organisationId).catch(async () => {
+      const sync = await syncZernioConnectedAccountsWithRetry(organisationId, {
+        attempts: eventType === "account.connected" ? 3 : 1,
+        delayMs: 600,
+        requireConnected: eventType === "account.connected",
+      }).catch(async () => null);
+
+      if (!sync?.ok) {
         const profile = await prisma.zernioProfile.findUnique({ where: { organisationId } });
-        if (!profile) return;
-        const accounts = Array.isArray(profile.connectedAccounts)
-          ? ([...profile.connectedAccounts] as ZernioConnectedAccount[])
-          : [];
-        if (eventType === "account.connected" && accountId) {
-          if (!accounts.some((a) => a.accountId === accountId)) {
-            accounts.push({
-              accountId,
-              platform: String(payload.platform || account.platform || "unknown"),
-              status: "connected",
+        if (profile) {
+          const accounts = Array.isArray(profile.connectedAccounts)
+            ? ([...profile.connectedAccounts] as ZernioConnectedAccount[])
+            : [];
+          if (eventType === "account.connected" && accountId) {
+            if (!accounts.some((a) => a.accountId === accountId)) {
+              accounts.push({
+                accountId,
+                platform: String(payload.platform || account.platform || "unknown").toLowerCase(),
+                status: "connected",
+                username:
+                  typeof account.username === "string" ? account.username.replace(/^@/, "") : undefined,
+                displayName:
+                  typeof account.displayName === "string" ? account.displayName : undefined,
+              });
+            }
+            const { ensureZernioMessagingBindings } = await import("@/adapters/zernio");
+            await prisma.zernioProfile.update({
+              where: { organisationId },
+              data: {
+                connectedAccounts: accounts,
+                status: "CONNECTED",
+                lastSyncAt: new Date(),
+                lastError: null,
+              },
             });
+            await ensureZernioMessagingBindings(organisationId, accounts);
           }
-          const { ensureZernioMessagingBindings } = await import("@/adapters/zernio");
-          await prisma.zernioProfile.update({
-            where: { organisationId },
-            data: {
-              connectedAccounts: accounts,
-              status: "CONNECTED",
-              lastSyncAt: new Date(),
-              lastError: null,
-            },
-          });
-          await ensureZernioMessagingBindings(organisationId, accounts);
+          if (eventType === "account.disconnected" && accountId) {
+            const next = accounts.filter((a) => a.accountId !== accountId);
+            const { ensureZernioMessagingBindings } = await import("@/adapters/zernio");
+            await prisma.zernioProfile.update({
+              where: { organisationId },
+              data: {
+                connectedAccounts: next,
+                status: next.some((a) => String(a.status || "connected").toLowerCase() !== "disconnected")
+                  ? "CONNECTED"
+                  : "DISCONNECTED",
+                lastSyncAt: new Date(),
+              },
+            });
+            await ensureZernioMessagingBindings(organisationId, next);
+          }
         }
-        if (eventType === "account.disconnected" && accountId) {
-          const next = accounts.filter((a) => a.accountId !== accountId);
-          await prisma.zernioProfile.update({
-            where: { organisationId },
-            data: {
-              connectedAccounts: next,
-              status: next.length ? "CONNECTED" : "DISCONNECTED",
-              lastSyncAt: new Date(),
-            },
-          });
-        }
-      });
+      }
 
       await prisma.$transaction(async (tx) => {
         await appendDomainEvent(tx, {
@@ -256,7 +271,7 @@ export async function POST(req: NextRequest) {
       });
 
       await markWebhook(eventId, { status: WebhookProcessingStatus.PROCESSED });
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, synced: Boolean(sync?.ok) });
     }
 
     const coverage = await handleZernioCoverageEvent({

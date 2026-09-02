@@ -39,6 +39,19 @@ const prismaMocks = vi.hoisted(() => ({
   socialMetricFact: {
     create: vi.fn(async (args: { data: Record<string, unknown> }) => args.data),
   },
+  integration: {
+    upsert: vi.fn(async (args: { create: Record<string, unknown> }) => ({
+      id: "int_1",
+      ...args.create,
+    })),
+  },
+  messagingChannel: {
+    upsert: vi.fn(async (args: { create: Record<string, unknown> }) => ({
+      id: "ch_1",
+      ...args.create,
+    })),
+    updateMany: vi.fn(async () => ({ count: 0 })),
+  },
   $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({})),
 }));
 
@@ -267,6 +280,9 @@ describe("Zernio webhook route idempotency", () => {
     prismaMocks.zernioProfile.findUnique.mockResolvedValue({
       organisationId: "org_1",
       zernioProfileId: "remote_p1",
+      status: "CONNECTING",
+      lastSyncAt: null,
+      lastError: null,
       connectedAccounts: [],
     });
     vi.stubGlobal(
@@ -274,7 +290,11 @@ describe("Zernio webhook route idempotency", () => {
       vi.fn(async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ accounts: [] }),
+        json: async () => ({
+          accounts: [
+            { _id: "acc_1", platform: "instagram", username: "ada", isActive: true },
+          ],
+        }),
       })),
     );
 
