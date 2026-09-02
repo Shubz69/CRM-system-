@@ -251,8 +251,11 @@ export function normalizeInstagramUrl(url?: string | null): string | undefined {
   const trimmed = url.trim();
   if (!/^https?:\/\/(www\.)?instagram\.com\//i.test(trimmed)) return undefined;
   const path = trimmed.split("?")[0].replace(/\/$/, "");
-  // Reject bare /p/ posts as profile identities
-  if (/instagram\.com\/(p|reel|tv)\//i.test(path)) return undefined;
+  // Reject posts, listicles, discovery pages — only /{handle} profiles qualify
+  if (/instagram\.com\/(p|reel|tv|popular|explore|directory|tags|locations?|stories)\//i.test(path)) {
+    return undefined;
+  }
+  if (/instagram\.com\/[^/]+\/.+/i.test(path)) return undefined;
   return path;
 }
 

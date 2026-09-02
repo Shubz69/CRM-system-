@@ -270,8 +270,16 @@ export function normalizeClaudeDecision(decision: ClaudeDecision): AiAnalysis {
       decision.booking,
       decision.handoff,
     ),
-    should_handover: Boolean(decision.handoff?.required) || decision.nextBestAction.action === "handoff",
-    handover_reason: decision.handoff?.reason ?? null,
+    should_handover:
+      Boolean(decision.handoff?.required) ||
+      decision.nextBestAction.action === "handoff" ||
+      decision.nextBestAction.action === "handover_to_human",
+    handover_reason:
+      decision.handoff?.reason ??
+      (decision.nextBestAction.action === "handoff" ||
+      decision.nextBestAction.action === "handover_to_human"
+        ? decision.nextBestAction.reason || "Lead requested a human"
+        : null),
     confidence: decision.confidence,
     reply: decision.reply,
     crm_updates: decision.crmUpdates,
@@ -294,7 +302,9 @@ export function parseAiAnalysis(input: unknown): {
   success: false;
   error: z.ZodError;
 } {
-  const rich = claudeDecisionSchema.safeParse(input);
+  const coerced = coerceAiAnalysisInput(input);
+
+  const rich = claudeDecisionSchema.safeParse(coerced);
   if (rich.success) {
     return {
       success: true,
@@ -303,16 +313,87 @@ export function parseAiAnalysis(input: unknown): {
     };
   }
 
-  const legacy = aiAnalysisSchema.safeParse(input);
+  const legacy = aiAnalysisSchema.safeParse(coerced);
   if (legacy.success) {
     return { success: true, data: legacy.data, format: "legacy" };
   }
 
   // Prefer richer error when input looks nested
-  if (input && typeof input === "object" && "nextBestAction" in (input as object)) {
+  if (coerced && typeof coerced === "object" && "nextBestAction" in (coerced as object)) {
     return { success: false, error: rich.error };
   }
   return { success: false, error: legacy.error };
+}
+
+/** Coerce common model drift into the expected structured contract before Zod. */
+export function coerceAiAnalysisInput(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const raw = { ...(input as Record<string, unknown>) };
+
+  // String intent → nested
+  if (typeof raw.intent === "string") {
+    raw.intent = { primary: raw.intent, confidence: 0.7 };
+  } else if (raw.intent && typeof raw.intent === "object") {
+    const intent = raw.intent as Record<string, unknown>;
+    if (!intent.primary && typeof intent.label === "string") intent.primary = intent.label;
+    if (typeof intent.confidence !== "number") intent.confidence = 0.7;
+  }
+
+  // String sentiment → nested
+  if (typeof raw.sentiment === "string") {
+    const label = ["positive", "neutral", "negative", "mixed"].includes(raw.sentiment)
+      ? raw.sentiment
+      : "neutral";
+    raw.sentiment = { label, confidence: 0.7 };
+  }
+
+  // Default qualification
+  if (!raw.qualification || typeof raw.qualification !== "object") {
+    raw.qualification = {
+      status: "unknown",
+      fieldsUpdated: {},
+      missingFields: [],
+      reason: null,
+      score: 50,
+    };
+  } else {
+    const q = raw.qualification as Record<string, unknown>;
+    if (!q.status) q.status = "unknown";
+    if (!q.fieldsUpdated || typeof q.fieldsUpdated !== "object") q.fieldsUpdated = {};
+    if (!Array.isArray(q.missingFields)) q.missingFields = [];
+  }
+
+  // Default / normalize nextBestAction
+  if (!raw.nextBestAction || typeof raw.nextBestAction !== "object") {
+    if (typeof raw.recommended_next_action === "string") {
+      raw.nextBestAction = { action: raw.recommended_next_action, reason: "" };
+    } else {
+      raw.nextBestAction = { action: "reply", reason: "" };
+    }
+  } else {
+    const nba = raw.nextBestAction as Record<string, unknown>;
+    if (typeof nba.action !== "string" || !nba.action) nba.action = "reply";
+    if (typeof nba.reason !== "string") nba.reason = "";
+  }
+
+  // Preserve legacy should_handover into nested handoff
+  if (raw.should_handover === true && (!raw.handoff || typeof raw.handoff !== "object")) {
+    raw.handoff = {
+      required: true,
+      reason: typeof raw.handover_reason === "string" ? raw.handover_reason : "Lead requested a human",
+      urgency: "normal",
+    };
+  }
+
+  if (typeof raw.confidence !== "number") raw.confidence = 0.7;
+  if (typeof raw.reply !== "string" || !raw.reply.trim()) {
+    // Cannot invent a reply — leave empty so Zod fails honestly
+  }
+  if (!Array.isArray(raw.questions)) raw.questions = [];
+  if (!Array.isArray(raw.objections)) raw.objections = [];
+  if (!raw.crmUpdates || typeof raw.crmUpdates !== "object") raw.crmUpdates = {};
+
+  return raw;
 }
 
 export const CLAUDE_DECISION_JSON_INSTRUCTIONS = `Return ONLY valid JSON matching this schema (preferred):

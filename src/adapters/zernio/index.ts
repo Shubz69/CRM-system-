@@ -24,7 +24,9 @@ export type ZernioConnectedAccount = {
 };
 
 export function isZernioConfigured(): boolean {
-  return Boolean(getEnv().ZERNIO_API_KEY?.trim());
+  // Prefer ZERNIO_API_KEY; accept legacy LATE_API_KEY if present (same provider lineage).
+  const env = getEnv();
+  return Boolean(env.ZERNIO_API_KEY?.trim() || process.env.LATE_API_KEY?.trim());
 }
 
 export function isZernioWebhookConfigured(): boolean {
@@ -200,7 +202,7 @@ export function getZernioNetworkHealth(profile: {
 
 function apiKey(): string {
   assertZernioConfigured();
-  return getEnv().ZERNIO_API_KEY!.trim();
+  return (getEnv().ZERNIO_API_KEY || process.env.LATE_API_KEY || "").trim();
 }
 
 async function zernioFetch(

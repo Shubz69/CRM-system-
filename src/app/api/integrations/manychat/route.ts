@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getEnv } from "@/lib/env";
 import { prisma } from "@/lib/db";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
   getOrganisationManyChatSecret,
@@ -25,7 +25,7 @@ function apiTokenStatusLabel(configured: boolean): "Configured" | "Not configure
 
 export async function GET() {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const env = getEnv();
     const appUrl = env.APP_URL || env.NEXTAUTH_URL || "http://localhost:3000";
 
@@ -229,7 +229,7 @@ async function validateManyChatConfiguration(organisationId: string): Promise<{
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const body = actionSchema.parse(await req.json());
 
     if (body.action === "regenerate_secret") {

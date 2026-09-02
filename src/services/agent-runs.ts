@@ -328,13 +328,14 @@ export async function clarifyAndEnqueueAgentRun(input: {
 
   const formatMode = answerModeFromFormatOption(input.selectedOption);
   const combined = `${run.request}\n\n[User chose: ${input.selectedOption}]`;
+  const preservedMode = formatMode ?? run.answerMode ?? null;
 
   await prisma.agentRun.updateMany({
     where: { id: run.id, organisationId: input.organisationId },
     data: {
       request: combined,
       status: "PENDING",
-      ...(formatMode ? { answerMode: formatMode } : {}),
+      answerMode: preservedMode,
       clarificationQuestion: null,
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,

@@ -96,8 +96,20 @@ export default function SocialProspectingPage() {
   }, []);
 
   useEffect(() => {
-    void load(null);
-  }, [load]);
+    void (async () => {
+      // Load latest active run only — never flatten all historical prospects on mount.
+      const res = await fetch("/api/social-prospecting?includeRuns=1");
+      if (!res.ok) {
+        setLoadError("Could not load prospects");
+        return;
+      }
+      const json = await res.json();
+      setProspects(json.prospects || []);
+      setLinkedIn(json.linkedIn || null);
+      if (json.previousRuns) setPreviousRuns(json.previousRuns);
+      if (json.activeRunId) setActiveRunId(json.activeRunId);
+    })();
+  }, []);
 
   async function discover() {
     if (!query.trim()) {
@@ -176,7 +188,7 @@ export default function SocialProspectingPage() {
       return;
     }
     toast.success("Added to CRM · Opportunity created");
-    await load();
+    await load(activeRunId);
   }
 
   async function prepareOutreach(id: string) {

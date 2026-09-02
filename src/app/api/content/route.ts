@@ -48,21 +48,26 @@ export async function GET() {
       }),
       listPublishTargets(session.organisationId),
     ]);
+    // Customer-safe publish targets — no provider vendor / raw external ids
+    const customerTargets = publishTargets.map((t) => ({
+      id: t.id,
+      platform: t.platform,
+      label: t.label,
+      status: t.status,
+      eligible: t.eligible,
+    }));
     return Response.json({
       opportunities,
       pieces,
       publishingJobs: jobs,
-      // Backward-compatible shape for Content OS UI (id/platform/displayName/status).
-      socialConnections: publishTargets.map((t) => ({
+      socialConnections: customerTargets.map((t) => ({
         id: t.id,
         platform: t.platform,
         displayName: t.label,
         status: t.status,
-        externalAccountId: t.externalAccountId,
-        provider: t.provider,
         eligible: t.eligible,
       })),
-      publishTargets,
+      publishTargets: customerTargets,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";

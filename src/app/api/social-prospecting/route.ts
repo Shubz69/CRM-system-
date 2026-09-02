@@ -36,15 +36,17 @@ export async function GET(req: NextRequest) {
     }
     const runId = req.nextUrl.searchParams.get("runId");
     const includeRuns = req.nextUrl.searchParams.get("includeRuns") === "1";
-    const prospects = await listSocialProspects(session.organisationId, {
-      searchRunId: runId,
-    });
     const previousRuns = includeRuns
       ? await listRecentSearchRuns(session.organisationId)
       : undefined;
+    const activeRunId = runId || previousRuns?.[0]?.searchRunId || null;
+    const prospects = await listSocialProspects(session.organisationId, {
+      searchRunId: activeRunId,
+      defaultToLatestRun: false,
+    });
     return Response.json({
       prospects,
-      activeRunId: runId || null,
+      activeRunId,
       previousRuns,
       linkedIn: linkedInV1ActionSurface(),
       linkedInV2: linkedInV2ActionSurface(),

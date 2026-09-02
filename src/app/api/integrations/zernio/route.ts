@@ -5,22 +5,15 @@ import {
   createZernioConnectUrl,
   disconnectZernioPlatformAccount,
   getOrCreateZernioProfile,
-  getZernioNetworkHealth,
   getZernioProfileView,
   isZernioConfigured,
-  isZernioWebhookConfigured,
   maybeHealZernioAccountState,
-  preferredProviderForCapability,
   syncZernioConnectedAccountsWithRetry,
   zernioInstagramMessagingCapability,
-  zernioLinkedInMessagingCapability,
-  zernioYouTubeMessagingCapability,
   type ZernioConnectPlatform,
   type ZernioConnectedAccount,
 } from "@/adapters/zernio";
-import { resolveProviderPlatformCapability } from "@/services/social-prospecting/capabilities";
 import { getEnv } from "@/lib/env";
-import { zernioColdInstagramOutreachMode } from "@/adapters/messaging/zernio";
 import { getSocialConnectionPolicy } from "@/services/social-connection-policy";
 
 function isConnectPlatform(value: unknown): value is ZernioConnectPlatform {
@@ -33,19 +26,39 @@ export async function GET() {
     const healed = await maybeHealZernioAccountState(session.organisationId);
     const profile = healed.profile;
     const view = await getZernioProfileView(session.organisationId);
-    const health = getZernioNetworkHealth(profile);
     const networks = buildCanonicalZernioNetworks({ profile });
     const policy = await getSocialConnectionPolicy(session.organisationId);
     const accounts = Array.isArray(profile.connectedAccounts)
       ? (profile.connectedAccounts as ZernioConnectedAccount[])
       : [];
+    const anyConnected = accounts.some((a) => {
+      const s = String(a.status || "connected").toLowerCase();
+      return !s.includes("disconnect") && s !== "revoked" && s !== "inactive";
+    });
+
+    const customerNetwork = (n: {
+      network: string;
+      status: string;
+      connected: boolean;
+      username?: string | null;
+      displayName?: string | null;
+      accountType?: string | null;
+      health?: string;
+    }) => ({
+      network: n.network,
+      status: n.status,
+      connected: n.connected,
+      username: n.username ?? null,
+      displayName: n.displayName ?? null,
+      accountType: n.accountType ?? null,
+      health: n.connected ? "CONNECTED" : "DISCONNECTED",
+    });
 
     return Response.json({
       ok: true,
-      serverConfigured: isZernioConfigured(),
-      webhookConfigured: isZernioWebhookConfigured(),
-      ...view,
-      health,
+      linkingAvailable: isZernioConfigured(),
+      status: view.status,
+      connected: anyConnected,
       healed: healed.healed,
       connectionPolicy: {
         socialConnectionsEnabled: policy.socialConnectionsEnabled,
@@ -58,55 +71,37 @@ export async function GET() {
       },
       networks: {
         instagram: {
-          ...networks.instagram,
-          requiresProfessionalAccount: true,
-          requiresFacebookPage: false,
-          connectMethod: "instagram_login",
-          messaging: zernioInstagramMessagingCapability(networks.instagram.connected),
-          coldOutreach: zernioColdInstagramOutreachMode(),
-          preferredProvider: preferredProviderForCapability({
-            network: "INSTAGRAM",
-            capability: "CONNECT_ACCOUNT",
-          }),
+          ...customerNetwork(networks.instagram),
+          messaging: {
+            directMessages: Boolean(
+              zernioInstagramMessagingCapability(networks.instagram.connected).directMessages,
+            ),
+          },
+          publishing: networks.instagram.connected,
         },
         linkedin: {
-          ...networks.linkedin,
-          messaging: zernioLinkedInMessagingCapability(),
-          outreach: "OPEN_COPY",
-          preferredProvider: preferredProviderForCapability({
-            network: "LINKEDIN",
-            capability: "CONNECT_ACCOUNT",
-          }),
-          dmCapability: resolveProviderPlatformCapability({
-            provider: "ZERNIO",
-            network: "LINKEDIN",
-            capability: "DIRECT_MESSAGES",
-          }),
+          ...customerNetwork(networks.linkedin),
+          messaging: { directMessages: false },
+          publishing: networks.linkedin.connected,
         },
         youtube: {
-          ...networks.youtube,
-          messaging: zernioYouTubeMessagingCapability(),
+          ...customerNetwork(networks.youtube),
+          messaging: { directMessages: false },
+          publishing: false,
           outreach: "OPEN_COPY",
-          preferredProvider: preferredProviderForCapability({
-            network: "YOUTUBE",
-            capability: "CONNECT_ACCOUNT",
-          }),
-          dmCapability: resolveProviderPlatformCapability({
-            provider: "ZERNIO",
-            network: "YOUTUBE",
-            capability: "DIRECT_MESSAGES",
-          }),
         },
       },
-      routes: {
-        profile: "GET/POST /api/integrations/zernio",
-        connectUrl: "POST /api/integrations/zernio { action: connect, platform }",
-        disconnect: "POST /api/integrations/zernio { action: disconnect, platform }",
-        callback: "GET /api/integrations/zernio/callback?state=",
-        sync: "POST /api/integrations/zernio { action: sync }",
-        webhook: "POST /api/webhooks/zernio",
-      },
-      providerId: "ZERNIO",
+      connectedAccounts: accounts
+        .filter((a) => {
+          const s = String(a.status || "connected").toLowerCase();
+          return !s.includes("disconnect") && s !== "revoked" && s !== "inactive";
+        })
+        .map((a) => ({
+          platform: a.platform,
+          username: a.username || null,
+          displayName: a.displayName || null,
+          status: a.status || "connected",
+        })),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
@@ -170,7 +165,6 @@ export async function POST(req: NextRequest) {
         {
           ...result,
           networks,
-          health: getZernioNetworkHealth(profile),
         },
         { status: result.ok ? 200 : 400 },
       );

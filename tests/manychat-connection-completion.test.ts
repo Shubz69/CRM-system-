@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   encryptSecret: vi.fn((v: string) => `enc:${v}`),
   writeAuditLog: vi.fn(),
   requirePermission: vi.fn(),
+  requirePlatformAccess: vi.fn(),
   getOrganisationManyChatSecret: vi.fn(),
   maskSecret: vi.fn((v: string | null | undefined) => (v ? "••••" : "not set")),
   regenerateOrganisationManyChatSecret: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock("@/lib/crypto", () => ({
 
 vi.mock("@/lib/session", () => ({
   requirePermission: (...args: unknown[]) => mocks.requirePermission(...args),
+  requirePlatformAccess: (...args: unknown[]) => mocks.requirePlatformAccess(...args),
   jsonError: (message: string, status: number) =>
     Response.json({ error: message }, { status }),
 }));
@@ -112,6 +114,12 @@ describe("ManyChat connection completion", () => {
     mocks.requirePermission.mockResolvedValue({
       organisationId: "org-a",
       userId: "user-a",
+    });
+    mocks.requirePlatformAccess.mockResolvedValue({
+      organisationId: "org-a",
+      userId: "user-a",
+      isPlatformAdmin: true,
+      role: "SUPER_ADMIN",
     });
     mocks.getOrganisationManyChatSecret.mockResolvedValue("org-secret");
     mocks.messagingChannelFindMany.mockResolvedValue([

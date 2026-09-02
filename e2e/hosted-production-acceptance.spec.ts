@@ -273,7 +273,9 @@ test.describe("Hosted production acceptance", () => {
     expect([200], "admin can list members").toContain(membersRes.status);
 
     await gotoRoute(page, "/integrations");
-    await expect(page.locator("#manychat-setup")).toBeVisible({ timeout: 20_000 });
+    // Canonical customer surface is Social Accounts (IG/LI/YT) — not legacy ManyChat setup.
+    await expect(page.getByText(/Social Accounts/i).first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator("#manychat-setup")).toHaveCount(0);
 
     const adminPage = await gotoRoute(page, "/admin");
     const adminStatus = adminPage?.status() ?? 0;
@@ -507,15 +509,16 @@ test.describe("Hosted production acceptance", () => {
     await context.close();
   });
 
-  test("8) ManyChat UI — admin sees setup; read-only cannot mutate", async ({ browser }) => {
+  test("8) Integrations customer surface — Social Accounts only; provider APIs denied", async ({
+    browser,
+  }) => {
     const { context, page } = await newAuthedContext(browser, ADMIN);
-    await gotoRoute(page, "/integrations?setup=manychat");
+    await gotoRoute(page, "/integrations");
     await settle(page, 1500);
     const body = await page.locator("body").innerText();
-    expect(body).toMatch(/ManyChat/i);
-    expect(body).toMatch(/API token|token/i);
-    expect(body).toMatch(/webhook/i);
-    expect(body).toMatch(/Validate|Disconnect|Reconnect|Configured|Not configured/i);
+    expect(body).toMatch(/Social Accounts/i);
+    expect(body).toMatch(/Instagram|LinkedIn|YouTube/i);
+    expect(body).not.toMatch(/ManyChat|Zernio|Ayrshare|Claude|Anthropic/i);
     await context.close();
 
     const ro = await newAuthedContext(browser, READONLY);
@@ -526,30 +529,18 @@ test.describe("Hosted production acceptance", () => {
     await ro.context.close();
   });
 
-  test("9) Meta Instagram UI — surfaces readiness; read-only cannot mutate", async ({ browser }) => {
+  test("9) Meta Instagram API — workspace users denied; no crash on Integrations", async ({
+    browser,
+  }) => {
     const { context, page } = await newAuthedContext(browser, ADMIN);
     await gotoRoute(page, "/integrations");
     await settle(page, 1500);
     const body = await page.locator("body").innerText();
-    expect(body).toMatch(/Instagram|Meta/i);
-    // Non-destructive: UI may show NOT_CONFIGURED / Connect / Reconnect — never mutate
+    expect(body).toMatch(/Instagram/i);
     expect(body.toLowerCase()).not.toMatch(/application error|internal server error/);
 
     const status = await apiJson(context.request, "GET", "/api/integrations/meta-instagram");
-    expect(status.status).toBeLessThan(500);
-    if (status.status === 200) {
-      const json = status.json as { health?: string; configured?: boolean; code?: string };
-      if (json.health) {
-        expect([
-          "NOT_CONFIGURED",
-          "CONNECTED",
-          "DEGRADED",
-          "REAUTH_REQUIRED",
-          "DISCONNECTED",
-        ]).toContain(json.health);
-      }
-    }
-
+    expect([401, 403]).toContain(status.status);
     await context.close();
 
     const ro = await newAuthedContext(browser, READONLY);

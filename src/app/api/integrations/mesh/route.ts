@@ -1,16 +1,16 @@
 import { z } from "zod";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePlatformAccess } from "@/lib/session";
 import {
   getIntegrationMeshSnapshot,
   runConnectorSync,
 } from "@/services/connectors";
 
 /**
- * GET /api/integrations/mesh — connector capability matrix + sync/health/skills.
+ * GET /api/integrations/mesh — platform admin only (provider internals).
  */
 export async function GET() {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const snapshot = await getIntegrationMeshSnapshot(session.organisationId);
     return Response.json(snapshot);
   } catch (error) {
@@ -32,7 +32,7 @@ const bodySchema = z.object({
  */
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const body = bodySchema.parse(await req.json());
 
     if (body.action === "refresh_capabilities") {

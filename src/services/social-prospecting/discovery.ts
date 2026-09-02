@@ -245,13 +245,26 @@ export async function discoverSocialProspects(input: {
 
 export async function listSocialProspects(
   organisationId: string,
-  opts?: { take?: number; searchRunId?: string | null },
+  opts?: { take?: number; searchRunId?: string | null; defaultToLatestRun?: boolean },
 ) {
   const take = opts?.take ?? 50;
+  let searchRunId = opts?.searchRunId ?? null;
+  // Without an explicit run id, never flatten the whole org history into the active list.
+  if (!searchRunId && opts?.defaultToLatestRun !== false) {
+    const latest = await prisma.socialProspect.findFirst({
+      where: { organisationId, researchJobId: { not: null } },
+      orderBy: { retrievedAt: "desc" },
+      select: { researchJobId: true },
+    });
+    searchRunId = latest?.researchJobId ?? null;
+  }
+  if (!searchRunId) {
+    return [];
+  }
   return prisma.socialProspect.findMany({
     where: {
       organisationId,
-      ...(opts?.searchRunId ? { researchJobId: opts.searchRunId } : {}),
+      researchJobId: searchRunId,
     },
     orderBy: [{ fitScore: "desc" }, { retrievedAt: "desc" }],
     take,

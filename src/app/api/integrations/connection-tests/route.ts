@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
   CONNECTION_TEST_IDS,
@@ -11,9 +11,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Platform admin only — connection tests expose vendor/provider internals. */
 export async function GET() {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const readiness = await getIntegrationReadiness(session.organisationId);
     return Response.json(readiness);
   } catch (error) {
@@ -30,7 +31,7 @@ const bodySchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const body = bodySchema.parse(await req.json());
     const integration = body.integration as ConnectionTestId;
 

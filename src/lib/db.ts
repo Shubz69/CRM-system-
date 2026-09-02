@@ -27,8 +27,13 @@ function resolveDatasourceUrl(): string | undefined {
         const limit =
           Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.max(rawLimit, 5), 10) : 5;
         url.searchParams.set("connection_limit", String(limit));
-        if (!url.searchParams.has("pool_timeout")) {
-          url.searchParams.set("pool_timeout", "20");
+        // Production often ships pool_timeout=2 which fails under modest fan-out —
+        // raise any configured timeout below 10s to 20s (do not raise connection_limit).
+        const rawTimeout = Number(url.searchParams.get("pool_timeout") || "20");
+        const timeout =
+          Number.isFinite(rawTimeout) && rawTimeout > 0 ? Math.max(rawTimeout, 20) : 20;
+        if (!url.searchParams.has("pool_timeout") || rawTimeout < 10) {
+          url.searchParams.set("pool_timeout", String(timeout));
         }
       } else if (isSessionPort && process.env.NODE_ENV === "production") {
         console.warn(

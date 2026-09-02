@@ -7,70 +7,71 @@ import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminOverviewPage() {
-  try {
-    await requirePlatformAccess();
-  } catch {
-    redirect("/home");
-  }
+/**
+ * Platform admin overview — keep Prisma concurrency bounded.
+ * Production pool is typically connection_limit=5; a 26-way Promise.all exhausts it.
+ */
+async function loadAdminOverviewMetrics() {
+  type KpiRow = {
+    total_workspaces: bigint;
+    active_workspaces: bigint;
+    suspended_workspaces: bigint;
+    total_users: bigint;
+    active_users: bigint;
+    total_contacts: bigint;
+    total_conversations: bigint;
+    messages_processed: bigint;
+    ai_messages: bigint;
+    human_messages: bigint;
+    ai_executions: bigint;
+    ai_handoffs: bigint;
+    qualified_leads: bigint;
+    confirmed_bookings: bigint;
+    sales_recorded: bigint;
+    usage_qty: bigint | null;
+    webhook_total: bigint;
+    webhook_failed: bigint;
+    failed_jobs_open: bigint;
+    failed_jobs_total: bigint;
+  };
 
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
+  const [kpi] = await prisma.$queryRaw<KpiRow[]>`
+    SELECT
+      (SELECT COUNT(*)::bigint FROM "Organisation" WHERE "deletedAt" IS NULL) AS total_workspaces,
+      (SELECT COUNT(*)::bigint FROM "Organisation" WHERE "deletedAt" IS NULL AND status = 'ACTIVE') AS active_workspaces,
+      (SELECT COUNT(*)::bigint FROM "Organisation" WHERE "deletedAt" IS NULL AND status = 'SUSPENDED') AS suspended_workspaces,
+      (SELECT COUNT(*)::bigint FROM "User" WHERE "deletedAt" IS NULL) AS total_users,
+      (SELECT COUNT(*)::bigint FROM "User" WHERE "deletedAt" IS NULL AND "isActive" = true AND "isSuspended" = false) AS active_users,
+      (SELECT COUNT(*)::bigint FROM "Contact" WHERE "deletedAt" IS NULL) AS total_contacts,
+      (SELECT COUNT(*)::bigint FROM "Conversation" WHERE "deletedAt" IS NULL) AS total_conversations,
+      (SELECT COUNT(*)::bigint FROM "Message") AS messages_processed,
+      (SELECT COUNT(*)::bigint FROM "Message" WHERE "senderType" = 'AI') AS ai_messages,
+      (SELECT COUNT(*)::bigint FROM "Message" WHERE "senderType" = 'HUMAN') AS human_messages,
+      (SELECT COUNT(*)::bigint FROM "UsageRecord" WHERE feature ILIKE '%ai%') AS ai_executions,
+      (SELECT COUNT(*)::bigint FROM "Conversation" WHERE "needsHumanReview" = true AND "deletedAt" IS NULL) AS ai_handoffs,
+      (SELECT COUNT(*)::bigint FROM "Lead" WHERE "deletedAt" IS NULL AND "qualificationStatus" = ${QualificationStatus.QUALIFIED}::"QualificationStatus") AS qualified_leads,
+      (SELECT COUNT(*)::bigint FROM "Booking" WHERE status IN (
+        ${BookingStatus.CREATED}::"BookingStatus",
+        ${BookingStatus.ATTENDED}::"BookingStatus",
+        ${BookingStatus.RESCHEDULED}::"BookingStatus"
+      )) AS confirmed_bookings,
+      (SELECT COUNT(*)::bigint FROM "Lead" l INNER JOIN "PipelineStage" s ON s.id = l."stageId" WHERE l."deletedAt" IS NULL AND s."isWon" = true) AS sales_recorded,
+      (SELECT COALESCE(SUM(quantity), 0)::bigint FROM "UsageRecord") AS usage_qty,
+      (SELECT COUNT(*)::bigint FROM "WebhookEvent") AS webhook_total,
+      (SELECT COUNT(*)::bigint FROM "WebhookEvent" WHERE status = 'FAILED') AS webhook_failed,
+      (SELECT COUNT(*)::bigint FROM "FailedJob" WHERE "resolvedAt" IS NULL) AS failed_jobs_open,
+      (SELECT COUNT(*)::bigint FROM "FailedJob") AS failed_jobs_total
+  `;
 
   const [
-    totalWorkspaces,
-    activeWorkspaces,
-    suspendedWorkspaces,
-    totalUsers,
-    activeUsers,
-    totalContacts,
-    totalConversations,
-    messagesProcessed,
-    aiMessages,
-    humanMessages,
-    aiExecutions,
-    aiHandoffs,
-    qualifiedLeads,
-    confirmedBookings,
-    salesRecorded,
-    usageAgg,
-    webhookTotal,
-    webhookFailed,
-    failedJobsOpen,
-    failedJobsTotal,
     recentFailures,
     recentWebhooks,
     recentSignIns,
     recentWorkspaces,
     recentBookings,
     recentAiErrors,
+    dbOk,
   ] = await Promise.all([
-    prisma.organisation.count({ where: { deletedAt: null } }),
-    prisma.organisation.count({ where: { deletedAt: null, status: "ACTIVE" } }),
-    prisma.organisation.count({ where: { deletedAt: null, status: "SUSPENDED" } }),
-    prisma.user.count({ where: { deletedAt: null } }),
-    prisma.user.count({ where: { deletedAt: null, isActive: true, isSuspended: false } }),
-    prisma.contact.count({ where: { deletedAt: null } }),
-    prisma.conversation.count({ where: { deletedAt: null } }),
-    prisma.message.count(),
-    prisma.message.count({ where: { senderType: "AI" } }),
-    prisma.message.count({ where: { senderType: "HUMAN" } }),
-    prisma.usageRecord.count({ where: { feature: { contains: "ai" } } }),
-    prisma.conversation.count({ where: { needsHumanReview: true, deletedAt: null } }),
-    prisma.lead.count({
-      where: { deletedAt: null, qualificationStatus: QualificationStatus.QUALIFIED },
-    }),
-    prisma.booking.count({
-      where: { status: { in: [BookingStatus.CREATED, BookingStatus.ATTENDED, BookingStatus.RESCHEDULED] } },
-    }),
-    prisma.lead.count({
-      where: { deletedAt: null, stage: { isWon: true } },
-    }),
-    prisma.usageRecord.aggregate({ _sum: { quantity: true } }),
-    prisma.webhookEvent.count(),
-    prisma.webhookEvent.count({ where: { status: "FAILED" } }),
-    prisma.failedJob.count({ where: { resolvedAt: null } }),
-    prisma.failedJob.count(),
     prisma.failedJob.findMany({
       where: { resolvedAt: null },
       orderBy: { createdAt: "desc" },
@@ -106,7 +107,78 @@ export default async function AdminOverviewPage() {
         organisationId: true,
       },
     }),
+    prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false),
   ]);
+
+  const n = (v: bigint | null | undefined) => Number(v ?? 0);
+
+  return {
+    totalWorkspaces: n(kpi?.total_workspaces),
+    activeWorkspaces: n(kpi?.active_workspaces),
+    suspendedWorkspaces: n(kpi?.suspended_workspaces),
+    totalUsers: n(kpi?.total_users),
+    activeUsers: n(kpi?.active_users),
+    totalContacts: n(kpi?.total_contacts),
+    totalConversations: n(kpi?.total_conversations),
+    messagesProcessed: n(kpi?.messages_processed),
+    aiMessages: n(kpi?.ai_messages),
+    humanMessages: n(kpi?.human_messages),
+    aiExecutions: n(kpi?.ai_executions),
+    aiHandoffs: n(kpi?.ai_handoffs),
+    qualifiedLeads: n(kpi?.qualified_leads),
+    confirmedBookings: n(kpi?.confirmed_bookings),
+    salesRecorded: n(kpi?.sales_recorded),
+    usageQty: n(kpi?.usage_qty),
+    webhookTotal: n(kpi?.webhook_total),
+    webhookFailed: n(kpi?.webhook_failed),
+    failedJobsOpen: n(kpi?.failed_jobs_open),
+    failedJobsTotal: n(kpi?.failed_jobs_total),
+    recentFailures,
+    recentWebhooks,
+    recentSignIns,
+    recentWorkspaces,
+    recentBookings,
+    recentAiErrors,
+    dbOk,
+  };
+}
+
+export default async function AdminOverviewPage() {
+  try {
+    await requirePlatformAccess();
+  } catch {
+    redirect("/home");
+  }
+
+  const {
+    totalWorkspaces,
+    activeWorkspaces,
+    suspendedWorkspaces,
+    totalUsers,
+    activeUsers,
+    totalContacts,
+    totalConversations,
+    messagesProcessed,
+    aiMessages,
+    humanMessages,
+    aiExecutions,
+    aiHandoffs,
+    qualifiedLeads,
+    confirmedBookings,
+    salesRecorded,
+    usageQty,
+    webhookTotal,
+    webhookFailed,
+    failedJobsOpen,
+    failedJobsTotal,
+    recentFailures,
+    recentWebhooks,
+    recentSignIns,
+    recentWorkspaces,
+    recentBookings,
+    recentAiErrors,
+    dbOk,
+  } = await loadAdminOverviewMetrics();
 
   const webhookSuccessRate =
     webhookTotal === 0 ? 100 : Math.round(((webhookTotal - webhookFailed) / webhookTotal) * 1000) / 10;
@@ -119,9 +191,7 @@ export default async function AdminOverviewPage() {
       ? 0
       : Math.round((failedJobsOpen / Math.max(messagesProcessed, 1)) * 1000) / 10;
   const estimatedAiCost =
-    Math.round(((usageAgg._sum.quantity || 0) * 0.002 + aiMessages * 0.001) * 100) / 100;
-
-  const dbOk = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+    Math.round((usageQty * 0.002 + aiMessages * 0.001) * 100) / 100;
 
   const cards = [
     { label: "Total workspaces", value: totalWorkspaces, href: "/admin/workspaces" },
@@ -139,7 +209,7 @@ export default async function AdminOverviewPage() {
     { label: "Qualified leads", value: qualifiedLeads, href: "/admin/workspaces" },
     { label: "Confirmed bookings", value: confirmedBookings, href: "/admin/workspaces" },
     { label: "Sales recorded", value: salesRecorded, href: "/admin/workspaces" },
-    { label: "AI usage (qty)", value: usageAgg._sum.quantity || 0, href: "/admin/usage" },
+    { label: "AI usage (qty)", value: usageQty, href: "/admin/usage" },
     { label: "Estimated AI cost", value: `$${estimatedAiCost}`, href: "/admin/usage" },
     { label: "Webhook success rate", value: `${webhookSuccessRate}%`, href: "/admin/webhooks" },
     { label: "Background job success", value: `${jobSuccessRate}%`, href: "/admin/failed-jobs" },

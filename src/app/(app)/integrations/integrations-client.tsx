@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -106,7 +106,7 @@ type MetaInstagramStatus = {
  */
 function messagingNote(slug: string): string {
   if (slug === "instagram") return "via Connect above or messaging setup below";
-  return "not available — no third-party API exists";
+  return "not available â€” no third-party API exists";
 }
 
 function statusBadgeClass(status: ReadinessStatus): string {
@@ -130,7 +130,7 @@ function formatTestedAt(iso: string | undefined | null): string {
   try {
     return `Last tested ${new Date(iso).toLocaleString()}`;
   } catch {
-    return "Last tested —";
+    return "Last tested â€”";
   }
 }
 
@@ -292,16 +292,9 @@ export default function IntegrationsClient() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Customer surface: Social Accounts only. Provider internals stay platform-admin.
       const providersPromise = fetch("/api/health/providers");
-      await Promise.all([
-        loadMessaging(),
-        loadMetaInstagram(),
-        loadAlternateSocial(),
-        loadSocialAccounts(),
-        loadReadiness(),
-        loadSocial(),
-        loadMesh(),
-      ]);
+      await Promise.all([loadSocialAccounts()]);
       const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
@@ -316,7 +309,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadMessaging, loadMetaInstagram, loadAlternateSocial, loadSocialAccounts, loadReadiness, loadSocial, loadMesh]);
+  }, [loadSocialAccounts]);
 
   useEffect(() => {
     void load();
@@ -334,7 +327,7 @@ export default function IntegrationsClient() {
     }
   }, []);
 
-  // One journey: Instagram Configure / Set up → Messaging setup section.
+  // One journey: Instagram Configure / Set up â†’ Messaging setup section.
   useEffect(() => {
     if (loading) return;
     const setup = searchParams.get("setup");
@@ -345,7 +338,7 @@ export default function IntegrationsClient() {
     }
   }, [loading, searchParams, focusMessagingSetup]);
 
-  // /api/social/[platform]/callback, Social OAuth, and Instagram OAuth redirect here —
+  // /api/social/[platform]/callback, Social OAuth, and Instagram OAuth redirect here â€”
   // surface once, force social revalidation, then strip from the URL so a refresh doesn't repeat it.
   useEffect(() => {
     const connected = searchParams.get("social_connected");
@@ -385,9 +378,9 @@ export default function IntegrationsClient() {
         toast.success(`${label} connected`);
       } else if (socialSync === "needed") {
         if (socialStatus === "DEGRADED") {
-          toast.error(error || "Account linked but sync needs attention — status refreshed");
+          toast.error(error || "Account linked but sync needs attention â€” status refreshed");
         } else {
-          toast.message("Finishing account sync…");
+          toast.message("Finishing account syncâ€¦");
         }
       } else if (error) {
         toast.error(error);
@@ -516,7 +509,7 @@ export default function IntegrationsClient() {
     setBusy(true);
     try {
       const json = await messagingAction("validate_configuration");
-      if (json.ok) toast.success(json.message || "Configuration valid — no message sent");
+      if (json.ok) toast.success(json.message || "Configuration valid â€” no message sent");
       else toast.error(json.message || "Configuration incomplete");
       await loadMessaging();
     } catch (err) {
@@ -553,7 +546,7 @@ export default function IntegrationsClient() {
       const json = await messagingAction("regenerate_secret");
       if (json.secret) {
         setOneTimeSecret(json.secret);
-        toast.success("Secret regenerated — copy it now");
+        toast.success("Secret regenerated â€” copy it now");
       }
       await load();
     } catch (e) {
@@ -636,7 +629,7 @@ export default function IntegrationsClient() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Connect channels, finish setup, and go live — advanced detail stays out of the way." />
+      <PageHeader description="Connect channels, finish setup, and go live â€” advanced detail stays out of the way." />
 
       <section className="surface space-y-4 p-5">
         <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Social Accounts</h2>
@@ -699,17 +692,17 @@ export default function IntegrationsClient() {
                       {identity ? (
                         <p className="mt-1 text-xs text-[var(--muted)]">
                           {identity}
-                          {typeHint ? ` · ${typeHint}` : ""}
+                          {typeHint ? ` Â· ${typeHint}` : ""}
                         </p>
                       ) : null}
                       {connected ? (
                         <ul className="mt-2 space-y-0.5 text-xs text-[var(--muted)]">
-                          <li>Publishing · Available</li>
-                          <li>Analytics · Available</li>
+                          <li>Publishing Â· Available</li>
+                          <li>Analytics Â· Available</li>
                           <li>
                             {platform === "instagram"
-                              ? "Messaging · Available"
-                              : "Outreach · Open + Copy"}
+                              ? "Messaging Â· Available"
+                              : "Outreach Â· Open + Copy"}
                           </li>
                         </ul>
                       ) : null}
@@ -832,7 +825,7 @@ export default function IntegrationsClient() {
                             if (json.code === "RECONCILIATION_REQUIRED") {
                               toast.error(
                                 json.error ||
-                                  "Disconnect could not be confirmed — status not changed to disconnected",
+                                  "Disconnect could not be confirmed â€” status not changed to disconnected",
                               );
                               await loadSocialAccounts();
                               setDisconnectConfirm(null);
@@ -889,724 +882,6 @@ export default function IntegrationsClient() {
         </div>
       </section>
 
-      {mesh && (
-        <section className="surface space-y-3 p-4">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between text-left"
-            onClick={() => setShowAdvancedMesh((v) => !v)}
-          >
-            <span>
-              <span className="font-semibold">Advanced connector details</span>
-              <span className="mt-0.5 block text-xs text-[var(--muted)]">
-                Capability matrix for operators — not required for day-to-day setup
-              </span>
-            </span>
-            <span className="text-xs text-[var(--muted)]">
-              {showAdvancedMesh ? "Hide" : "Show"}
-            </span>
-          </button>
-          {showAdvancedMesh ? (
-            <div className="space-y-4 border-t border-[var(--border)] pt-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="font-semibold">Connector mesh</h2>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    try {
-                      const res = await fetch("/api/integrations/mesh", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ action: "refresh_capabilities" }),
-                      });
-                      const json = await res.json();
-                      if (!res.ok) throw new Error(json.error || "Refresh failed");
-                      toast.success("Capabilities refreshed from live connection state");
-                      await loadMesh();
-                    } catch (e) {
-                      toast.error(e instanceof Error ? e.message : "Refresh failed");
-                    }
-                  }}
-                >
-                  Refresh capabilities
-                </button>
-              </div>
-              <p className="text-sm text-[var(--muted)]">
-                Connected ≠ all capabilities available. Statuses come from credentials, scopes, and
-                provider restrictions — never invented.
-              </p>
-              <div className="space-y-3">
-                {mesh.connectors.map((c) => (
-                  <div key={c.providerKey} className="rounded border border-border p-3">
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <h3 className="font-medium">{c.displayName}</h3>
-                      <span className="text-xs uppercase tracking-wide">{c.customerLabel}</span>
-                    </div>
-                    <p className="text-xs text-[var(--muted)]">
-                      {c.connectionStatus}
-                    </p>
-                    <ul className="mt-2 space-y-1 text-sm">
-                      {c.capabilities.map((cap) => (
-                        <li key={cap.capability} className="flex flex-wrap gap-2">
-                          <span className="min-w-[10rem] font-medium">{cap.capability}</span>
-                          <span className="text-xs uppercase">{cap.status}</span>
-                          <span className="text-[var(--muted)]">{cap.provenance}</span>
-                          {cap.missingScopes?.length ? (
-                            <span className="text-xs">missing: {cap.missingScopes.join(", ")}</span>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </section>
-      )}
-
-      {showAdvancedMesh ? (
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="surface p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-semibold">Instagram</h2>
-            <span
-              className={
-                metaIg?.connection?.health === "CONNECTED" || status?.connected
-                  ? "badge"
-                  : "badge badge-warn"
-              }
-            >
-              {metaIg?.connection?.health === "CONNECTED"
-                ? "Connected"
-                : status?.connected
-                  ? "Connected"
-                  : "Not Connected"}
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            Direct messages into the same Inbox
-          </p>
-          {metaIg?.connection?.username ? (
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              @{metaIg.connection.username}
-              {metaIg.connection.health ? ` · ${metaIg.connection.health}` : ""}
-            </p>
-          ) : metaIg && !metaIg.appConfigured ? (
-            <p className="mt-1 text-xs text-[var(--muted)]">Messaging adapter not configured on server</p>
-          ) : null}
-          <div className="mt-3 flex flex-wrap gap-2">
-            {metaIg?.appConfigured ? (
-              <a href="/api/integrations/meta-instagram/connect" className="btn btn-primary">
-                Connect Instagram
-              </a>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => focusMessagingSetup({ focusToken: !status?.apiTokenConfigured })}
-            >
-              Set up messaging
-            </button>
-          </div>
-          {metaIg?.connection?.isActive || metaIg?.connection?.health === "CONNECTED" ? (
-            <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-secondary text-xs"
-                  disabled={busy}
-                  onClick={() => {
-                    void (async () => {
-                      setBusy(true);
-                      try {
-                        const json = await metaInstagramAction("validate_configuration");
-                        toast.success(json.message || json.status || "Validated");
-                        await loadMetaInstagram();
-                      } catch (e) {
-                        toast.error(e instanceof Error ? e.message : "Validate failed");
-                      } finally {
-                        setBusy(false);
-                      }
-                    })();
-                  }}
-                >
-                  Validate
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary text-xs"
-                  disabled={busy}
-                  onClick={() => {
-                    if (!confirm("Disconnect Instagram? History is kept; outbound stops.")) {
-                      return;
-                    }
-                    void (async () => {
-                      setBusy(true);
-                      try {
-                        const json = await metaInstagramAction("disconnect");
-                        toast.success(json.message || "Disconnected");
-                        await loadMetaInstagram();
-                      } catch (e) {
-                        toast.error(e instanceof Error ? e.message : "Disconnect failed");
-                      } finally {
-                        setBusy(false);
-                      }
-                    })();
-                  }}
-                >
-                  Disconnect
-                </button>
-              </div>
-              <p className="text-xs text-[var(--muted)]">
-                Test message sends a real Instagram DM — requires contactId + conversationId with
-                prior inbound.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  className="input text-xs"
-                  placeholder="contactId"
-                  value={metaTestContactId}
-                  onChange={(e) => setMetaTestContactId(e.target.value)}
-                />
-                <input
-                  className="input text-xs"
-                  placeholder="conversationId"
-                  value={metaTestConversationId}
-                  onChange={(e) => setMetaTestConversationId(e.target.value)}
-                />
-                <input
-                  className="input text-xs"
-                  placeholder="Optional message"
-                  value={metaTestText}
-                  onChange={(e) => setMetaTestText(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn btn-primary text-xs"
-                  disabled={busy}
-                  onClick={() => {
-                    if (!metaTestContactId.trim() || !metaTestConversationId.trim()) {
-                      toast.error("contactId and conversationId are required");
-                      return;
-                    }
-                    if (
-                      !confirm(
-                        "Send a real Instagram DM? This uses the live outbound path.",
-                      )
-                    ) {
-                      return;
-                    }
-                    void (async () => {
-                      setBusy(true);
-                      try {
-                        const json = await metaInstagramAction("send_test_message", {
-                          contactId: metaTestContactId.trim(),
-                          conversationId: metaTestConversationId.trim(),
-                          text: metaTestText.trim() || undefined,
-                        });
-                        if (json.ok) toast.success(json.message || "Test sent");
-                        else toast.error(json.message || "Test not sent");
-                      } catch (e) {
-                        toast.error(e instanceof Error ? e.message : "Test failed");
-                      } finally {
-                        setBusy(false);
-                      }
-                    })();
-                  }}
-                >
-                  Send test message
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="surface p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-semibold">Calendar</h2>
-            <span className="badge">Booking URL</span>
-          </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">Manage in AI Operator / Settings</p>
-          <Link href="/agent" className="btn btn-secondary mt-3">
-            Manage
-          </Link>
-        </div>
-        <div className="surface p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-semibold">Agent Desk intelligence</h2>
-            <span className={aiReady ? "badge" : "badge badge-warn"}>
-              {aiReady ? "Available" : "Temporarily unavailable"}
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            Configure brand voice, reply tone, and automation behaviour
-          </p>
-          <Link href="/agent" className="btn btn-secondary mt-3">
-            Manage
-          </Link>
-        </div>
-      </div>
-      ) : null}
-
-      <section className="surface space-y-4 p-5">
-        <div>
-          <h2 className="h-display text-2xl">Social Connections</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Connect your own Instagram, LinkedIn, or TikTok account for listening and publishing.
-            What each platform can actually do differs — badges below reflect each platform&apos;s
-            real, current API limits, not a wishlist.
-          </p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          {(socialPlatforms || []).map((p) => {
-            const connected = p.connection && p.connection.status === "ACTIVE";
-            return (
-              <div key={p.platform} className="surface p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="font-semibold">{p.displayName}</h3>
-                  <span className={connected ? "badge badge-success" : "badge badge-warn"}>
-                    {connected ? "Connected" : "Not connected"}
-                  </span>
-                </div>
-                {connected && (
-                  <p className="mt-1 text-sm text-[var(--muted)]">{p.connection?.displayName}</p>
-                )}
-                <ul className="mt-3 space-y-1 text-xs text-[var(--muted)]">
-                  <li>Listen (research/mentions): {p.capabilities.listen ? "Yes" : "No"}</li>
-                  <li>Publish (post content): {p.capabilities.publish ? "Yes" : "No"}</li>
-                  <li>Messaging: {messagingNote(p.slug)}</li>
-                </ul>
-                <div className="mt-3">
-                  {connected ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary w-full"
-                      disabled={disconnectingId === p.connection?.id}
-                      onClick={() => p.connection && void disconnectSocial(p.connection.id)}
-                    >
-                      {disconnectingId === p.connection?.id ? "Disconnecting…" : "Disconnect"}
-                    </button>
-                  ) : p.configured ? (
-                    // Full browser navigation on purpose — this hits a server route that
-                    // redirects to the OAuth provider, not an internal Next.js page.
-                    <a href={`/api/social/${p.slug}/connect`} className="btn btn-primary w-full text-center">
-                      {`Connect ${p.displayName}`}
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-primary w-full"
-                      disabled
-                      title="App credentials not configured yet — see docs/SOCIAL_CONNECTIONS.md"
-                    >
-                      Not set up yet
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {!socialPlatforms && (
-            <p className="text-sm text-[var(--muted)]">Loading social connections…</p>
-          )}
-        </div>
-      </section>
-
-      {readiness && (
-        <section className="surface space-y-4 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="h-display text-2xl">Go-live readiness</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">{readiness.summary}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={readiness.goLiveReady ? "badge badge-success" : "badge badge-warn"}>
-                {readiness.goLiveReady ? "Ready to go live" : "Not ready yet"}
-              </span>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={Boolean(testingId)}
-                onClick={() => void testAll()}
-              >
-                Test all
-              </button>
-            </div>
-          </div>
-
-          <ul className="divide-y divide-[var(--border)]/60">
-            {readiness.items.map((item) => (
-              <li key={item.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium">{item.label}</p>
-                    <span className={statusBadgeClass(item.status)}>{item.statusLabel}</span>
-                  </div>
-                  <p className="mt-1 text-sm text-[var(--muted)]">{item.description}</p>
-                  <p className="mt-1 text-sm">{item.detail}</p>
-                  {item.lastTest && (
-                    <p
-                      className={`mt-1 text-xs ${item.lastTest.ok ? "text-[var(--muted)]" : "text-[var(--danger)]"}`}
-                    >
-                      {formatTestedAt(item.lastTest.testedAt)}
-                      {" · "}
-                      {item.lastTest.ok ? "Passed" : "Failed"}: {item.lastTest.message}
-                    </p>
-                  )}
-                  {!item.lastTest && (
-                    <p className="mt-1 text-xs text-[var(--muted)]">Never tested</p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-primary shrink-0"
-                  disabled={testingId === item.id}
-                  onClick={() => void testConnection(item.id)}
-                >
-                  {testingId === item.id ? "Testing…" : "Test connection"}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="text-xs text-[var(--muted)]">
-            Tests make one small check only — they never message a real person. Mock adapters stay
-            available for local testing; live mode never switches to mock silently when credentials
-            are present.
-          </p>
-        </section>
-      )}
-
-      <section
-        id={MANYCHAT_SETUP_ID}
-        ref={messagingSetupRef}
-        tabIndex={-1}
-        className="surface scroll-mt-24 space-y-4 p-5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="h-display text-2xl">Messaging setup</h2>
-            <p className="text-sm text-[var(--muted)]">
-              Connect Instagram DMs to Agent Desk — one guided path from account to
-              first verified message.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
-              {status?.connected ? "Connected" : "Not connected"}
-            </span>
-            {status?.connectionActive === false && (
-              <span className="badge badge-warn">Disconnected</span>
-            )}
-          </div>
-        </div>
-
-        <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Start in your messaging provider</span> — open
-            your Instagram-connected messaging account (or connect Instagram in the provider first).
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Paste your API token</span> — from
-            Provider API settings, save the token below. We store it encrypted and never show it again.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Copy the webhook URL</span> — Agent
-            Desk listens here for inbound Instagram DMs.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Set the webhook secret</span> —
-            regenerate below, then add header <code>x-manychat-secret</code> in Messaging.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Add a Messaging automation</span> —
-            on new Instagram DM, POST subscriber id + message text to the webhook URL.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Map your channel</span> — save the
-            page/bot id under Messaging channels so traffic lands in this workspace.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Validate configuration</span> —
-            checks settings only; does not message anyone.
-          </li>
-          <li>
-            <span className="font-medium text-[var(--foreground)]">Send a test DM</span> — optional,
-            explicit, to a real subscriber who already messaged you.
-          </li>
-        </ol>
-
-        <dl className="grid gap-3 text-sm md:grid-cols-2">
-          <div>
-            <dt className="text-[var(--muted)]">Webhook URL</dt>
-            <dd className="mt-1 break-all font-mono text-xs">{status?.webhookUrl || "—"}</dd>
-            {status?.webhookUrl && (
-              <button type="button" className="btn btn-secondary mt-2" onClick={() => copy(status.webhookUrl)}>
-                Copy URL
-              </button>
-            )}
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Inbound alias</dt>
-            <dd className="mt-1 break-all font-mono text-xs">{status?.inboundAliasUrl || "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Webhook secret</dt>
-            <dd className="mt-1 font-mono text-xs">
-              {status?.secretConfigured ? status.secretMasked : "not set"}
-              {status?.secretSource ? ` (${status.secretSource})` : ""}
-            </dd>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => void regenerateSecret()}
-              >
-                Regenerate secret
-              </button>
-            </div>
-            {oneTimeSecret && (
-              <p className="mt-2 rounded-lg bg-[var(--surface-2)] p-2 font-mono text-xs">
-                New secret (shown once): {oneTimeSecret}
-                <button type="button" className="btn btn-secondary ml-2" onClick={() => copy(oneTimeSecret)}>
-                  Copy
-                </button>
-              </p>
-            )}
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">API token</dt>
-            <dd className="mt-1">
-              <span className={status?.apiTokenConfigured ? "badge badge-success" : "badge badge-warn"}>
-                {status?.apiTokenStatus ||
-                  (status?.apiTokenConfigured ? "Configured" : "Not configured")}
-              </span>
-            </dd>
-            <form onSubmit={saveApiToken} className="mt-2 flex flex-wrap gap-2">
-              <input
-                ref={apiTokenInputRef}
-                className="input min-w-[12rem] flex-1 font-mono text-xs"
-                type="password"
-                autoComplete="off"
-                value={apiTokenInput}
-                onChange={(e) => setApiTokenInput(e.target.value)}
-                placeholder={
-                  status?.apiTokenConfigured ? "Paste new token to rotate" : "Paste messaging API token"
-                }
-              />
-              <button className="btn btn-primary" type="submit" disabled={busy}>
-                {status?.apiTokenConfigured ? "Rotate token" : "Save token"}
-              </button>
-            </form>
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              Saved tokens are encrypted. We never return the plaintext after save.
-            </p>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Last inbound event</dt>
-            <dd className="mt-1 text-xs">
-              {status?.lastInboundEvent
-                ? `${status.lastInboundEvent.status} · ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
-                : "None yet"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Active channels</dt>
-            <dd className="mt-1">{status?.channels.filter((c) => c.isActive).length ?? 0}</dd>
-          </div>
-        </dl>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy}
-            onClick={() => void validateConfiguration()}
-          >
-            Validate configuration
-          </button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void simulateInbound()}>
-            Simulate inbound DM
-          </button>
-          {status?.connectionActive === false ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void reconnectMessaging()}
-            >
-              Reconnect messaging
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy || !status?.apiTokenConfigured}
-              onClick={() => void disconnectMessaging()}
-            >
-              Disconnect messaging
-            </button>
-          )}
-        </div>
-
-        <form
-          onSubmit={sendTestMessage}
-          className="space-y-3 rounded-xl border border-[var(--border)] p-4"
-        >
-          <div>
-            <h3 className="font-semibold">Send test message</h3>
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              Explicit live send to a real messaging subscriber who already has a conversation here.
-              Uses the same outbound path as Inbox replies.
-            </p>
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="text-sm md:col-span-1">
-              Subscriber ID
-              <input
-                className="input mt-1"
-                value={testContactExternalId}
-                onChange={(e) => setTestContactExternalId(e.target.value)}
-                placeholder="subscriber_id"
-                required
-              />
-            </label>
-            <label className="text-sm md:col-span-1">
-              Message (optional)
-              <input
-                className="input mt-1"
-                value={testMessageText}
-                onChange={(e) => setTestMessageText(e.target.value)}
-                placeholder="Test message from Agent Desk"
-              />
-            </label>
-            <div className="flex items-end">
-              <button className="btn btn-primary w-full" type="submit" disabled={busy}>
-                Send test message
-              </button>
-            </div>
-          </div>
-        </form>
-
-        <p className="text-xs text-[var(--muted)]">
-          Validate configuration never sends a DM. Simulate inbound stays inside the CRM. Send test
-          message is the only control that delivers to Instagram.
-        </p>
-        {(status?.recentErrors?.length || 0) > 0 && (
-          <div>
-            <h3 className="font-semibold">Recent errors</h3>
-            <ul className="mt-2 space-y-1 text-xs text-[var(--danger)]">
-              {status?.recentErrors?.map((e) => (
-                <li key={e.id}>
-                  {e.status}: {e.error || "unknown"} · {new Date(e.receivedAt).toLocaleString()}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {status?.setup && (
-          <details className="rounded-xl border border-[var(--border)] p-3 text-sm">
-            <summary className="cursor-pointer font-medium">Technical payload reference</summary>
-            <p className="mt-3 text-xs text-[var(--muted)]">
-              Required fields: {status.setup.requiredFields.join(", ")}. Header:{" "}
-              {status.setup.requiredHeaders.join(", ")}.
-            </p>
-            <pre className="mt-3 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-xs">
-              {JSON.stringify(status.setup.examplePayload, null, 2)}
-            </pre>
-          </details>
-        )}
-      </section>
-
-      <section className="surface space-y-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="h-display text-2xl">Booking webhooks</h2>
-            <p className="text-sm text-[var(--muted)]">
-              Confirmed bookings arrive separately from booking-link offers. Use these endpoints with
-              header <code>x-booking-secret</code>.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled={Boolean(testingId)}
-            onClick={() => void testConnection("booking")}
-          >
-            Test connection
-          </button>
-        </div>
-        <ul className="space-y-2 font-mono text-xs">
-          <li>/api/webhooks/booking</li>
-          <li>/api/integrations/booking/calendly/webhook</li>
-          <li>/api/integrations/booking/calcom/webhook</li>
-        </ul>
-      </section>
-
-      <section className="surface p-5">
-        <h2 className="h-display text-2xl">Messaging channels</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Map your Instagram page id so inbound DMs resolve to this workspace.
-        </p>
-        <ul className="mt-3 space-y-2 text-sm">
-          {(status?.channels || []).length === 0 && (
-            <li className="text-[var(--muted)]">No channels configured yet.</li>
-          )}
-          {(status?.channels || []).map((ch) => (
-            <li
-              key={ch.id}
-              className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)]/50 py-2"
-            >
-              <div>
-                <p className="font-medium">{ch.displayName}</p>
-                <p className="text-[var(--muted)]">
-                  {ch.provider} · {ch.externalId || "no external id"}
-                  {ch.instagramUsername ? ` · @${ch.instagramUsername}` : ""}
-                </p>
-              </div>
-              <span className={ch.isActive ? "badge badge-success" : "badge"}>
-                {ch.isActive ? "Active" : "Inactive"}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-4">
-          <label className="text-sm">
-            External ID
-            <input
-              className="input mt-1"
-              value={externalId}
-              onChange={(e) => setExternalId(e.target.value)}
-              required
-              placeholder="page or bot id"
-            />
-          </label>
-          <label className="text-sm">
-            Display name
-            <input
-              className="input mt-1"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Instagram page"
-            />
-          </label>
-          <label className="flex items-end gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="mb-2 size-4"
-              checked={channelActive}
-              onChange={(e) => setChannelActive(e.target.checked)}
-            />
-            <span className="pb-2">Active</span>
-          </label>
-          <div className="flex items-end">
-            <button className="btn btn-primary w-full" type="submit">
-              Save channel
-            </button>
-          </div>
-        </form>
-      </section>
     </div>
   );
 }

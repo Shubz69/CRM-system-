@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { formatLeadSource } from "@/lib/lead-source";
 
 type Contact = {
   id: string;
@@ -105,7 +106,7 @@ export default function ContactsPage() {
                   </div>
                 </td>
                 <td className="px-4 py-3">
-                  {c.leadSource || "—"}
+                  {formatLeadSource(c.leadSource)}
                   <div className="text-xs text-[var(--muted)]">{c.campaignSource}</div>
                 </td>
                 <td className="px-4 py-3">{c.leads[0]?.score ?? 0}</td>

@@ -40,16 +40,15 @@ export default function GoLivePage() {
 
       setMode(autopilot.mode || "OFF");
 
-      const manychatConnected = Boolean(
-        providers.providers?.manychat?.apiTokenConfigured ||
-          (channels.channels || []).some((c: { isActive?: boolean }) => c.isActive),
-      );
+      const socialRes = await fetch("/api/integrations/zernio");
+      const social = socialRes.ok ? await socialRes.json() : {};
+      const instagramConnected = Boolean(social.networks?.instagram?.connected);
       const aiReady =
-        providers.providers?.ai?.adapter &&
-        providers.providers.ai.adapter !== "not_configured" &&
-        providers.providers.ai.adapter !== "mock";
+        Boolean(providers.providers?.ai?.ready) ||
+        providers.providers?.ai?.status === "AVAILABLE";
       const bookingReady = Boolean(
-        providers.providers?.booking?.defaultUrlConfigured ||
+        providers.providers?.booking?.ready ||
+          providers.providers?.booking?.defaultUrlConfigured ||
           providers.providers?.booking?.adapter,
       );
 
@@ -83,7 +82,7 @@ export default function GoLivePage() {
           key: "ai",
           label: "Agent Desk intelligence",
           status: aiReady ? "ready" : "needs_attention",
-          detail: `Adapter: ${providers.providers?.ai?.adapter || "unknown"}`,
+          detail: aiReady ? "Available" : "Unavailable — contact support",
         },
         {
           key: "qualification",
@@ -98,10 +97,12 @@ export default function GoLivePage() {
           detail: "Automatic when Autopilot is live",
         },
         {
-          key: "manychat",
-          label: "ManyChat / Instagram",
-          status: manychatConnected ? "ready" : "needs_attention",
-          detail: manychatConnected ? "Connected" : "Connect Instagram in Settings",
+          key: "instagram",
+          label: "Instagram",
+          status: instagramConnected ? "ready" : "needs_attention",
+          detail: instagramConnected
+            ? "Connected"
+            : "Connect Instagram in Social Accounts (Integrations)",
         },
         {
           key: "booking",
@@ -154,7 +155,7 @@ export default function GoLivePage() {
     () =>
       checks
         .filter((c) =>
-          ["database", "auth", "ai", "manychat", "business", "jobs"].includes(c.key),
+          ["database", "auth", "ai", "instagram", "business", "jobs"].includes(c.key),
         )
         .every((c) => c.status === "ready" || (c.key === "ai" && c.status !== "needs_attention")),
     [checks],

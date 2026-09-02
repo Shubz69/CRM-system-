@@ -5,7 +5,7 @@ import {
   MetaInstagramNotConfiguredError,
   assertMetaInstagramMessagingConfigured,
 } from "@/lib/env";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePermission, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
   disconnectMetaInstagram,
@@ -18,7 +18,7 @@ import { dispatchOutboundMessage } from "@/services/messaging/outbound";
 
 export async function GET() {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const connection = await getMetaInstagramConnectionView(session.organisationId);
     return Response.json({
       appConfigured: isMetaInstagramAppConfigured(),

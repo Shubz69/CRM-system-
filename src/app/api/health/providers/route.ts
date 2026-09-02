@@ -37,7 +37,7 @@ export async function GET() {
   const aiReady = Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock";
 
   if (!platform) {
-    const manychatConfigured = Boolean(env.MANYCHAT_WEBHOOK_SECRET || env.MANYCHAT_API_TOKEN);
+    const messagingConfigured = Boolean(env.MANYCHAT_WEBHOOK_SECRET || env.MANYCHAT_API_TOKEN);
     const bookingConfigured = Boolean(env.BOOKING_WEBHOOK_SECRET);
     const emailConfigured = Boolean(env.EMAIL_SMTP_URL);
     return Response.json({
@@ -47,17 +47,17 @@ export async function GET() {
         research: {
           configuredPlatforms: listConfiguredSourcePlatforms().length > 0,
         },
-        manychat: {
-          status: manychatConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
-          apiTokenConfigured: Boolean(env.MANYCHAT_API_TOKEN),
+        messaging: {
+          status: messagingConfigured ? "AVAILABLE" : "UNAVAILABLE",
+          ready: messagingConfigured,
         },
         booking: {
-          status: bookingConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
-          defaultUrlConfigured: Boolean(env.DEFAULT_BOOKING_URL),
+          status: bookingConfigured ? "AVAILABLE" : "UNAVAILABLE",
+          ready: Boolean(env.DEFAULT_BOOKING_URL),
         },
         email: {
-          status: emailConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
-          smtpConfigured: emailConfigured,
+          status: emailConfigured ? "AVAILABLE" : "UNAVAILABLE",
+          ready: emailConfigured,
         },
       },
       timestamp: new Date().toISOString(),

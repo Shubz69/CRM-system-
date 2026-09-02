@@ -56,9 +56,9 @@ type Integration = { id: string; name: string; type: string; isActive: boolean }
 
 type ProviderStatus = {
   ai?: { ready?: boolean; status?: string; label?: string };
-  manychat?: { apiTokenConfigured?: boolean; status?: string; adapter?: string };
-  booking?: { defaultUrlConfigured?: boolean; status?: string; adapter?: string };
-  email?: { smtpConfigured?: boolean; status?: string };
+  messaging?: { ready?: boolean; status?: string };
+  booking?: { ready?: boolean; status?: string; defaultUrlConfigured?: boolean };
+  email?: { ready?: boolean; status?: string; smtpConfigured?: boolean };
 };
 
 function StatusChip({ ok, label }: { ok: boolean; label: string }) {
@@ -75,6 +75,7 @@ export default function SettingsPage() {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [providers, setProviders] = useState<ProviderStatus>({});
+  const [instagramConnected, setInstagramConnected] = useState(false);
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -85,11 +86,12 @@ export default function SettingsPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
 
   async function load() {
-    const [settingsRes, channelsRes, providersRes, membersRes] = await Promise.all([
+    const [settingsRes, channelsRes, providersRes, membersRes, socialRes] = await Promise.all([
       fetch("/api/settings"),
       fetch("/api/messaging-channels"),
       fetch("/api/health/providers"),
       fetch("/api/workspace/members"),
+      fetch("/api/integrations/zernio"),
     ]);
     if (settingsRes.ok) {
       const json = await settingsRes.json();
@@ -130,6 +132,12 @@ export default function SettingsPage() {
     if (providersRes.ok) {
       const json = await providersRes.json();
       setProviders(json.providers || {});
+    }
+    if (socialRes.ok) {
+      const json = await socialRes.json();
+      setInstagramConnected(Boolean(json.networks?.instagram?.connected));
+    } else {
+      setInstagramConnected(false);
     }
   }
 
@@ -255,13 +263,12 @@ export default function SettingsPage() {
     await load();
   }
 
-  const instagramConnected =
-    Boolean(providers.manychat?.apiTokenConfigured) ||
-    channels.some((c) => c.isActive);
   const aiReady =
     Boolean(providers.ai?.ready) || providers.ai?.status === "AVAILABLE";
-  const calendarConnected = Boolean(providers.booking?.defaultUrlConfigured);
-  const emailConnected = Boolean(providers.email?.smtpConfigured);
+  const calendarConnected =
+    Boolean(providers.booking?.ready) || Boolean(providers.booking?.defaultUrlConfigured);
+  const emailConnected =
+    Boolean(providers.email?.ready) || Boolean(providers.email?.smtpConfigured);
 
   return (
     <div className="space-y-6">
@@ -514,14 +521,11 @@ export default function SettingsPage() {
               />
             </div>
             <p className="mt-2 text-sm text-[var(--muted)]">
-              Connect via ManyChat so Agent Desk can reply to DMs.
+              Connect Instagram in Social Accounts so Agent Desk can listen and reply.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Link href="/integrations?setup=manychat" className="btn btn-primary">
-                Configure
-              </Link>
-              <Link href="/integrations#manychat-setup" className="btn btn-secondary">
-                Integrations
+              <Link href="/integrations" className="btn btn-primary">
+                Social Accounts
               </Link>
               <Link href="/simulator" className="btn btn-secondary">
                 Test

@@ -24,7 +24,9 @@ export type RejectionCode =
   | "PRIVACY_OR_LEGAL"
   | "COMPANY_PAGE_AS_PERSON"
   | "WEAK_COMPANY_NAME"
-  | "IDENTITY_BELOW_GATE";
+  | "IDENTITY_BELOW_GATE"
+  | "INDUSTRY_MISMATCH"
+  | "NON_PROFILE_URL";
 
 export type ValidationDecision = {
   accepted: boolean;
@@ -67,7 +69,11 @@ const FRAGMENT_PATTERNS = [
 ];
 
 const LEGAL_OR_NAV_URL =
-  /instagram\.com\/(about|legal|privacy|accounts|explore|directory|developer)|linkedin\.com\/(legal|help|uas|authwall|pulse|posts\/)|\/privacy|\/terms|\/cookie/i;
+  /instagram\.com\/(about|legal|privacy|accounts|explore|directory|developer|popular|p\/|reel\/|tv\/|stories\/|tags\/|locations?\/)|linkedin\.com\/(legal|help|uas|authwall|pulse|posts\/)|\/privacy|\/terms|\/cookie/i;
+
+/** Instagram URLs that are listicles / discovery pages, not creator profiles. */
+const INSTAGRAM_NON_PROFILE =
+  /instagram\.com\/(popular|explore|directory|about|legal|privacy|accounts|developer|p\/|reel\/|tv\/|stories\/|tags\/|locations?\/)(\/|$)/i;
 
 const ROLE_FAMILIES: Record<string, RegExp[]> = {
   founder: [
@@ -203,12 +209,57 @@ export function isWeakCompanyName(name?: string | null): boolean {
   if (WEAK_COMPANY_NAMES.some((p) => p.test(n))) return true;
   if (isScrapedFragment(n) || isPrivacyOrLegalText(n)) return true;
   if (!/[A-Za-z]/.test(n)) return true;
+  // Trailing dash / em-dash fragments ("Alison Calder -")
+  if (/[\s]*[-–—|·•]\s*$/.test(n)) return true;
+  // Title scraps: "Morel - Founder and CEO - Tiger"
+  if (/\b(founder|co[- ]?founder|ceo|cto|owner|director|manager)\b/i.test(n) && /[-–—]/.test(n)) {
+    return true;
+  }
+  // Multiple dash-separated segments look like LinkedIn headlines, not companies
+  if ((n.match(/[-–—]/g) || []).length >= 2) return true;
+  return false;
+}
+
+/** True when company string is essentially the person's name (with optional junk). */
+export function isPersonNameAsCompany(companyName?: string | null, personName?: string | null): boolean {
+  if (!companyName || !personName) return false;
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[-–—|·•.,]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const c = norm(companyName);
+  const p = norm(personName);
+  if (!c || !p) return false;
+  if (c === p) return true;
+  if (c.startsWith(p + " ") || p.startsWith(c)) return true;
+  // First+last tokens equal
+  const ct = c.split(" ").filter(Boolean);
+  const pt = p.split(" ").filter(Boolean);
+  if (pt.length >= 2 && ct.length >= 2 && ct[0] === pt[0] && ct[1] === pt[1]) return true;
   return false;
 }
 
 export function isRejectedProfileUrl(url?: string | null): boolean {
   if (!url) return false;
-  return LEGAL_OR_NAV_URL.test(url);
+  if (LEGAL_OR_NAV_URL.test(url)) return true;
+  if (INSTAGRAM_NON_PROFILE.test(url)) return true;
+  // Instagram profile must be /{handle} only (optional trailing slash / query)
+  const ig = url.match(/instagram\.com\/([^/?#]+)/i);
+  if (ig) {
+    const handle = ig[1] || "";
+    if (
+      /^(popular|explore|directory|about|legal|privacy|accounts|developer|p|reel|tv|stories|tags|locations?)$/i.test(
+        handle,
+      )
+    ) {
+      return true;
+    }
+    // Multi-segment path after handle (e.g. popular/manchester-fitness-influencers)
+    if (/instagram\.com\/[^/]+\/.+/i.test(url.split("?")[0] || "")) return true;
+  }
+  return false;
 }
 
 function evidenceBlob(evidence: ProspectEvidence[]): string {
@@ -280,10 +331,11 @@ export function matchLocationIntent(
     return { ok: true, locationConfidence: 0.5, candidateLocation };
   }
 
-  const hay = `${candidateLocation || ""}\n${evidenceText}\n${icp.rawQuery}`.toLowerCase();
-  const req = requested.toLowerCase();
+  // Evidence only — never treat the ICP query string as location proof
+  // (otherwise every London search "proves" London for Manchester candidates).
+  const hay = `${candidateLocation || ""}\n${evidenceText}`.toLowerCase();
+  const req = requested.toLowerCase().trim();
 
-  // Ambiguous London: reject US/Canada disambiguators when query is UK-context
   const queryIsUk =
     UK_GEO_HINTS.test(icp.rawQuery) ||
     /\buk\b/i.test(icp.rawQuery) ||
@@ -300,36 +352,63 @@ export function matchLocationIntent(
     };
   }
 
-  if (req === "london" || req === "uk" || req === "united kingdom") {
-    if (US_AMBIGUOUS_LONDON.test(hay) && !UK_GEO_HINTS.test(hay.replace(US_AMBIGUOUS_LONDON, ""))) {
-      return { ok: false, locationConfidence: 0.1, locationEvidence: "non_uk_london" };
-    }
-  }
-
-  const locPatterns: RegExp[] =
-    req === "uk" || req === "united kingdom"
-      ? [UK_GEO_HINTS]
-      : [new RegExp(`\\b${escapeRe(req)}\\b`, "i"), UK_GEO_HINTS];
-
-  for (const p of locPatterns) {
-    const m = hay.match(p);
+  // Country-level UK: any UK geo hint in evidence is OK
+  if (req === "uk" || req === "united kingdom" || req === "britain" || req === "england") {
+    const m = hay.match(UK_GEO_HINTS);
     if (m) {
       return {
         ok: true,
-        locationConfidence: 0.8,
+        locationConfidence: 0.75,
         candidateLocation: candidateLocation || m[0],
         locationEvidence: m[0],
       };
     }
+    return {
+      ok: false,
+      locationConfidence: 0.15,
+      candidateLocation,
+      locationEvidence: "location_not_in_evidence",
+    };
   }
 
-  // Soft: if ICP has UK city but no evidence, reject rather than stamp ICP location
+  // City-level: require that specific city (or clear synonym) — not a different UK city
+  const cityRe = new RegExp(`\\b${escapeRe(req)}\\b`, "i");
+  const cityMatch = hay.match(cityRe);
+  if (cityMatch) {
+    return {
+      ok: true,
+      locationConfidence: 0.85,
+      candidateLocation: candidateLocation || cityMatch[0],
+      locationEvidence: cityMatch[0],
+    };
+  }
+
   return {
     ok: false,
     locationConfidence: 0.15,
     candidateLocation,
     locationEvidence: "location_not_in_evidence",
   };
+}
+
+export function matchIndustryIntent(
+  industry: string | undefined,
+  evidenceText: string,
+  candidateRole?: string,
+  companyName?: string,
+): { ok: boolean; confidence: number; evidence?: string } {
+  if (!industry?.trim()) return { ok: true, confidence: 0.5 };
+  const token = industry.trim().toLowerCase();
+  const hay = `${candidateRole || ""}\n${companyName || ""}\n${evidenceText}`.toLowerCase();
+  const synonyms: Record<string, RegExp> = {
+    dental: /\b(dental|dentist|dentistry|orthodont|oral\s+health|teeth|tooth)\b/i,
+    recruitment: /\b(recruit(?:ment|er|ing)?|talent\s+acquisition|staffing|headhunt)\b/i,
+    fitness: /\b(fitness|gym|personal\s+train|workout|crossfit|wellness)\b/i,
+  };
+  const re = synonyms[token] || new RegExp(`\\b${escapeRe(token)}\\b`, "i");
+  const m = hay.match(re);
+  if (m) return { ok: true, confidence: 0.8, evidence: m[0] };
+  return { ok: false, confidence: 0.1 };
 }
 
 export function companyAssociationConfidence(input: {
@@ -457,6 +536,22 @@ export function validateProspectCandidate(
     };
   }
 
+  const industry = matchIndustryIntent(
+    icp.industry,
+    evidenceText,
+    candidate.role,
+    candidate.companyName,
+  );
+  if (icp.industry && !industry.ok) {
+    return reject(
+      "INDUSTRY_MISMATCH",
+      "Requested sector not supported by evidence",
+      candidate,
+      icp,
+      entityClass,
+    );
+  }
+
   const idConf = identityConfidenceOf(candidate);
   const companyConf = companyAssociationConfidence({
     companyName: candidate.companyName,
@@ -557,6 +652,7 @@ export function shouldPersistCompany(input: {
   associationConfidence?: number;
 }): boolean {
   if (!input.companyName || isWeakCompanyName(input.companyName)) return false;
+  if (isPersonNameAsCompany(input.companyName, input.personName)) return false;
   const conf =
     input.associationConfidence ??
     companyAssociationConfidence({
@@ -565,6 +661,10 @@ export function shouldPersistCompany(input: {
       evidence: input.evidence || [],
     });
   if (conf < 0.55) return false;
-  if (input.companyWebsite) return true;
-  return conf >= 0.7;
+  // Website is strong independent company evidence
+  if (input.companyWebsite && !isPersonNameAsCompany(input.companyName, input.personName)) {
+    return conf >= 0.55;
+  }
+  // Without a website, require high association AND a company that does not look like a person headline
+  return conf >= 0.75;
 }

@@ -1,26 +1,28 @@
 import { NextRequest } from "next/server";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePlatformAccess } from "@/lib/session";
 import {
   createAyrshareSocialLink,
   getAyrshareProfileView,
   isAyrshareConfigured,
 } from "@/adapters/ayrshare";
 
+/** Platform admin only — alternate social provider internals. */
 export async function GET() {
   try {
-    const session = await requirePermission("settings:read");
+    const session = await requirePlatformAccess();
     const view = await getAyrshareProfileView(session.organisationId);
     return Response.json({ ok: true, ...view, serverConfigured: isAyrshareConfigured() });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError(message, 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 403);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("integrations:manage");
+    const session = await requirePlatformAccess();
     const body = (await req.json().catch(() => ({}))) as {
       action?: string;
       networks?: string[];
@@ -33,7 +35,9 @@ export async function POST(req: NextRequest) {
         networks: body.networks,
       });
       if (!result.ok) {
-        return Response.json(result, { status: result.code === "AYRSHARE_NOT_CONFIGURED" ? 503 : 400 });
+        return Response.json(result, {
+          status: result.code === "AYRSHARE_NOT_CONFIGURED" ? 503 : 400,
+        });
       }
       return Response.json(result);
     }
@@ -42,6 +46,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError(message, 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 403);
   }
 }

@@ -1,13 +1,13 @@
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePlatformAccess, jsonError } from "@/lib/session";
 import { buildIntegrationCapabilityMatrix } from "@/services/research-source-registry";
 
 /**
  * GET /api/integrations/capability-matrix
- * Real credential/adapter status — never invents “connected” without evidence.
+ * Platform admin only — provider capability internals.
  */
 export async function GET() {
   try {
-    await requirePermission("integrations:manage");
+    await requirePlatformAccess();
     const matrix = buildIntegrationCapabilityMatrix();
     return Response.json(matrix);
   } catch (error) {
