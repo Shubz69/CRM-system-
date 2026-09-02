@@ -147,7 +147,15 @@ export default function IntegrationsClient() {
     configured?: boolean;
     serverConfigured?: boolean;
     status?: string;
-    connectedNetworks?: unknown;
+  } | null>(null);
+  const [socialAccounts, setSocialAccounts] = useState<{
+    serverConfigured?: boolean;
+    status?: string;
+    networks?: {
+      instagram?: { connected?: boolean; requiresFacebookPage?: boolean };
+      linkedin?: { connected?: boolean; dmCapability?: string };
+    };
+    connectedAccounts?: Array<{ platform?: string; displayName?: string }>;
   } | null>(null);
   const [metaTestContactId, setMetaTestContactId] = useState("");
   const [metaTestConversationId, setMetaTestConversationId] = useState("");
@@ -208,6 +216,15 @@ export default function IntegrationsClient() {
     setAyrshare(await res.json());
   }, []);
 
+  const loadSocialAccounts = useCallback(async () => {
+    const res = await fetch("/api/integrations/zernio");
+    if (!res.ok) {
+      setSocialAccounts(null);
+      return;
+    }
+    setSocialAccounts(await res.json());
+  }, []);
+
   const loadManyChat = useCallback(async () => {
     const res = await fetch("/api/integrations/manychat");
     const json = await res.json();
@@ -244,6 +261,7 @@ export default function IntegrationsClient() {
         loadManyChat(),
         loadMetaInstagram(),
         loadAyrshare(),
+        loadSocialAccounts(),
         loadReadiness(),
         loadSocial(),
         loadMesh(),
@@ -258,7 +276,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadManyChat, loadMetaInstagram, loadAyrshare, loadReadiness, loadSocial, loadMesh]);
+  }, [loadManyChat, loadMetaInstagram, loadAyrshare, loadSocialAccounts, loadReadiness, loadSocial, loadMesh]);
 
   useEffect(() => {
     void load();
@@ -580,49 +598,137 @@ export default function IntegrationsClient() {
             </div>
           </div>
           <div className="rounded-xl border border-[var(--border)] p-4">
-            <p className="font-medium">Social accounts (Ayrshare)</p>
+            <p className="font-medium">Social Accounts</p>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Recommended multi-network connect for publish / schedule / analytics
+              Connect Instagram (Business/Creator — Instagram Login, no Facebook Page required) and
+              LinkedIn for publishing and analytics. Prospect outreach stays Open + Copy.
             </p>
-            <p className="mt-3 text-sm">
-              {ayrshare?.status === "CONNECTED" ? (
-                <span className="badge badge-success">Connected</span>
-              ) : ayrshare?.serverConfigured || ayrshare?.configured ? (
-                <span className="badge">Configured</span>
-              ) : (
-                <span className="badge badge-warn">Not configured</span>
-              )}
-            </p>
-            <button
-              type="button"
-              className="btn btn-secondary mt-3 text-xs"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const res = await fetch("/api/integrations/ayrshare", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "create_social_link" }),
-                  });
-                  const json = await res.json();
-                  if (!res.ok) throw new Error(json.error || "Could not start social link");
-                  if (json.url) {
-                    window.location.href = json.url;
-                    return;
-                  }
-                  toast.success("Social link ready");
-                  await loadAyrshare();
-                } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Ayrshare link failed");
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Connect social accounts
-            </button>
+            <div className="mt-3 space-y-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Instagram{" "}
+                  {socialAccounts?.networks?.instagram?.connected ? (
+                    <span className="badge badge-success">Connected</span>
+                  ) : (
+                    <span className="badge">Not connected</span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary text-xs"
+                  disabled={busy || !socialAccounts?.serverConfigured}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const res = await fetch("/api/integrations/zernio", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "connect", platform: "instagram" }),
+                      });
+                      const json = await res.json();
+                      if (!res.ok) throw new Error(json.error || "Could not start Instagram connect");
+                      if (json.url) {
+                        window.location.href = json.url;
+                        return;
+                      }
+                      toast.success("Connect ready");
+                      await loadSocialAccounts();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Connect failed");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Connect
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  LinkedIn{" "}
+                  {socialAccounts?.networks?.linkedin?.connected ? (
+                    <span className="badge badge-success">Connected</span>
+                  ) : (
+                    <span className="badge">Not connected</span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary text-xs"
+                  disabled={busy || !socialAccounts?.serverConfigured}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const res = await fetch("/api/integrations/zernio", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ action: "connect", platform: "linkedin" }),
+                      });
+                      const json = await res.json();
+                      if (!res.ok) throw new Error(json.error || "Could not start LinkedIn connect");
+                      if (json.url) {
+                        window.location.href = json.url;
+                        return;
+                      }
+                      toast.success("Connect ready");
+                      await loadSocialAccounts();
+                    } catch (e) {
+                      toast.error(e instanceof Error ? e.message : "Connect failed");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Connect
+                </button>
+              </div>
+              {!socialAccounts?.serverConfigured ? (
+                <p className="text-xs text-[var(--muted)]">Social account linking is not configured on this server.</p>
+              ) : null}
+            </div>
           </div>
+          {ayrshare?.serverConfigured || ayrshare?.configured ? (
+            <div className="rounded-xl border border-[var(--border)] p-4">
+              <p className="font-medium">Additional social provider</p>
+              <p className="mt-1 text-xs text-[var(--muted)]">Optional alternate connect path for multi-network publish</p>
+              <p className="mt-3 text-sm">
+                {ayrshare?.status === "CONNECTED" ? (
+                  <span className="badge badge-success">Connected</span>
+                ) : (
+                  <span className="badge">Configured</span>
+                )}
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary mt-3 text-xs"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await fetch("/api/integrations/ayrshare", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "create_social_link" }),
+                    });
+                    const json = await res.json();
+                    if (!res.ok) throw new Error(json.error || "Could not start social link");
+                    if (json.url) {
+                      window.location.href = json.url;
+                      return;
+                    }
+                    toast.success("Social link ready");
+                    await loadAyrshare();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : "Link failed");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Connect alternate provider
+              </button>
+            </div>
+          ) : null}
           <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">AI provider</p>
             <p className="mt-1 text-xs text-[var(--muted)]">Qualification, replies, analysis</p>

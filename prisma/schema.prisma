@@ -95,6 +95,7 @@ enum IntegrationType {
   MANYCHAT
   META_INSTAGRAM
   AYRSHARE
+  ZERNIO
   OPENAI
   ANTHROPIC
   BOOKING
@@ -318,6 +319,7 @@ model Organisation {
   conversationSendLeases ConversationSendLease[]
   // Social Prospecting + Outreach OS
   ayrshareProfiles     AyrshareProfile[]
+  zernioProfiles       ZernioProfile[]
   socialProspects      SocialProspect[]
   socialOutreachThreads SocialOutreachThread[]
   socialProviderUsages  SocialProviderUsage[]
@@ -4697,6 +4699,25 @@ enum SocialActionMode {
   REQUIRES_PROVIDER_APPROVAL
   /// Instagram/provider messaging window required
   PROVIDER_WINDOW_REQUIRED
+}
+
+/// One Zernio Profile per organisation (validation / preferred low-cost social provider).
+model ZernioProfile {
+  id              String   @id @default(cuid())
+  organisationId  String   @unique
+  /// Zernio profile id returned by their API — never expose master API key to browser.
+  zernioProfileId String?
+  status          String   @default("NOT_CONFIGURED")
+  connectedAccounts Json   @default("[]")
+  lastSyncAt      DateTime?
+  lastError       String?
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@index([zernioProfileId])
 }
 
 /// One Ayrshare User Profile per organisation (tenant-safe mapping).

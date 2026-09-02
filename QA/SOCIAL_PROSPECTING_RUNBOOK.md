@@ -116,16 +116,58 @@ A LinkedIn profile URL may be attached when independently discovered and verifie
 
 ```
 Research Providers → Prospect Discovery → Identity Resolution → Quality → Outreach → CRM
-Social Provider Router → Ayrshare | Meta Direct | ManyChat | LinkedIn Native | future adapters
+Social Provider Router → Zernio (preferred when configured) | Ayrshare | Meta Direct | ManyChat | LinkedIn Native
 ```
 
 New messaging providers implement `SocialMessagingProviderAdapter` (see `provider-router.ts`) — no prospecting schema redesign.
+
+## Zernio validation provider
+
+Zernio is the **default validation** social provider when `ZERNIO_API_KEY` is set. It remains optional — removing it must not break Find Prospects / Open / Copy / Add to CRM.
+
+### Env (server only)
+
+```
+ZERNIO_API_KEY=
+ZERNIO_WEBHOOK_SECRET=
+```
+
+Never expose the master key to the browser. Webhook: `POST /api/webhooks/zernio` verifies `X-Zernio-Signature` (HMAC-SHA256 hex of raw body).
+
+### Tenant mapping
+
+Agent Desk Organisation → one `ZernioProfile` (`organisationId` unique, stores `zernioProfileId`).
+
+### Bounded LIVE account allowance (2 free accounts)
+
+Use exactly:
+
+1. **Account 1** — one Instagram Professional (Business/Creator) via Instagram Login (no Facebook Page required on this path)
+2. **Account 2** — one LinkedIn account (personal and/or company page as Zernio allows)
+
+### Zernio LIVE checklist
+
+- [ ] Instagram OAuth connect from Integrations → Social Accounts → Instagram → Connect
+- [ ] LinkedIn OAuth connect
+- [ ] Account health / sync shows connected
+- [ ] One Instagram publish (no mass posting)
+- [ ] One LinkedIn publish
+- [ ] IG analytics pull (or webhook analytics.synced)
+- [ ] LI analytics pull
+- [ ] One permitted IG **inbound** message → webhook `message.received` → Agent Desk inbox normalization path
+- [ ] Confirm LinkedIn DMs remain Open + Copy (not sent via Zernio)
+- [ ] Confirm cold IG DM remains Open + Copy
+- [ ] Webhook receipt + idempotency (duplicate delivery ignored)
+- [ ] READ_ONLY cannot connect (`integrations:manage` denied)
+
+No cold DM automation. No mass posting.
 
 ## Provider limitations
 
 | Provider | Discovery | Connection invite | DMs |
 |----------|-----------|-------------------|-----|
 | Research engine | Yes | N/A | N/A |
+| Zernio | No | No | Instagram permitted only; LinkedIn DMs unsupported |
 | Ayrshare | Not sole people-search | No | Where network permits |
 | META_INSTAGRAM | No | No | Windowed / contactable |
 | MANYCHAT | No | No | Yes (existing) |
@@ -142,14 +184,16 @@ LinkedIn restricted APIs: official LinkedIn product approval + dual env flags + 
 3. Add to CRM → verify Contact/Company/Opportunity provenance
 4. Prepare outreach → copy note → open profile manually → mark Connection Sent
 5. Confirm `providerSent=false` on thread
-6. Confirm ManyChat/Meta still healthy with Ayrshare unconfigured and vice versa
+6. Confirm ManyChat/Meta still healthy with Zernio/Ayrshare unconfigured and vice versa
 7. Confirm READ_ONLY cannot prospect-write (`leads:write` denied)
+8. Run Zernio LIVE checklist (two accounts only)
 
 ## Migration
 
-`prisma/migrations/20260902120000_social_prospecting_outreach`
+1. `prisma/migrations/20260902120000_social_prospecting_outreach` — social prospecting models + `socialIdentities`
+2. `prisma/migrations/20260902140000_zernio_provider` — `ZernioProfile` + `IntegrationType.ZERNIO`
 
-Includes `socialIdentities` JSON + `SocialNetworkKind` values `X` / `THREADS`.
+**Choice:** Zernio uses a **separate** additive migration because the social-prospecting migration is already in checkpoint commit `3fa9bbe` and must not be rewritten.
 
 Apply only with `npx prisma migrate deploy` when ready. **Do not** `db push`.  
 This implementation pass does **not** apply production migrations.

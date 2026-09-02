@@ -123,6 +123,16 @@ export function getPublicProviderCapabilityHealth(): {
   });
 
   providers.push({
+    id: "zernio",
+    label: "Zernio (validation social)",
+    status: envConfigured(env.ZERNIO_API_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",
+    detail: envConfigured(env.ZERNIO_API_KEY)
+      ? "API key present — org profile CONNECTED state is per-workspace"
+      : "Optional validation social provider (preferred when configured)",
+    liveConnectionAware: false,
+  });
+
+  providers.push({
     id: "ayrshare",
     label: "Ayrshare",
     status: envConfigured(env.AYRSHARE_API_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",

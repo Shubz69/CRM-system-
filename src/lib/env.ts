@@ -151,6 +151,9 @@ const envSchema = z.object({
   AYRSHARE_DOMAIN: z.string().optional(),
   AYRSHARE_PRIVATE_KEY: z.string().optional(),
   AYRSHARE_WEBHOOK_SECRET: z.string().optional(),
+  /** Zernio master API key — SERVER ONLY. Never expose to browser. */
+  ZERNIO_API_KEY: z.string().optional(),
+  ZERNIO_WEBHOOK_SECRET: z.string().optional(),
   /**
    * LinkedIn restricted communication APIs — NOT user-settable product toggles.
    * Require BOTH the capability flag AND ALLOW_LINKEDIN_RESTRICTED_APIS=1.

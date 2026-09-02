@@ -4,6 +4,7 @@
  */
 
 export const SOCIAL_PROVIDER = {
+  ZERNIO: "ZERNIO",
   AYRSHARE: "AYRSHARE",
   META_INSTAGRAM: "META_INSTAGRAM",
   MANYCHAT: "MANYCHAT",
@@ -20,6 +21,7 @@ export const SOCIAL_CAPABILITY = {
   HISTORY: "HISTORY",
   COMMENTS: "COMMENTS",
   DIRECT_MESSAGES: "DIRECT_MESSAGES",
+  WEBHOOKS: "WEBHOOKS",
   PROFILE_LOOKUP: "PROFILE_LOOKUP",
   DISCOVERY: "DISCOVERY",
   CONNECTION_INVITE: "CONNECTION_INVITE",
@@ -46,6 +48,8 @@ export type ProviderCapabilityDeclaration = {
   notes?: string;
 };
 
+export type SocialPlatformNetwork = "INSTAGRAM" | "LINKEDIN" | "X" | "TIKTOK" | "FACEBOOK" | "YOUTUBE" | "THREADS";
+
 /**
  * LinkedIn restricted communication APIs — server-only, NOT user-settable.
  * Must remain false until LinkedIn officially approves the product use case.
@@ -64,6 +68,31 @@ export function linkedInMessagesApiApproved(): boolean {
 
 /** Declared matrix — configuration presence checked separately at call sites. */
 export const SOCIAL_PROVIDER_CAPABILITY_MATRIX: ProviderCapabilityDeclaration[] = [
+  // Zernio — validation / preferred low-cost provider (optional)
+  { provider: "ZERNIO", capability: "CONNECT_ACCOUNT", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "PUBLISH", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "SCHEDULE", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "ANALYTICS", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "HISTORY", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "COMMENTS", baseline: "AVAILABLE", notes: "Platform-dependent (e.g. LinkedIn company pages)" },
+  {
+    provider: "ZERNIO",
+    capability: "DIRECT_MESSAGES",
+    baseline: "AVAILABLE",
+    notes: "Instagram permitted inbox only — LinkedIn DMs UNSUPPORTED at platform level",
+  },
+  { provider: "ZERNIO", capability: "WEBHOOKS", baseline: "AVAILABLE" },
+  { provider: "ZERNIO", capability: "CONVERSATION_READ", baseline: "AVAILABLE", notes: "Where platform permits (Instagram)" },
+  {
+    provider: "ZERNIO",
+    capability: "CONVERSATION_WRITE",
+    baseline: "AVAILABLE",
+    notes: "Must still use dispatchOutboundMessage for Agent Desk Inbox",
+  },
+  { provider: "ZERNIO", capability: "DISCOVERY", baseline: "UNSUPPORTED", notes: "Prospect discovery uses research engine" },
+  { provider: "ZERNIO", capability: "CONNECTION_INVITE", baseline: "UNSUPPORTED" },
+  { provider: "ZERNIO", capability: "PROFILE_LOOKUP", baseline: "UNSUPPORTED" },
+
   // Ayrshare
   { provider: "AYRSHARE", capability: "CONNECT_ACCOUNT", baseline: "AVAILABLE" },
   { provider: "AYRSHARE", capability: "PUBLISH", baseline: "AVAILABLE" },
@@ -72,6 +101,7 @@ export const SOCIAL_PROVIDER_CAPABILITY_MATRIX: ProviderCapabilityDeclaration[] 
   { provider: "AYRSHARE", capability: "HISTORY", baseline: "AVAILABLE" },
   { provider: "AYRSHARE", capability: "COMMENTS", baseline: "AVAILABLE" },
   { provider: "AYRSHARE", capability: "DIRECT_MESSAGES", baseline: "AVAILABLE", notes: "Only where network + auth mode permits" },
+  { provider: "AYRSHARE", capability: "WEBHOOKS", baseline: "AVAILABLE" },
   { provider: "AYRSHARE", capability: "PROFILE_LOOKUP", baseline: "AVAILABLE", notes: "Only for connected/authenticated modes" },
   { provider: "AYRSHARE", capability: "DISCOVERY", baseline: "UNSUPPORTED", notes: "Broad discovery uses research engine, not Ayrshare as sole people-search" },
   { provider: "AYRSHARE", capability: "CONNECTION_INVITE", baseline: "UNSUPPORTED" },
@@ -84,7 +114,7 @@ export const SOCIAL_PROVIDER_CAPABILITY_MATRIX: ProviderCapabilityDeclaration[] 
   { provider: "META_INSTAGRAM", capability: "DIRECT_MESSAGES", baseline: "AVAILABLE", notes: "24h window / contactability rules apply" },
   { provider: "META_INSTAGRAM", capability: "CONVERSATION_READ", baseline: "AVAILABLE" },
   { provider: "META_INSTAGRAM", capability: "CONVERSATION_WRITE", baseline: "AVAILABLE" },
-  { provider: "META_INSTAGRAM", capability: "PUBLISH", baseline: "UNSUPPORTED", notes: "Publishing via SocialConnection / Ayrshare" },
+  { provider: "META_INSTAGRAM", capability: "PUBLISH", baseline: "UNSUPPORTED", notes: "Publishing via SocialConnection / Zernio / Ayrshare" },
   { provider: "META_INSTAGRAM", capability: "DISCOVERY", baseline: "UNSUPPORTED" },
   { provider: "META_INSTAGRAM", capability: "CONNECTION_INVITE", baseline: "UNSUPPORTED" },
 
@@ -107,6 +137,40 @@ export const SOCIAL_PROVIDER_CAPABILITY_MATRIX: ProviderCapabilityDeclaration[] 
   { provider: "LINKEDIN_NATIVE", capability: "DISCOVERY", baseline: "UNSUPPORTED", notes: "LinkedIn Marketing API member data must not drive prospect discovery" },
   { provider: "LINKEDIN_NATIVE", capability: "PROFILE_LOOKUP", baseline: "HUMAN_ACTION_REQUIRED", notes: "V1: open LinkedIn URL discovered independently" },
 ];
+
+/**
+ * Platform-level capability gate — provider AVAILABLE does not override platform truth.
+ * Example: LinkedIn DIRECT_MESSAGES is always false for Zernio path.
+ */
+export function platformSupportsCapability(
+  network: SocialPlatformNetwork,
+  capability: SocialCapability,
+): boolean {
+  if (capability === "DISCOVERY") return false;
+  if (network === "LINKEDIN") {
+    if (
+      capability === "DIRECT_MESSAGES" ||
+      capability === "CONVERSATION_READ" ||
+      capability === "CONVERSATION_WRITE" ||
+      capability === "CONNECTION_INVITE"
+    ) {
+      return false;
+    }
+  }
+  if (network === "INSTAGRAM" && capability === "CONNECTION_INVITE") return false;
+  return true;
+}
+
+export function resolveProviderPlatformCapability(input: {
+  provider: SocialProviderId;
+  network: SocialPlatformNetwork;
+  capability: SocialCapability;
+}): CapabilityAvailability {
+  if (!platformSupportsCapability(input.network, input.capability)) {
+    return "UNSUPPORTED";
+  }
+  return getDeclaredCapability(input.provider, input.capability)?.baseline || "UNSUPPORTED";
+}
 
 export function getDeclaredCapability(
   provider: SocialProviderId,

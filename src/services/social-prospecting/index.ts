@@ -31,7 +31,12 @@ export {
   listSocialMessagingProviders,
   registerSocialMessagingProvider,
   ensureDefaultMessagingProvidersRegistered,
+  selectProviderForCapability,
 } from "@/services/social-prospecting/provider-router";
+export {
+  resolveProviderPlatformCapability,
+  platformSupportsCapability,
+} from "@/services/social-prospecting/capabilities";
 export {
   SOCIAL_PROVIDER,
   SOCIAL_CAPABILITY,
