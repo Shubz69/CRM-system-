@@ -14,30 +14,48 @@ import {
   syncZernioConnectedAccountsWithRetry,
   zernioInstagramMessagingCapability,
   zernioLinkedInMessagingCapability,
+  zernioYouTubeMessagingCapability,
   type ZernioConnectPlatform,
+  type ZernioConnectedAccount,
 } from "@/adapters/zernio";
 import { resolveProviderPlatformCapability } from "@/services/social-prospecting/capabilities";
 import { getEnv } from "@/lib/env";
 import { zernioColdInstagramOutreachMode } from "@/adapters/messaging/zernio";
+import { getSocialConnectionPolicy } from "@/services/social-connection-policy";
+
+function isConnectPlatform(value: unknown): value is ZernioConnectPlatform {
+  return value === "instagram" || value === "linkedin" || value === "youtube";
+}
 
 export async function GET() {
   try {
     const session = await requirePermission("settings:read");
-    // Heal empty/stale local mapping when provider may already be connected
     const healed = await maybeHealZernioAccountState(session.organisationId);
     const profile = healed.profile;
     const view = await getZernioProfileView(session.organisationId);
     const health = getZernioNetworkHealth(profile);
     const networks = buildCanonicalZernioNetworks({ profile });
+    const policy = await getSocialConnectionPolicy(session.organisationId);
+    const accounts = Array.isArray(profile.connectedAccounts)
+      ? (profile.connectedAccounts as ZernioConnectedAccount[])
+      : [];
 
     return Response.json({
       ok: true,
       serverConfigured: isZernioConfigured(),
       webhookConfigured: isZernioWebhookConfigured(),
       ...view,
-      // Never expose master key; providerProfileId is diagnostics-only
       health,
       healed: healed.healed,
+      connectionPolicy: {
+        socialConnectionsEnabled: policy.socialConnectionsEnabled,
+        maxConnectedSocialAccounts: policy.maxConnectedSocialAccounts,
+        allowedNetworks: policy.allowedNetworks,
+        connectedCount: accounts.filter((a) => {
+          const s = String(a.status || "connected").toLowerCase();
+          return !s.includes("disconnect") && s !== "revoked" && s !== "inactive";
+        }).length,
+      },
       networks: {
         instagram: {
           ...networks.instagram,
@@ -62,6 +80,20 @@ export async function GET() {
           dmCapability: resolveProviderPlatformCapability({
             provider: "ZERNIO",
             network: "LINKEDIN",
+            capability: "DIRECT_MESSAGES",
+          }),
+        },
+        youtube: {
+          ...networks.youtube,
+          messaging: zernioYouTubeMessagingCapability(),
+          outreach: "OPEN_COPY",
+          preferredProvider: preferredProviderForCapability({
+            network: "YOUTUBE",
+            capability: "CONNECT_ACCOUNT",
+          }),
+          dmCapability: resolveProviderPlatformCapability({
+            provider: "ZERNIO",
+            network: "YOUTUBE",
             capability: "DIRECT_MESSAGES",
           }),
         },
@@ -95,8 +127,8 @@ export async function POST(req: NextRequest) {
 
     if (action === "connect") {
       const platform = body.platform;
-      if (platform !== "instagram" && platform !== "linkedin") {
-        return jsonError("platform must be instagram or linkedin", 400);
+      if (!isConnectPlatform(platform)) {
+        return jsonError("platform must be instagram, linkedin, or youtube", 400);
       }
       const env = getEnv();
       const appUrl = (env.APP_URL || env.NEXTAUTH_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -108,9 +140,15 @@ export async function POST(req: NextRequest) {
         headless: body.headless === true,
       });
       if (!result.ok) {
-        return Response.json(result, {
-          status: result.code === "ZERNIO_NOT_CONFIGURED" ? 503 : 400,
-        });
+        const status =
+          result.code === "ZERNIO_NOT_CONFIGURED"
+            ? 503
+            : result.code === "SOCIAL_CONNECTION_QUOTA" ||
+                result.code === "SOCIAL_CONNECTIONS_DISABLED" ||
+                result.code === "SOCIAL_NETWORK_NOT_ALLOWED"
+              ? 403
+              : 400;
+        return Response.json(result, { status });
       }
       return Response.json({
         ok: true,
@@ -140,8 +178,8 @@ export async function POST(req: NextRequest) {
 
     if (action === "disconnect") {
       const platform = body.platform;
-      if (platform !== "instagram" && platform !== "linkedin") {
-        return jsonError("platform must be instagram or linkedin", 400);
+      if (!isConnectPlatform(platform)) {
+        return jsonError("platform must be instagram, linkedin, or youtube", 400);
       }
       const result = await disconnectZernioPlatformAccount({
         organisationId: session.organisationId,
@@ -154,7 +192,6 @@ export async function POST(req: NextRequest) {
         {
           ...result,
           networks,
-          // Preserve CRM history — disconnect is provider access only
           preserved: {
             contacts: true,
             conversations: true,
@@ -174,7 +211,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Legacy alias — prefer action: disconnect (remote revoke)
     if (action === "disconnect_local") {
       return jsonError("Use action: disconnect for provider revoke", 400);
     }

@@ -389,7 +389,7 @@ describe("Identity resolution + profile correctness", () => {
         ],
       },
     ]);
-    expect(batch.length).toBe(1);
+    expect(batch.accepted.length).toBe(1);
   });
 
   it("detects networks across supported platforms", () => {
@@ -424,9 +424,9 @@ describe("Prospect discovery quality + outreach copy", () => {
     };
     const dupe = { ...a, linkedinUrl: "https://linkedin.com/in/ada-example" };
     const batch = dedupeProspectBatch([a, dupe]);
-    expect(batch).toHaveLength(1);
-    expect(batch[0].confidence).toBeGreaterThan(0.4);
-    expect(batch[0].reasonSelected.toLowerCase()).toMatch(/role|company|evidence/);
+    expect(batch.accepted).toHaveLength(1);
+    expect(batch.accepted[0]!.confidence).toBeGreaterThan(0.4);
+    expect(batch.accepted[0]!.reasonSelected.toLowerCase()).toMatch(/role|company|evidence/);
 
     const weak = qualityCheckProspect(
       {
@@ -461,6 +461,7 @@ describe("Prospect discovery quality + outreach copy", () => {
       reasonSelected: "UK fintech founder fit",
       evidenceExcerpts: ["Analytical Engines expanded into payments in 2025"],
       offerSummary: "AI ops for founder-led teams",
+      evidenceConfidence: 0.85,
     });
     expect(drafts.connectionNote.toLowerCase()).toContain("ada");
     expect(drafts.connectionNote).not.toMatch(/saw your (recent )?post/i);
@@ -475,8 +476,19 @@ describe("Prospect discovery quality + outreach copy", () => {
       companyName: "Analytical Engines",
       observedPostExcerpt: "We just shipped payments v2",
       evidenceExcerpts: ["Analytical Engines expanded"],
+      evidenceConfidence: 0.9,
     });
     expect(withPost.connectionNote).toMatch(/saw your recent note/i);
+
+    const weakEvidence = generateOutreachDrafts({
+      personName: "Ada Lovelace",
+      companyName: "Analytical Engines",
+      role: "Founder",
+      location: "London",
+      evidenceConfidence: 0.2,
+    });
+    expect(weakEvidence.connectionNote).not.toMatch(/Analytical Engines/);
+    expect(weakEvidence.connectionNote.toLowerCase()).toMatch(/profile|note/);
 
     const surfaces = buildActionSurfacesForProspect({
       linkedinUrl: "https://www.linkedin.com/in/ada",

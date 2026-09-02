@@ -23,6 +23,148 @@ export type WorkspaceRow = {
   demoData: boolean;
 };
 
+type SocialPolicy = {
+  socialConnectionsEnabled: boolean;
+  maxConnectedSocialAccounts: number | null;
+  allowedNetworks: Array<"INSTAGRAM" | "LINKEDIN" | "YOUTUBE">;
+};
+
+function SocialAccessControls({
+  organisationId,
+  busy,
+  setBusy,
+}: {
+  organisationId: string;
+  busy: string | null;
+  setBusy: (v: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [policy, setPolicy] = useState<SocialPolicy | null>(null);
+  const [connectedCount, setConnectedCount] = useState<number | null>(null);
+
+  async function load() {
+    setBusy(`social-${organisationId}`);
+    try {
+      const res = await fetch(
+        `/api/admin/social-connection-policy?organisationId=${encodeURIComponent(organisationId)}`,
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not load social access");
+      setPolicy(json.policy);
+      setConnectedCount(json.connectedCount ?? null);
+      setOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Load failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save() {
+    if (!policy) return;
+    setBusy(`social-save-${organisationId}`);
+    try {
+      const res = await fetch("/api/admin/social-connection-policy", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organisationId,
+          socialConnectionsEnabled: policy.socialConnectionsEnabled,
+          maxConnectedSocialAccounts: policy.maxConnectedSocialAccounts,
+          allowedNetworks: policy.allowedNetworks,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Save failed");
+      setPolicy(json.policy);
+      toast.success("Social access updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function toggleNetwork(n: SocialPolicy["allowedNetworks"][number]) {
+    if (!policy) return;
+    const has = policy.allowedNetworks.includes(n);
+    setPolicy({
+      ...policy,
+      allowedNetworks: has
+        ? policy.allowedNetworks.filter((x) => x !== n)
+        : [...policy.allowedNetworks, n],
+    });
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        className="text-left text-[var(--accent)] hover:underline"
+        disabled={busy === `social-${organisationId}`}
+        onClick={() => void (open ? setOpen(false) : load())}
+      >
+        Social Access
+      </button>
+      {open && policy ? (
+        <div className="mt-1 space-y-2 rounded border border-[var(--border)] bg-[var(--surface-2)] p-2 text-xs">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={policy.socialConnectionsEnabled}
+              onChange={(e) =>
+                setPolicy({ ...policy, socialConnectionsEnabled: e.target.checked })
+              }
+            />
+            Connections enabled
+          </label>
+          <label className="block">
+            Max connected accounts
+            <input
+              className="mt-1 w-20 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1"
+              type="number"
+              min={0}
+              value={policy.maxConnectedSocialAccounts ?? ""}
+              placeholder="∞"
+              onChange={(e) =>
+                setPolicy({
+                  ...policy,
+                  maxConnectedSocialAccounts:
+                    e.target.value === "" ? null : Math.max(0, Number(e.target.value)),
+                })
+              }
+            />
+          </label>
+          <div className="space-y-1">
+            <p>Allowed networks</p>
+            {(["INSTAGRAM", "LINKEDIN", "YOUTUBE"] as const).map((n) => (
+              <label key={n} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={policy.allowedNetworks.includes(n)}
+                  onChange={() => toggleNetwork(n)}
+                />
+                {n.charAt(0) + n.slice(1).toLowerCase()}
+              </label>
+            ))}
+          </div>
+          {connectedCount != null ? (
+            <p className="text-[var(--muted)]">Currently connected: {connectedCount}</p>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-secondary text-xs"
+            disabled={busy === `social-save-${organisationId}`}
+            onClick={() => void save()}
+          >
+            Save social access
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
   const router = useRouter();
   const [rows, setRows] = useState(initial);
@@ -213,6 +355,7 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
                     <a className="text-[var(--accent)] hover:underline" href={`/admin/audit`}>
                       Audit log
                     </a>
+                    <SocialAccessControls organisationId={org.id} busy={busy} setBusy={setBusy} />
                     {org.status === "SUSPENDED" ? (
                       <button
                         type="button"

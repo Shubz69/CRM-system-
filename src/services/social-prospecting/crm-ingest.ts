@@ -1,9 +1,25 @@
 import { prisma } from "@/lib/db";
 import { upsertDetectedOpportunity } from "@/services/opportunities/lifecycle";
+import {
+  isWeakCompanyName,
+  shouldPersistCompany,
+  companyAssociationConfidence,
+} from "@/services/social-prospecting/entity-validation";
+
+function domainFromWebsite(website?: string | null): string | undefined {
+  if (!website) return undefined;
+  try {
+    const host = website.replace(/^https?:\/\//i, "").split("/")[0]?.toLowerCase();
+    return host?.replace(/^www\./, "") || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Canonical SocialProspect → Contact → Company → BusinessOpportunity ingestion.
- * Never overwrites higher-confidence CRM fields with lower-confidence research.
+ * Creates Company only when association evidence is strong enough.
+ * Never invents garbled company names. Never overwrites higher-confidence CRM fields.
  */
 export async function ingestProspectToCrm(input: {
   organisationId: string;
@@ -13,19 +29,63 @@ export async function ingestProspectToCrm(input: {
   contactId: string;
   companyId: string | null;
   opportunityId: string | null;
+  companyCreated: boolean;
+  companySkippedReason?: string;
 }> {
   const prospect = await prisma.socialProspect.findFirst({
     where: { id: input.prospectId, organisationId: input.organisationId },
   });
   if (!prospect) throw new Error("Prospect not found");
 
+  const evidence = Array.isArray(prospect.sourceEvidence)
+    ? (prospect.sourceEvidence as Array<{ source?: string; url?: string; excerpt?: string; retrievedAt?: string }>)
+    : [];
+
+  const associationConfidence = companyAssociationConfidence({
+    companyName: prospect.companyName || undefined,
+    personName: prospect.personName || undefined,
+    evidence: evidence.map((e) => ({
+      source: e.source || "research",
+      url: e.url,
+      excerpt: e.excerpt,
+      retrievedAt: e.retrievedAt || new Date().toISOString(),
+    })),
+  });
+
   let companyId: string | null = prospect.companyId;
-  if (prospect.companyName && !companyId) {
+  let companyCreated = false;
+  let companySkippedReason: string | undefined;
+
+  const mayPersistCompany = shouldPersistCompany({
+    companyName: prospect.companyName,
+    companyWebsite: prospect.companyWebsite,
+    personName: prospect.personName,
+    evidence: evidence.map((e) => ({
+      source: e.source || "research",
+      url: e.url,
+      excerpt: e.excerpt,
+      retrievedAt: e.retrievedAt || new Date().toISOString(),
+    })),
+    associationConfidence,
+  });
+
+  if (prospect.companyName && isWeakCompanyName(prospect.companyName)) {
+    companySkippedReason = "WEAK_COMPANY_NAME";
+  } else if (prospect.companyName && !mayPersistCompany && !companyId) {
+    companySkippedReason = "INSUFFICIENT_COMPANY_EVIDENCE";
+  } else if (prospect.companyName && !companyId && mayPersistCompany) {
+    const domain = domainFromWebsite(prospect.companyWebsite);
     const existingCompany = await prisma.company.findFirst({
       where: {
         organisationId: input.organisationId,
         deletedAt: null,
-        name: { equals: prospect.companyName, mode: "insensitive" },
+        OR: [
+          ...(domain ? [{ domain: { equals: domain, mode: "insensitive" as const } }] : []),
+          ...(prospect.companyWebsite
+            ? [{ website: { equals: prospect.companyWebsite, mode: "insensitive" as const } }]
+            : []),
+          { name: { equals: prospect.companyName, mode: "insensitive" } },
+        ],
       },
     });
     if (existingCompany) {
@@ -34,11 +94,7 @@ export async function ingestProspectToCrm(input: {
         where: { id: existingCompany.id },
         data: {
           website: existingCompany.website || prospect.companyWebsite || undefined,
-          domain:
-            existingCompany.domain ||
-            (prospect.companyWebsite
-              ? prospect.companyWebsite.replace(/^https?:\/\//, "").split("/")[0]
-              : undefined),
+          domain: existingCompany.domain || domain || undefined,
         },
       });
     } else {
@@ -47,17 +103,17 @@ export async function ingestProspectToCrm(input: {
           organisationId: input.organisationId,
           name: prospect.companyName,
           website: prospect.companyWebsite || undefined,
-          domain: prospect.companyWebsite
-            ? prospect.companyWebsite.replace(/^https?:\/\//, "").split("/")[0]
-            : undefined,
+          domain,
           metadata: {
             provenance: "social_prospect",
             prospectId: prospect.id,
+            associationConfidence,
             sourceEvidence: prospect.sourceEvidence,
           },
         },
       });
       companyId = created.id;
+      companyCreated = true;
     }
   }
 
@@ -118,6 +174,7 @@ export async function ingestProspectToCrm(input: {
             instagramUrl: prospect.instagramUrl,
             sourceEvidence: prospect.sourceEvidence,
             confidence: prospect.confidence,
+            companySkippedReason,
           },
         },
       });
@@ -138,20 +195,18 @@ export async function ingestProspectToCrm(input: {
   let opportunityId: string | null = prospect.opportunityId;
   if (input.createOpportunity !== false) {
     const title = prospect.personName
-      ? `Prospect: ${prospect.personName}${prospect.companyName ? ` @ ${prospect.companyName}` : ""}`
+      ? `Prospect: ${prospect.personName}${
+          companyId && prospect.companyName ? ` @ ${prospect.companyName}` : ""
+        }`
       : `Prospect: ${prospect.companyName || "Unknown"}`;
     const conf =
       (prospect.confidence ?? 0) >= 0.75 ? "HIGH" : (prospect.confidence ?? 0) >= 0.45 ? "MEDIUM" : "LOW";
-    const evidences = Array.isArray(prospect.sourceEvidence)
-      ? (prospect.sourceEvidence as Array<{ source?: string; url?: string; excerpt?: string }>).map(
-          (e) => ({
-            evidenceType: "research_source",
-            label: e.source || "research",
-            detail: e.excerpt || e.url || undefined,
-            evidenceId: e.url || undefined,
-          }),
-        )
-      : [];
+    const evidences = evidence.map((e) => ({
+      evidenceType: "research_source",
+      label: e.source || "research",
+      detail: e.excerpt || e.url || undefined,
+      evidenceId: e.url || undefined,
+    }));
     if (evidences.length === 0) {
       evidences.push({
         evidenceType: "social_prospect",
@@ -174,6 +229,7 @@ export async function ingestProspectToCrm(input: {
       scoreFactorsExtra: {
         fitScore: prospect.fitScore,
         confidence: prospect.confidence,
+        associationConfidence,
       },
       createdByAgent: "social_prospecting",
     });
@@ -190,5 +246,11 @@ export async function ingestProspectToCrm(input: {
     },
   });
 
-  return { contactId: contactId!, companyId, opportunityId };
+  return {
+    contactId: contactId!,
+    companyId,
+    opportunityId,
+    companyCreated,
+    companySkippedReason,
+  };
 }

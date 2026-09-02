@@ -1,26 +1,72 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
 import { getAiProvider } from "@/adapters/ai";
 import { getMessagingAdapter } from "@/adapters/messaging";
 import { getBookingProvider } from "@/adapters/booking";
 import { listConfiguredSourcePlatforms } from "@/adapters/sources";
 import { getPublicProviderCapabilityHealth } from "@/services/provider-capability-health";
+import { customerSafeAiHealth } from "@/lib/customer-ai-errors";
+
+function isPlatformViewer(session: {
+  user?: { isPlatformAdmin?: boolean; role?: string };
+} | null): boolean {
+  const u = session?.user;
+  if (!u) return false;
+  return Boolean(u.isPlatformAdmin) || u.role === "SUPER_ADMIN";
+}
 
 /**
- * Public provider capability snapshot.
- * Safe: no secrets, no live probes, CONFIGURED ≠ CONNECTED.
- * Keeps legacy `providers.{ai,manychat,...}` shape for existing UI plus `capabilities[]`.
+ * Provider capability snapshot.
+ * Platform developers get full AI vendor diagnostics.
+ * Workspace customers get product-level AI availability only (no Claude/OpenAI/keys).
  */
 export async function GET() {
   const env = getEnv();
+  let session: { user?: { isPlatformAdmin?: boolean; role?: string } } | null = null;
+  try {
+    session = await getServerSession(authOptions);
+  } catch {
+    session = null;
+  }
+  const platform = isPlatformViewer(session);
   const ai = getAiProvider();
   const messaging = getMessagingAdapter();
   const booking = getBookingProvider();
   const snapshot = getPublicProviderCapabilityHealth();
+  const aiReady = Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock";
+
+  if (!platform) {
+    const manychatConfigured = Boolean(env.MANYCHAT_WEBHOOK_SECRET || env.MANYCHAT_API_TOKEN);
+    const bookingConfigured = Boolean(env.BOOKING_WEBHOOK_SECRET);
+    const emailConfigured = Boolean(env.EMAIL_SMTP_URL);
+    return Response.json({
+      ok: true,
+      providers: {
+        ai: customerSafeAiHealth(aiReady),
+        research: {
+          configuredPlatforms: listConfiguredSourcePlatforms().length > 0,
+        },
+        manychat: {
+          status: manychatConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+          apiTokenConfigured: Boolean(env.MANYCHAT_API_TOKEN),
+        },
+        booking: {
+          status: bookingConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+          defaultUrlConfigured: Boolean(env.DEFAULT_BOOKING_URL),
+        },
+        email: {
+          status: emailConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+          smtpConfigured: emailConfigured,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return Response.json({
     ok: true,
     ...snapshot,
-    /** @deprecated Prefer snapshot.providers entries with status enums */
     legacy: {
       ai: {
         primary: "anthropic",
@@ -30,7 +76,7 @@ export async function GET() {
         hasAnthropicKey: Boolean(env.ANTHROPIC_API_KEY),
         hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
         openaiRequired: false,
-        ready: Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock",
+        ready: aiReady,
         optionalProviders: {
           groq: Boolean(env.GROQ_API_KEY),
           mistral: Boolean(env.MISTRAL_API_KEY),
@@ -39,7 +85,6 @@ export async function GET() {
         },
       },
     },
-    // Backward-compatible nested map used by Settings / Go Live / Integrations
     providers: {
       ai: {
         primary: "anthropic",
@@ -49,7 +94,7 @@ export async function GET() {
         hasAnthropicKey: Boolean(env.ANTHROPIC_API_KEY),
         hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
         openaiRequired: false,
-        ready: Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock",
+        ready: aiReady,
         status: env.ANTHROPIC_API_KEY ? "CONFIGURED" : "NOT_CONFIGURED",
         optionalProviders: {
           groq: Boolean(env.GROQ_API_KEY),

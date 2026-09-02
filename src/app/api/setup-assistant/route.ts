@@ -8,6 +8,7 @@ import { recordAiExecution } from "@/services/ai-execution";
 import { writeAuditLog } from "@/services/audit";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
+import { toCustomerAiError, CUSTOMER_AI_UNAVAILABLE } from "@/lib/customer-ai-errors";
 
 const proposeSchema = z.object({
   action: z.literal("propose"),
@@ -36,19 +37,7 @@ const proposalShape = z.object({
 });
 
 function humanizeSetupAiError(message: string): string {
-  const lower = message.toLowerCase();
-  if (
-    lower.includes("api key is invalid") ||
-    lower.includes("authentication_error") ||
-    lower.includes("invalid x-api-key") ||
-    (lower.includes("401") && lower.includes("anthropic"))
-  ) {
-    return "Claude isn’t configured correctly on the server (invalid Anthropic API key). An admin needs to update ANTHROPIC_API_KEY in Vercel and redeploy.";
-  }
-  if (lower.includes("anthropic") && (lower.includes("not configured") || lower.includes("missing"))) {
-    return "Claude isn’t configured yet. Add ANTHROPIC_API_KEY in Vercel (or switch AI_PROVIDER), then redeploy.";
-  }
-  return message;
+  return toCustomerAiError(message);
 }
 
 export async function POST(req: NextRequest) {
@@ -59,16 +48,13 @@ export async function POST(req: NextRequest) {
     if (body.action === "propose") {
       const env = getEnv();
       if (!env.ANTHROPIC_API_KEY && (env.AI_PROVIDER || "anthropic") === "anthropic") {
-        return jsonError(
-          "Claude isn’t configured yet. Add ANTHROPIC_API_KEY in Vercel, then redeploy.",
-          503,
-        );
+        return jsonError(CUSTOMER_AI_UNAVAILABLE, 503);
       }
 
       const provider = getAiProvider();
       const model = resolveModelForTier("default");
       const started = Date.now();
-      const systemPrompt = `You are Claude, the Agent Desk Setup Assistant.
+      const systemPrompt = `You are the Agent Desk Setup Assistant.
 Given a business description, propose CRM configuration as JSON with keys:
 knowledgeStructure (array of {title,category,content}),
 qualificationFields (array of {key,label,description}),

@@ -11,8 +11,15 @@ export {
   discoverSocialProspects,
   listSocialProspects,
   getSocialProspectForOrg,
+  listRecentSearchRuns,
 } from "@/services/social-prospecting/discovery";
 export { gatherProspectCandidatesFromResearch } from "@/services/social-prospecting/research-bridge";
+export {
+  validateProspectCandidate,
+  isPlausibleHumanName,
+  isScrapedFragment,
+  shouldPersistCompany,
+} from "@/services/social-prospecting/entity-validation";
 export {
   resolveIdentitiesForCandidate,
   verifyProfileAgainstCandidate,

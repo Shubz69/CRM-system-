@@ -39,6 +39,10 @@ const prismaMocks = vi.hoisted(() => ({
   socialMetricFact: {
     create: vi.fn(async (args: { data: Record<string, unknown> }) => args.data),
   },
+  organisationPreference: {
+    findUnique: vi.fn(async () => null),
+    upsert: vi.fn(async (args: { create: Record<string, unknown> }) => args.create),
+  },
   integration: {
     upsert: vi.fn(async (args: { create: Record<string, unknown> }) => ({
       id: "int_1",

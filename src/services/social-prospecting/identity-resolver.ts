@@ -38,6 +38,11 @@ export function detectNetworkFromUrl(url: string): SocialNetworkId | null {
 
 export function canonicalizeProfileUrl(network: SocialNetworkId, raw: string): string | undefined {
   const cleaned = raw.split("?")[0].replace(/\/$/, "");
+  // Reject privacy / legal / navigation destinations as profile identities
+  if (/\/(privacy|legal|terms|cookie|about|help|explore|accounts|directory)\b/i.test(cleaned)) {
+    return undefined;
+  }
+  if (/instagram\.com\/(privacy|legal|about|developer)/i.test(cleaned)) return undefined;
   switch (network) {
     case "LINKEDIN":
       return normalizeLinkedInUrl(cleaned);
@@ -147,6 +152,15 @@ export function verifyProfileAgainstCandidate(input: {
 
   // Wrong-profile prevention: person profiles must reflect the name in the URL itself
   // (never promote a rival slug merely because evidence text mentions the person nearby)
+  // Company LinkedIn pages are never person profiles
+  if (input.network === "LINKEDIN" && /linkedin\.com\/(company|school)\//i.test(urlLower)) {
+    return {
+      verificationState: "UNVERIFIED",
+      confidence: 0.1,
+      reasons: ["company_page_not_person_profile"],
+    };
+  }
+
   const nameInUrl = personToks.some((t) => urlLower.includes(t));
   if (personToks.length && !nameInUrl) {
     const isPersonProfilePath =

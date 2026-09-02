@@ -157,6 +157,16 @@ export function platformSupportsCapability(
       return false;
     }
   }
+  if (network === "YOUTUBE") {
+    if (
+      capability === "DIRECT_MESSAGES" ||
+      capability === "CONVERSATION_READ" ||
+      capability === "CONVERSATION_WRITE" ||
+      capability === "CONNECTION_INVITE"
+    ) {
+      return false;
+    }
+  }
   if (network === "INSTAGRAM" && capability === "CONNECTION_INVITE") return false;
   return true;
 }

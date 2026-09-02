@@ -244,6 +244,11 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
     metadata: { name: org.name, slug: org.slug, ownerEmail: effectiveEmail },
   });
 
+  const { ensureNewOrgSocialConnectionPolicy } = await import(
+    "@/services/social-connection-policy"
+  );
+  await ensureNewOrgSocialConnectionPolicy(org.id);
+
   return {
     organisation: { id: org.id, name: org.name, slug: org.slug },
     user: { id: user.id, email: user.email, name: user.name },

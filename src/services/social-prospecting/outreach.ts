@@ -35,25 +35,34 @@ export function generateOutreachDrafts(input: {
   email?: string | null;
   /** Only set when evidence proves a specific public post/activity */
   observedPostExcerpt?: string | null;
+  /** 0–1; weak evidence → safer, less-specific copy */
+  evidenceConfidence?: number | null;
 }): OutreachDrafts {
   const name = input.personName?.split(" ")[0] || "there";
-  const company = input.companyName || "your team";
-  const role = input.role ? ` as ${input.role}` : "";
-  const locationBit = input.location ? ` in ${input.location}` : "";
-  const sectorBit = input.sector ? ` (${input.sector})` : "";
+  const conf = input.evidenceConfidence ?? 0.6;
+  const strong = conf >= 0.65;
+  const company = strong && input.companyName ? input.companyName : "your work";
+  const role = strong && input.role ? ` as ${input.role}` : "";
+  const locationBit = strong && input.location ? ` in ${input.location}` : "";
+  const sectorBit = strong && input.sector ? ` (${input.sector})` : "";
 
-  const evidenceBit = (input.evidenceExcerpts || []).find((e) => e.trim().length > 12)?.trim();
-  const postBit = input.observedPostExcerpt?.trim();
+  const evidenceBit = strong
+    ? (input.evidenceExcerpts || []).find((e) => e.trim().length > 12)?.trim()
+    : undefined;
+  const postBit = strong ? input.observedPostExcerpt?.trim() : undefined;
 
   let grounded: string;
   if (postBit) {
     grounded = `I saw your recent note: “${postBit.slice(0, 100)}${postBit.length > 100 ? "…" : ""}”`;
   } else if (evidenceBit) {
     grounded = `From public research: ${evidenceBit.slice(0, 120)}${evidenceBit.length > 120 ? "…" : ""}`;
-  } else if (input.reasonSelected) {
+  } else if (strong && input.reasonSelected) {
     grounded = `I've been researching ${company}${role}${locationBit}${sectorBit}`;
+  } else if (strong && input.companyName) {
+    grounded = `I've been looking at ${input.companyName}${locationBit}`;
   } else {
-    grounded = `I've been looking at ${company}${locationBit}`;
+    // Graceful degradation — never fabricate specificity
+    grounded = `I came across your profile and thought it was worth a short note`;
   }
 
   const offer = input.offerSummary?.trim() || "how we help similar teams save time with AI operations";
@@ -68,31 +77,33 @@ export function generateOutreachDrafts(input: {
 
   const followUpOne = [
     `Hi ${name}, thanks for connecting.`,
-    `Curious whether ${company} is exploring ${offer}? Happy to share a 2-minute overview if useful.`,
+    strong && input.companyName
+      ? `Curious whether ${input.companyName} is exploring ${offer}? Happy to share a 2-minute overview if useful.`
+      : `Curious whether this is on your radar — happy to share a 2-minute overview if useful.`,
   ].join(" ");
 
   const followUpTwo = [
     `Hi ${name} — circling back once.`,
-    `If timing is off, no worries — happy to share a brief resource for ${company} whenever it helps.`,
+    `If timing is off, no worries — happy to share a brief resource whenever it helps.`,
   ].join(" ");
 
   const instagramMessage = [
     `Hi ${name} — ${grounded}.`,
     tone.includes("casual")
-      ? `Thought this might be relevant for ${company}.`
-      : `Sharing a concise idea that may help ${company}.`,
+      ? `Thought this might be relevant.`
+      : `Sharing a concise idea that may help.`,
   ].join(" ");
 
   const instagramFollowUp = `Hi ${name}, just following up in case my earlier note was buried. Happy to keep it short.`;
 
   const genericSocialOutreach = [
     `Hi ${name} — ${grounded}.`,
-    `If useful, I can share a brief note on ${offer} for ${company}.`,
+    `If useful, I can share a brief note on ${offer}.`,
   ].join(" ");
 
   const emailDraft = input.email
     ? [
-        `Subject: Quick idea for ${company}`,
+        `Subject: Quick idea${strong && input.companyName ? ` for ${input.companyName}` : ""}`,
         "",
         `Hi ${name},`,
         "",
@@ -191,6 +202,7 @@ export async function prepareProspectOutreach(input: {
     evidenceExcerpts: evidence,
     offerSummary: input.offerSummary,
     brandTone: input.brandTone,
+    evidenceConfidence: prospect.confidence,
   });
 
   const threads = [];

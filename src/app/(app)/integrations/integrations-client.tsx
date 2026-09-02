@@ -15,7 +15,7 @@ type Channel = {
   isActive: boolean;
 };
 
-type ManyChatStatus = {
+type MessagingStatus = {
   webhookUrl: string;
   inboundAliasUrl?: string;
   secretConfigured: boolean;
@@ -95,17 +95,17 @@ type MetaInstagramStatus = {
     webhookSubscribed: boolean;
     connectedAt: string | null;
     lastValidatedAt: string | null;
-    duplicateManyChatRisk: boolean;
+    duplicateMessagingRisk: boolean;
   };
   reconnectHint: string | null;
 };
 
 /**
- * Messaging for Instagram: native Meta path or ManyChat below.
+ * Messaging for Instagram: connect above or messaging setup below.
  * LinkedIn / TikTok have no compliant third-party DM API.
  */
 function messagingNote(slug: string): string {
-  if (slug === "instagram") return "via Meta (Connect above) or ManyChat (below)";
+  if (slug === "instagram") return "via Connect above or messaging setup below";
   return "not available — no third-party API exists";
 }
 
@@ -134,24 +134,31 @@ function formatTestedAt(iso: string | undefined | null): string {
   }
 }
 
-const MANYCHAT_SETUP_ID = "manychat-setup";
+const MANYCHAT_SETUP_ID = "messaging-setup";
 
 export default function IntegrationsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const manychatSetupRef = useRef<HTMLElement | null>(null);
+  const messagingSetupRef = useRef<HTMLElement | null>(null);
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
-  const [status, setStatus] = useState<ManyChatStatus | null>(null);
+  const [status, setStatus] = useState<MessagingStatus | null>(null);
   const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
-  const [ayrshare, setAyrshare] = useState<{
+  const [alternateSocial, setAlternateSocial] = useState<{
     configured?: boolean;
     serverConfigured?: boolean;
     status?: string;
   } | null>(null);
+  void alternateSocial;
   const [socialAccounts, setSocialAccounts] = useState<{
     serverConfigured?: boolean;
     status?: string;
     healed?: boolean;
+    connectionPolicy?: {
+      socialConnectionsEnabled?: boolean;
+      maxConnectedSocialAccounts?: number | null;
+      allowedNetworks?: string[];
+      connectedCount?: number;
+    };
     networks?: {
       instagram?: {
         connected?: boolean;
@@ -171,10 +178,21 @@ export default function IntegrationsClient() {
         health?: string;
         dmCapability?: string;
       };
+      youtube?: {
+        connected?: boolean;
+        status?: string;
+        username?: string | null;
+        displayName?: string | null;
+        accountType?: string | null;
+        health?: string;
+        dmCapability?: string;
+      };
     };
     connectedAccounts?: Array<{ platform?: string; displayName?: string; username?: string }>;
   } | null>(null);
-  const [disconnectConfirm, setDisconnectConfirm] = useState<"instagram" | "linkedin" | null>(null);
+  const [disconnectConfirm, setDisconnectConfirm] = useState<
+    "instagram" | "linkedin" | "youtube" | null
+  >(null);
   const [metaTestContactId, setMetaTestContactId] = useState("");
   const [metaTestConversationId, setMetaTestConversationId] = useState("");
   const [metaTestText, setMetaTestText] = useState("");
@@ -225,13 +243,13 @@ export default function IntegrationsClient() {
     setReadiness(json);
   }, []);
 
-  const loadAyrshare = useCallback(async () => {
+  const loadAlternateSocial = useCallback(async () => {
     const res = await fetch("/api/integrations/ayrshare");
     if (!res.ok) {
-      setAyrshare(null);
+      setAlternateSocial(null);
       return;
     }
-    setAyrshare(await res.json());
+    setAlternateSocial(await res.json());
   }, []);
 
   const loadSocialAccounts = useCallback(async () => {
@@ -243,7 +261,7 @@ export default function IntegrationsClient() {
     setSocialAccounts(await res.json());
   }, []);
 
-  const loadManyChat = useCallback(async () => {
+  const loadMessaging = useCallback(async () => {
     const res = await fetch("/api/integrations/manychat");
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load");
@@ -276,9 +294,9 @@ export default function IntegrationsClient() {
     try {
       const providersPromise = fetch("/api/health/providers");
       await Promise.all([
-        loadManyChat(),
+        loadMessaging(),
         loadMetaInstagram(),
-        loadAyrshare(),
+        loadAlternateSocial(),
         loadSocialAccounts(),
         loadReadiness(),
         loadSocial(),
@@ -287,21 +305,25 @@ export default function IntegrationsClient() {
       const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
-        setAiReady(Boolean(p.providers?.ai?.ready || p.providers?.ai?.hasAnthropicKey));
+        setAiReady(
+          Boolean(
+            p.providers?.ai?.ready || p.providers?.ai?.status === "AVAILABLE",
+          ),
+        );
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load integrations");
     } finally {
       setLoading(false);
     }
-  }, [loadManyChat, loadMetaInstagram, loadAyrshare, loadSocialAccounts, loadReadiness, loadSocial, loadMesh]);
+  }, [loadMessaging, loadMetaInstagram, loadAlternateSocial, loadSocialAccounts, loadReadiness, loadSocial, loadMesh]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const focusManyChatSetup = useCallback((opts?: { focusToken?: boolean }) => {
-    const el = manychatSetupRef.current || document.getElementById(MANYCHAT_SETUP_ID);
+  const focusMessagingSetup = useCallback((opts?: { focusToken?: boolean }) => {
+    const el = messagingSetupRef.current || document.getElementById(MANYCHAT_SETUP_ID);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
     if (typeof el.focus === "function") {
@@ -312,18 +334,18 @@ export default function IntegrationsClient() {
     }
   }, []);
 
-  // One journey: Instagram Configure / Set up → ManyChat setup section.
+  // One journey: Instagram Configure / Set up → Messaging setup section.
   useEffect(() => {
     if (loading) return;
     const setup = searchParams.get("setup");
     const hash =
       typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
-    if (setup === "manychat" || hash === MANYCHAT_SETUP_ID) {
-      focusManyChatSetup({ focusToken: setup === "manychat" });
+    if (setup === "messaging" || hash === MANYCHAT_SETUP_ID) {
+      focusMessagingSetup({ focusToken: setup === "messaging" });
     }
-  }, [loading, searchParams, focusManyChatSetup]);
+  }, [loading, searchParams, focusMessagingSetup]);
 
-  // /api/social/[platform]/callback, Zernio OAuth, and Meta Instagram OAuth redirect here —
+  // /api/social/[platform]/callback, Social OAuth, and Instagram OAuth redirect here —
   // surface once, force social revalidation, then strip from the URL so a refresh doesn't repeat it.
   useEffect(() => {
     const connected = searchParams.get("social_connected");
@@ -350,7 +372,15 @@ export default function IntegrationsClient() {
       if (connected) {
         const label = connected
           .split(",")
-          .map((p) => (p === "instagram" ? "Instagram" : p === "linkedin" ? "LinkedIn" : p))
+          .map((p) =>
+            p === "instagram"
+              ? "Instagram"
+              : p === "linkedin"
+                ? "LinkedIn"
+                : p === "youtube"
+                  ? "YouTube"
+                  : p,
+          )
           .join(" & ");
         toast.success(`${label} connected`);
       } else if (socialSync === "needed") {
@@ -366,7 +396,7 @@ export default function IntegrationsClient() {
       else if (metaStatus === "incomplete")
         toast.error(metaError || "Instagram connected but setup is incomplete");
       else if (metaStatus === "not_configured")
-        toast.error("Meta Instagram app is not configured on the server");
+        toast.error("Instagram app is not configured on the server");
       else if (metaStatus === "denied") toast.error(metaError || "Instagram connection denied");
       else if (metaStatus === "error") toast.error(metaError || "Instagram connection failed");
       if (metaStatus === "connected" || metaStatus === "incomplete") {
@@ -397,7 +427,7 @@ export default function IntegrationsClient() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        provider: "manychat",
+        provider: "messaging",
         externalId,
         displayName: displayName || externalId,
         isActive: channelActive,
@@ -415,7 +445,7 @@ export default function IntegrationsClient() {
     await load();
   }
 
-  async function manychatAction(action: string, payload: Record<string, unknown> = {}) {
+  async function messagingAction(action: string, payload: Record<string, unknown> = {}) {
     const res = await fetch("/api/integrations/manychat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -440,15 +470,15 @@ export default function IntegrationsClient() {
   async function saveApiToken(e: FormEvent) {
     e.preventDefault();
     if (!apiTokenInput.trim()) {
-      toast.error("Paste your ManyChat API token first");
+      toast.error("Paste your messaging API token first");
       return;
     }
     setBusy(true);
     try {
-      const json = await manychatAction("save_api_token", { apiToken: apiTokenInput.trim() });
+      const json = await messagingAction("save_api_token", { apiToken: apiTokenInput.trim() });
       setApiTokenInput("");
       toast.success(json.message || "API token saved");
-      await loadManyChat();
+      await loadMessaging();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save token");
     } finally {
@@ -456,12 +486,12 @@ export default function IntegrationsClient() {
     }
   }
 
-  async function disconnectManyChat() {
+  async function disconnectMessaging() {
     setBusy(true);
     try {
-      const json = await manychatAction("disconnect");
-      toast.success(json.message || "ManyChat disconnected");
-      await loadManyChat();
+      const json = await messagingAction("disconnect");
+      toast.success(json.message || "Messaging disconnected");
+      await loadMessaging();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not disconnect");
     } finally {
@@ -469,12 +499,12 @@ export default function IntegrationsClient() {
     }
   }
 
-  async function reconnectManyChat() {
+  async function reconnectMessaging() {
     setBusy(true);
     try {
-      const json = await manychatAction("reconnect");
-      toast.success(json.message || "ManyChat reconnected");
-      await loadManyChat();
+      const json = await messagingAction("reconnect");
+      toast.success(json.message || "Messaging reconnected");
+      await loadMessaging();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not reconnect");
     } finally {
@@ -485,10 +515,10 @@ export default function IntegrationsClient() {
   async function validateConfiguration() {
     setBusy(true);
     try {
-      const json = await manychatAction("validate_configuration");
+      const json = await messagingAction("validate_configuration");
       if (json.ok) toast.success(json.message || "Configuration valid — no message sent");
       else toast.error(json.message || "Configuration incomplete");
-      await loadManyChat();
+      await loadMessaging();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Validation failed");
     } finally {
@@ -499,12 +529,12 @@ export default function IntegrationsClient() {
   async function sendTestMessage(e: FormEvent) {
     e.preventDefault();
     if (!testContactExternalId.trim()) {
-      toast.error("Enter a real ManyChat subscriber ID");
+      toast.error("Enter a real messaging subscriber ID");
       return;
     }
     setBusy(true);
     try {
-      const json = await manychatAction("send_test_message", {
+      const json = await messagingAction("send_test_message", {
         contactExternalId: testContactExternalId.trim(),
         text: testMessageText.trim() || undefined,
       });
@@ -520,7 +550,7 @@ export default function IntegrationsClient() {
   async function regenerateSecret() {
     setBusy(true);
     try {
-      const json = await manychatAction("regenerate_secret");
+      const json = await messagingAction("regenerate_secret");
       if (json.secret) {
         setOneTimeSecret(json.secret);
         toast.success("Secret regenerated — copy it now");
@@ -536,7 +566,7 @@ export default function IntegrationsClient() {
   async function simulateInbound() {
     setBusy(true);
     try {
-      await manychatAction("test_inbound");
+      await messagingAction("test_inbound");
       toast.success("Sample inbound message processed inside the CRM (nothing sent to Instagram)");
       await load();
     } catch (e) {
@@ -609,58 +639,34 @@ export default function IntegrationsClient() {
       <PageHeader description="Connect channels, finish setup, and go live — advanced detail stays out of the way." />
 
       <section className="surface space-y-4 p-5">
-        <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Connected channels</h2>
+        <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Social Accounts</h2>
         <p className="text-sm text-[var(--muted)]">
           What is live for this workspace right now.
         </p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl border border-[var(--border)] p-4">
-            <p className="font-medium">Instagram messaging</p>
-            <p className="mt-1 text-xs text-[var(--muted)]">DMs into the same Inbox</p>
-            <p className="mt-3 text-sm">
-              {metaIg?.connection?.health === "CONNECTED" || status?.connected ? (
-                <span className="badge badge-success">Connected</span>
-              ) : (
-                <span className="badge badge-warn">Needs setup</span>
-              )}
-            </p>
-            {metaIg?.connection?.username ? (
-              <p className="mt-1 text-xs text-[var(--muted)]">@{metaIg.connection.username}</p>
-            ) : null}
-            <div className="mt-3 flex flex-wrap gap-2">
-              {metaIg?.appConfigured ? (
-                <a
-                  href="/api/integrations/meta-instagram/connect"
-                  className="btn btn-primary text-xs"
-                >
-                  Connect with Instagram
-                </a>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-secondary text-xs"
-                onClick={() => focusManyChatSetup({ focusToken: true })}
-              >
-                Set up with ManyChat
-              </button>
-            </div>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">Social Accounts</p>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Connect Instagram (Business/Creator — Instagram Login, no Facebook Page required) and
-              LinkedIn for publishing and analytics. Prospect outreach stays Open + Copy.
+              Connect Instagram, LinkedIn, and YouTube. Capability readiness is shown per account.
             </p>
             <div className="mt-3 space-y-3 text-sm">
-              {(["instagram", "linkedin"] as const).map((platform) => {
+              {(["instagram", "linkedin", "youtube"] as const).map((platform) => {
                 const net =
                   platform === "instagram"
                     ? socialAccounts?.networks?.instagram
-                    : socialAccounts?.networks?.linkedin;
-                const label = platform === "instagram" ? "Instagram" : "LinkedIn";
+                    : platform === "linkedin"
+                      ? socialAccounts?.networks?.linkedin
+                      : socialAccounts?.networks?.youtube;
+                const label =
+                  platform === "instagram"
+                    ? "Instagram"
+                    : platform === "linkedin"
+                      ? "LinkedIn"
+                      : "YouTube";
                 const status = net?.status || (net?.connected ? "CONNECTED" : "DISCONNECTED");
                 const connected = status === "CONNECTED";
-                const degraded = status === "DEGRADED" || status === "REAUTH_REQUIRED" || status === "CONNECTING";
+                const degraded =
+                  status === "DEGRADED" || status === "REAUTH_REQUIRED" || status === "CONNECTING";
                 const identity =
                   platform === "instagram"
                     ? net?.username
@@ -668,6 +674,15 @@ export default function IntegrationsClient() {
                       : net?.displayName || null
                     : net?.displayName || (net?.username ? net.username : null);
                 const typeHint = net?.accountType;
+                const networkAllowed =
+                  !socialAccounts?.connectionPolicy?.allowedNetworks ||
+                  socialAccounts.connectionPolicy.allowedNetworks.includes(
+                    platform === "instagram"
+                      ? "INSTAGRAM"
+                      : platform === "linkedin"
+                        ? "LINKEDIN"
+                        : "YOUTUBE",
+                  );
                 return (
                   <div key={platform} className="flex flex-wrap items-start justify-between gap-2">
                     <div>
@@ -687,6 +702,17 @@ export default function IntegrationsClient() {
                           {typeHint ? ` · ${typeHint}` : ""}
                         </p>
                       ) : null}
+                      {connected ? (
+                        <ul className="mt-2 space-y-0.5 text-xs text-[var(--muted)]">
+                          <li>Publishing · Available</li>
+                          <li>Analytics · Available</li>
+                          <li>
+                            {platform === "instagram"
+                              ? "Messaging · Available"
+                              : "Outreach · Open + Copy"}
+                          </li>
+                        </ul>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {connected || status === "REAUTH_REQUIRED" ? (
@@ -702,7 +728,12 @@ export default function IntegrationsClient() {
                         <button
                           type="button"
                           className="btn btn-secondary text-xs"
-                          disabled={busy || !socialAccounts?.serverConfigured}
+                          disabled={
+                            busy ||
+                            !socialAccounts?.serverConfigured ||
+                            socialAccounts?.connectionPolicy?.socialConnectionsEnabled === false ||
+                            !networkAllowed
+                          }
                           onClick={async () => {
                             setBusy(true);
                             try {
@@ -712,7 +743,15 @@ export default function IntegrationsClient() {
                                 body: JSON.stringify({ action: "connect", platform }),
                               });
                               const json = await res.json();
-                              if (!res.ok) throw new Error(json.error || `Could not start ${label} connect`);
+                              if (!res.ok) {
+                                if (json.code === "SOCIAL_CONNECTION_QUOTA") {
+                                  throw new Error(
+                                    json.error ||
+                                      "Your workspace has reached its connected-account limit.",
+                                  );
+                                }
+                                throw new Error(json.error || `Could not start ${label} connect`);
+                              }
                               if (json.url) {
                                 window.location.href = json.url;
                                 return;
@@ -734,7 +773,15 @@ export default function IntegrationsClient() {
                 );
               })}
               {!socialAccounts?.serverConfigured ? (
-                <p className="text-xs text-[var(--muted)]">Social account linking is not configured on this server.</p>
+                <p className="text-xs text-[var(--muted)]">
+                  Social account linking is not configured on this server.
+                </p>
+              ) : null}
+              {socialAccounts?.connectionPolicy?.maxConnectedSocialAccounts != null ? (
+                <p className="text-xs text-[var(--muted)]">
+                  Connected accounts: {socialAccounts.connectionPolicy.connectedCount ?? 0} /{" "}
+                  {socialAccounts.connectionPolicy.maxConnectedSocialAccounts}
+                </p>
               ) : null}
             </div>
             {disconnectConfirm ? (
@@ -745,12 +792,18 @@ export default function IntegrationsClient() {
                   className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-lg"
                 >
                   <p className="text-lg font-medium">
-                    Disconnect {disconnectConfirm === "instagram" ? "Instagram" : "LinkedIn"}?
+                    Disconnect{" "}
+                    {disconnectConfirm === "instagram"
+                      ? "Instagram"
+                      : disconnectConfirm === "linkedin"
+                        ? "LinkedIn"
+                        : "YouTube"}
+                    ?
                   </p>
                   <p className="mt-2 text-sm text-[var(--muted)]">
-                    This stops Agent Desk from publishing, receiving new provider messages, and accessing
-                    this account until you reconnect. Existing CRM history and previous conversations will
-                    remain.
+                    This stops Agent Desk from publishing, receiving new messages, and
+                    accessing this account until you reconnect. Existing CRM history and previous
+                    conversations will remain.
                   </p>
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
                     <button
@@ -779,7 +832,7 @@ export default function IntegrationsClient() {
                             if (json.code === "RECONCILIATION_REQUIRED") {
                               toast.error(
                                 json.error ||
-                                  "Disconnect could not be confirmed with the provider — status not changed to disconnected",
+                                  "Disconnect could not be confirmed — status not changed to disconnected",
                               );
                               await loadSocialAccounts();
                               setDisconnectConfirm(null);
@@ -788,7 +841,13 @@ export default function IntegrationsClient() {
                             throw new Error(json.error || "Disconnect failed");
                           }
                           toast.success(
-                            `${platform === "instagram" ? "Instagram" : "LinkedIn"} disconnected`,
+                            `${
+                              platform === "instagram"
+                                ? "Instagram"
+                                : platform === "linkedin"
+                                  ? "LinkedIn"
+                                  : "YouTube"
+                            } disconnected`,
                           );
                           setDisconnectConfirm(null);
                           await loadSocialAccounts();
@@ -806,51 +865,12 @@ export default function IntegrationsClient() {
               </div>
             ) : null}
           </div>
-          {ayrshare?.serverConfigured || ayrshare?.configured ? (
-            <div className="rounded-xl border border-[var(--border)] p-4">
-              <p className="font-medium">Additional social provider</p>
-              <p className="mt-1 text-xs text-[var(--muted)]">Optional alternate connect path for multi-network publish</p>
-              <p className="mt-3 text-sm">
-                {ayrshare?.status === "CONNECTED" ? (
-                  <span className="badge badge-success">Connected</span>
-                ) : (
-                  <span className="badge">Configured</span>
-                )}
-              </p>
-              <button
-                type="button"
-                className="btn btn-secondary mt-3 text-xs"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const res = await fetch("/api/integrations/ayrshare", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ action: "create_social_link" }),
-                    });
-                    const json = await res.json();
-                    if (!res.ok) throw new Error(json.error || "Could not start social link");
-                    if (json.url) {
-                      window.location.href = json.url;
-                      return;
-                    }
-                    toast.success("Social link ready");
-                    await loadAyrshare();
-                  } catch (e) {
-                    toast.error(e instanceof Error ? e.message : "Link failed");
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                Connect alternate provider
-              </button>
-            </div>
-          ) : null}
+          
           <div className="rounded-xl border border-[var(--border)] p-4">
-            <p className="font-medium">AI provider</p>
-            <p className="mt-1 text-xs text-[var(--muted)]">Qualification, replies, analysis</p>
+            <p className="font-medium">Agent Desk intelligence</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Brand voice, reply tone, and automation preferences
+            </p>
             <p className="mt-3">
               <Link href="/agent" className="btn btn-secondary text-xs">
                 Manage AI behaviour
@@ -924,7 +944,7 @@ export default function IntegrationsClient() {
                       <span className="text-xs uppercase tracking-wide">{c.customerLabel}</span>
                     </div>
                     <p className="text-xs text-[var(--muted)]">
-                      {c.providerKey} · connection {c.connectionStatus}
+                      {c.connectionStatus}
                     </p>
                     <ul className="mt-2 space-y-1 text-sm">
                       {c.capabilities.map((cap) => (
@@ -946,6 +966,7 @@ export default function IntegrationsClient() {
         </section>
       )}
 
+      {showAdvancedMesh ? (
       <div className="grid gap-3 md:grid-cols-3">
         <div className="surface p-4">
           <div className="flex items-center justify-between gap-2">
@@ -958,14 +979,14 @@ export default function IntegrationsClient() {
               }
             >
               {metaIg?.connection?.health === "CONNECTED"
-                ? "Meta Connected"
+                ? "Connected"
                 : status?.connected
-                  ? "ManyChat Connected"
+                  ? "Connected"
                   : "Not Connected"}
             </span>
           </div>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Native Meta DMs or ManyChat — same Inbox
+            Direct messages into the same Inbox
           </p>
           {metaIg?.connection?.username ? (
             <p className="mt-1 text-xs text-[var(--muted)]">
@@ -973,20 +994,20 @@ export default function IntegrationsClient() {
               {metaIg.connection.health ? ` · ${metaIg.connection.health}` : ""}
             </p>
           ) : metaIg && !metaIg.appConfigured ? (
-            <p className="mt-1 text-xs text-[var(--muted)]">Meta app not configured on server</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">Messaging adapter not configured on server</p>
           ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
             {metaIg?.appConfigured ? (
               <a href="/api/integrations/meta-instagram/connect" className="btn btn-primary">
-                Connect with Instagram
+                Connect Instagram
               </a>
             ) : null}
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => focusManyChatSetup({ focusToken: !status?.apiTokenConfigured })}
+              onClick={() => focusMessagingSetup({ focusToken: !status?.apiTokenConfigured })}
             >
-              Set up with ManyChat
+              Set up messaging
             </button>
           </div>
           {metaIg?.connection?.isActive || metaIg?.connection?.health === "CONNECTED" ? (
@@ -1018,7 +1039,7 @@ export default function IntegrationsClient() {
                   className="btn btn-secondary text-xs"
                   disabled={busy}
                   onClick={() => {
-                    if (!confirm("Disconnect Instagram (Meta)? History is kept; outbound stops.")) {
+                    if (!confirm("Disconnect Instagram? History is kept; outbound stops.")) {
                       return;
                     }
                     void (async () => {
@@ -1072,7 +1093,7 @@ export default function IntegrationsClient() {
                     }
                     if (
                       !confirm(
-                        "Send a real Instagram DM via Meta? This uses the live outbound path.",
+                        "Send a real Instagram DM? This uses the live outbound path.",
                       )
                     ) {
                       return;
@@ -1113,17 +1134,20 @@ export default function IntegrationsClient() {
         </div>
         <div className="surface p-4">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="font-semibold">AI Operator</h2>
+            <h2 className="font-semibold">Agent Desk intelligence</h2>
             <span className={aiReady ? "badge" : "badge badge-warn"}>
-              {aiReady ? "Claude Connected" : "Claude Needs Setup"}
+              {aiReady ? "Available" : "Temporarily unavailable"}
             </span>
           </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">Anthropic Claude — OpenAI not required</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Configure brand voice, reply tone, and automation behaviour
+          </p>
           <Link href="/agent" className="btn btn-secondary mt-3">
             Manage
           </Link>
         </div>
       </div>
+      ) : null}
 
       <section className="surface space-y-4 p-5">
         <div>
@@ -1255,15 +1279,15 @@ export default function IntegrationsClient() {
 
       <section
         id={MANYCHAT_SETUP_ID}
-        ref={manychatSetupRef}
+        ref={messagingSetupRef}
         tabIndex={-1}
         className="surface scroll-mt-24 space-y-4 p-5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="h-display text-2xl">ManyChat setup</h2>
+            <h2 className="h-display text-2xl">Messaging setup</h2>
             <p className="text-sm text-[var(--muted)]">
-              Connect Instagram DMs to Agent Desk through ManyChat — one guided path from account to
+              Connect Instagram DMs to Agent Desk — one guided path from account to
               first verified message.
             </p>
           </div>
@@ -1279,12 +1303,12 @@ export default function IntegrationsClient() {
 
         <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
           <li>
-            <span className="font-medium text-[var(--foreground)]">Start in ManyChat</span> — open
-            your Instagram-connected ManyChat account (or connect Instagram inside ManyChat first).
+            <span className="font-medium text-[var(--foreground)]">Start in your messaging provider</span> — open
+            your Instagram-connected messaging account (or connect Instagram in the provider first).
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Paste your API token</span> — from
-            ManyChat Settings → API, save it below. We store it encrypted and never show it again.
+            Provider API settings, save the token below. We store it encrypted and never show it again.
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Copy the webhook URL</span> — Agent
@@ -1292,10 +1316,10 @@ export default function IntegrationsClient() {
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Set the webhook secret</span> —
-            regenerate below, then add header <code>x-manychat-secret</code> in ManyChat.
+            regenerate below, then add header <code>x-manychat-secret</code> in Messaging.
           </li>
           <li>
-            <span className="font-medium text-[var(--foreground)]">Add a ManyChat automation</span> —
+            <span className="font-medium text-[var(--foreground)]">Add a Messaging automation</span> —
             on new Instagram DM, POST subscriber id + message text to the webhook URL.
           </li>
           <li>
@@ -1368,7 +1392,7 @@ export default function IntegrationsClient() {
                 value={apiTokenInput}
                 onChange={(e) => setApiTokenInput(e.target.value)}
                 placeholder={
-                  status?.apiTokenConfigured ? "Paste new token to rotate" : "Paste ManyChat API token"
+                  status?.apiTokenConfigured ? "Paste new token to rotate" : "Paste messaging API token"
                 }
               />
               <button className="btn btn-primary" type="submit" disabled={busy}>
@@ -1410,18 +1434,18 @@ export default function IntegrationsClient() {
               type="button"
               className="btn btn-primary"
               disabled={busy}
-              onClick={() => void reconnectManyChat()}
+              onClick={() => void reconnectMessaging()}
             >
-              Reconnect ManyChat
+              Reconnect messaging
             </button>
           ) : (
             <button
               type="button"
               className="btn btn-secondary"
               disabled={busy || !status?.apiTokenConfigured}
-              onClick={() => void disconnectManyChat()}
+              onClick={() => void disconnectMessaging()}
             >
-              Disconnect ManyChat
+              Disconnect messaging
             </button>
           )}
         </div>
@@ -1433,7 +1457,7 @@ export default function IntegrationsClient() {
           <div>
             <h3 className="font-semibold">Send test message</h3>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Explicit live send to a real ManyChat subscriber who already has a conversation here.
+              Explicit live send to a real messaging subscriber who already has a conversation here.
               Uses the same outbound path as Inbox replies.
             </p>
           </div>
@@ -1444,7 +1468,7 @@ export default function IntegrationsClient() {
                 className="input mt-1"
                 value={testContactExternalId}
                 onChange={(e) => setTestContactExternalId(e.target.value)}
-                placeholder="ManyChat subscriber_id"
+                placeholder="subscriber_id"
                 required
               />
             </label>
@@ -1523,7 +1547,7 @@ export default function IntegrationsClient() {
       <section className="surface p-5">
         <h2 className="h-display text-2xl">Messaging channels</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Map your ManyChat / Instagram page id so inbound DMs resolve to this workspace.
+          Map your Instagram page id so inbound DMs resolve to this workspace.
         </p>
         <ul className="mt-3 space-y-2 text-sm">
           {(status?.channels || []).length === 0 && (

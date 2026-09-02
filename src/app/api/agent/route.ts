@@ -3,6 +3,17 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requirePermission, jsonError } from "@/lib/session";
 
+function customerFacingAgentConfig<T extends Record<string, unknown>>(config: T | null) {
+  if (!config) return null;
+  const { aiProvider: _p, model: _m, ...rest } = config as T & {
+    aiProvider?: unknown;
+    model?: unknown;
+  };
+  void _p;
+  void _m;
+  return rest;
+}
+
 export async function GET() {
   try {
     const session = await requirePermission("agent:manage");
@@ -10,7 +21,7 @@ export async function GET() {
       where: { organisationId: session.organisationId, isActive: true },
       orderBy: { updatedAt: "desc" },
     });
-    return Response.json({ config });
+    return Response.json({ config: customerFacingAgentConfig(config as Record<string, unknown> | null) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -44,25 +55,32 @@ export async function PATCH(req: NextRequest) {
     });
     if (!existing) return jsonError("No agent configuration found", 404);
 
+    // Workspace users may update behaviour preferences only — not provider/model routing.
+    const { aiProvider: _aiProvider, model: _model, ...behaviour } = body;
+    void _aiProvider;
+    void _model;
+
     const config = await prisma.agentConfiguration.update({
       where: { id: existing.id },
       data: {
-        ...body,
-        scoringRules: body.scoringRules
-          ? (JSON.parse(JSON.stringify(body.scoringRules)) as object)
+        ...behaviour,
+        scoringRules: behaviour.scoringRules
+          ? (JSON.parse(JSON.stringify(behaviour.scoringRules)) as object)
           : undefined,
-        followUpDelaysMinutes: body.followUpDelaysMinutes
-          ? (JSON.parse(JSON.stringify(body.followUpDelaysMinutes)) as object)
+        followUpDelaysMinutes: behaviour.followUpDelaysMinutes
+          ? (JSON.parse(JSON.stringify(behaviour.followUpDelaysMinutes)) as object)
           : undefined,
-        qualificationQuestions: body.qualificationQuestions
-          ? (JSON.parse(JSON.stringify(body.qualificationQuestions)) as object)
+        qualificationQuestions: behaviour.qualificationQuestions
+          ? (JSON.parse(JSON.stringify(behaviour.qualificationQuestions)) as object)
           : undefined,
-        restrictedTopics: body.restrictedTopics
-          ? (JSON.parse(JSON.stringify(body.restrictedTopics)) as object)
+        restrictedTopics: behaviour.restrictedTopics
+          ? (JSON.parse(JSON.stringify(behaviour.restrictedTopics)) as object)
           : undefined,
       },
     });
-    return Response.json({ config });
+    return Response.json({
+      config: customerFacingAgentConfig(config as unknown as Record<string, unknown>),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

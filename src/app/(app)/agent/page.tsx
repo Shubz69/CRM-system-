@@ -7,8 +7,6 @@ import { PageError, PageLoading } from "@/components/ui/page-state";
 
 type AgentConfig = {
   id: string;
-  aiProvider: string;
-  model: string;
   brandTone: string;
   formality: string;
   responseLength: string;
@@ -50,8 +48,6 @@ export default function AgentPage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        aiProvider: config.aiProvider,
-        model: config.model,
         brandTone: config.brandTone,
         formality: config.formality,
         responseLength: config.responseLength,
@@ -98,51 +94,18 @@ export default function AgentPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Powered by Claude. Tune tone and goals — model routing stays under the hood." />
+      <PageHeader description="Tune brand voice, reply tone, and automation behaviour for your workspace." />
 
       <div className="surface flex flex-wrap items-center justify-between gap-3 p-4">
         <div>
-          <p className="text-xs uppercase tracking-wide text-[var(--muted)]">AI Operator</p>
-          <p className="font-[family-name:var(--font-fraunces)] text-2xl">Claude</p>
-          <p className="text-sm text-[var(--muted)]">
-            {config.aiProvider === "anthropic" || config.aiProvider === "mock"
-              ? "Ready"
-              : `Provider: ${config.aiProvider}`}
-          </p>
+          <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Agent Desk intelligence</p>
+          <p className="font-[family-name:var(--font-fraunces)] text-2xl">AI behaviour</p>
+          <p className="text-sm text-[var(--muted)]">Brand voice and reply preferences</p>
         </div>
-        <span className="badge">Anthropic</span>
+        <span className="badge">Workspace</span>
       </div>
 
       <form onSubmit={save} className="surface grid gap-4 p-5 md:grid-cols-2">
-        <details className="md:col-span-2 rounded-xl border border-[var(--border)] p-3">
-          <summary className="cursor-pointer text-sm font-medium">Advanced Settings</summary>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <label className="text-sm font-medium">
-              Provider
-              <select
-                className="input mt-2"
-                value={config.aiProvider === "openai" ? "anthropic" : config.aiProvider}
-                onChange={(e) => setConfig({ ...config, aiProvider: e.target.value })}
-              >
-                <option value="anthropic">Claude (Anthropic) — recommended</option>
-                <option value="mock">Mock (local testing only)</option>
-              </select>
-            </label>
-            <label className="text-sm font-medium">
-              Model override (optional)
-              <input
-                className="input mt-2"
-                value={config.model}
-                onChange={(e) => setConfig({ ...config, model: e.target.value })}
-                placeholder="Leave as Claude default unless needed"
-              />
-            </label>
-            <p className="md:col-span-2 text-xs text-[var(--muted)]">
-              OpenAI is not required. Model tiers (economy / default / advanced) are managed by
-              Autopilot and Super Admin AI Router.
-            </p>
-          </div>
-        </details>
         <label className="text-sm font-medium md:col-span-2">
           Brand tone
           <input

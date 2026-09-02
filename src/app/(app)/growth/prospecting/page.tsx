@@ -71,17 +71,32 @@ export default function SocialProspectingPage() {
   const [draftsByProspect, setDraftsByProspect] = useState<Record<string, OutreachDrafts>>({});
   const [entity, setEntity] = useState<"People" | "Companies">("People");
   const [network, setNetwork] = useState<"Any" | "LinkedIn" | "Instagram" | "X" | "TikTok">("Any");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [previousRuns, setPreviousRuns] = useState<
+    Array<{ searchRunId: string; retrievedAt: string; query?: string }>
+  >([]);
+  const [qualityNote, setQualityNote] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/social-prospecting");
-    if (!res.ok) return;
+  const load = useCallback(async (runId?: string | null) => {
+    setLoadError(null);
+    const qs = new URLSearchParams();
+    if (runId) qs.set("runId", runId);
+    qs.set("includeRuns", "1");
+    const res = await fetch(`/api/social-prospecting?${qs.toString()}`);
+    if (!res.ok) {
+      setLoadError("Could not load prospects");
+      return;
+    }
     const json = await res.json();
     setProspects(json.prospects || []);
     setLinkedIn(json.linkedIn || null);
+    if (json.previousRuns) setPreviousRuns(json.previousRuns);
+    if (runId) setActiveRunId(runId);
   }, []);
 
   useEffect(() => {
-    void load();
+    void load(null);
   }, [load]);
 
   async function discover() {
@@ -91,6 +106,8 @@ export default function SocialProspectingPage() {
     }
     setBusy(true);
     setProgress({ liveResearch: true, tiersTried: ["starting"] });
+    setQualityNote(null);
+    setProspects([]);
     try {
       const composed = [
         query.trim(),
@@ -125,15 +142,23 @@ export default function SocialProspectingPage() {
         degradationNotes: json.degradationNotes,
         computeMode: json.computeMode,
       });
+      const runId = json.searchRunId as string | undefined;
+      setActiveRunId(runId || null);
+      setProspects(json.candidates || []);
+      setQualityNote(json.qualityNote || null);
       const n = json.candidates?.length ?? 0;
-      if (json.degraded) {
+      const requested = json.requestedCount ?? n;
+      if (json.qualityNote) {
+        toast.message(json.qualityNote);
+      } else if (json.degraded) {
         toast.message(`Found ${n} prospects (degraded — check source config)`);
       } else {
-        toast.success(`Found ${n} prospects`);
+        toast.success(`Found ${n} of ${requested} requested`);
       }
-      await load();
+      if (runId) await load(runId);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Discovery failed");
+      setLoadError(error instanceof Error ? error.message : "Discovery failed");
     } finally {
       setBusy(false);
     }
@@ -256,8 +281,23 @@ export default function SocialProspectingPage() {
       </div>
 
       <div className="mt-6 grid gap-3">
-        {prospects.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">No prospects yet. Run a search to get started.</p>
+        {qualityNote ? (
+          <p className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
+            {qualityNote}
+          </p>
+        ) : null}
+        {loadError ? (
+          <p className="text-sm text-[var(--danger)]">{loadError}</p>
+        ) : null}
+        {busy ? (
+          <p className="text-sm text-[var(--muted)]">Researching this search run…</p>
+        ) : null}
+        {!busy && prospects.length === 0 ? (
+          <p className="text-sm text-[var(--muted)]">
+            {activeRunId
+              ? "No sufficiently verified matches for this search."
+              : "No prospects yet. Run a search to get started."}
+          </p>
         ) : (
           prospects.map((p) => {
             const ids = showableIdentities(p);
@@ -380,6 +420,26 @@ export default function SocialProspectingPage() {
           })
         )}
       </div>
+
+      {previousRuns.length > 0 ? (
+        <div className="mt-8 surface p-4">
+          <p className="text-sm font-medium">Previous searches</p>
+          <ul className="mt-2 space-y-1 text-sm text-[var(--muted)]">
+            {previousRuns.map((r) => (
+              <li key={r.searchRunId}>
+                <button
+                  type="button"
+                  className="text-left underline-offset-2 hover:underline"
+                  onClick={() => void load(r.searchRunId)}
+                >
+                  {r.query || r.searchRunId} · {new Date(r.retrievedAt).toLocaleString()}
+                  {activeRunId === r.searchRunId ? " (active)" : ""}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </PageShell>
   );
 }

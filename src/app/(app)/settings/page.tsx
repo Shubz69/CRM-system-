@@ -55,10 +55,10 @@ type OrgInfo = {
 type Integration = { id: string; name: string; type: string; isActive: boolean };
 
 type ProviderStatus = {
-  ai?: { adapter?: string; hasOpenAiKey?: boolean; hasAnthropicKey?: boolean };
-  manychat?: { apiTokenConfigured?: boolean; adapter?: string };
-  booking?: { defaultUrlConfigured?: boolean; adapter?: string };
-  email?: { smtpConfigured?: boolean };
+  ai?: { ready?: boolean; status?: string; label?: string };
+  manychat?: { apiTokenConfigured?: boolean; status?: string; adapter?: string };
+  booking?: { defaultUrlConfigured?: boolean; status?: string; adapter?: string };
+  email?: { smtpConfigured?: boolean; status?: string };
 };
 
 function StatusChip({ ok, label }: { ok: boolean; label: string }) {
@@ -259,10 +259,7 @@ export default function SettingsPage() {
     Boolean(providers.manychat?.apiTokenConfigured) ||
     channels.some((c) => c.isActive);
   const aiReady =
-    Boolean(providers.ai?.hasAnthropicKey) ||
-    (providers.ai?.adapter &&
-      providers.ai.adapter !== "not_configured" &&
-      providers.ai.adapter !== "openai");
+    Boolean(providers.ai?.ready) || providers.ai?.status === "AVAILABLE";
   const calendarConnected = Boolean(providers.booking?.defaultUrlConfigured);
   const emailConnected = Boolean(providers.email?.smtpConfigured);
 
@@ -559,15 +556,17 @@ export default function SettingsPage() {
 
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="font-semibold">AI provider</h3>
+              <h3 className="font-semibold">Agent Desk intelligence</h3>
               <StatusChip
                 ok={Boolean(aiReady)}
-                label={aiReady ? "Connected" : "Needs setup"}
+                label={aiReady ? "Available" : "Unavailable"}
               />
             </div>
-            <p className="mt-2 text-sm text-[var(--muted)]">Powers replies, research, and Ask.</p>
-            <Link href="/integrations" className="btn btn-secondary mt-3">
-              Manage
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              Powers replies, research, and Ask — configure brand voice and behaviour.
+            </p>
+            <Link href="/agent" className="btn btn-secondary mt-3">
+              Manage behaviour
             </Link>
           </div>
 

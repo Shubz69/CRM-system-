@@ -172,13 +172,15 @@ export function getZernioNetworkHealth(profile: {
   overall: string;
   instagram: string;
   linkedin: string;
+  youtube: string;
 } {
   const accounts = Array.isArray(profile.connectedAccounts)
     ? (profile.connectedAccounts as ZernioConnectedAccount[])
     : [];
   const instagram = networkHealthFromAccounts(accounts, "instagram");
   const linkedin = networkHealthFromAccounts(accounts, "linkedin");
-  const networkStates = [instagram, linkedin];
+  const youtube = networkHealthFromAccounts(accounts, "youtube");
+  const networkStates = [instagram, linkedin, youtube];
   let overall: string;
   if (!isZernioConfigured()) {
     overall = "NOT_CONFIGURED";
@@ -193,7 +195,7 @@ export function getZernioNetworkHealth(profile: {
   } else {
     overall = "DISCONNECTED";
   }
-  return { overall, instagram, linkedin };
+  return { overall, instagram, linkedin, youtube };
 }
 
 function apiKey(): string {
@@ -314,7 +316,7 @@ export async function ensureRemoteZernioProfile(organisationId: string): Promise
   return { ok: true, zernioProfileId: id };
 }
 
-export type ZernioConnectPlatform = "instagram" | "linkedin";
+export type ZernioConnectPlatform = "instagram" | "linkedin" | "youtube";
 
 /**
  * Ask Zernio for an OAuth/connect URL for a platform.
@@ -330,6 +332,28 @@ export async function createZernioConnectUrl(input: {
 }): Promise<{ ok: boolean; url?: string; error?: string; code?: string; headless?: boolean }> {
   if (!isZernioConfigured()) {
     return { ok: false, code: "ZERNIO_NOT_CONFIGURED", error: "Zernio API key not configured" };
+  }
+
+  const local = await getOrCreateZernioProfile(input.organisationId);
+  const accounts = Array.isArray(local.connectedAccounts)
+    ? (local.connectedAccounts as ZernioConnectedAccount[])
+    : [];
+  const {
+    assertCanStartSocialConnect,
+  } = await import("@/services/social-connection-policy");
+  const network =
+    input.platform === "instagram"
+      ? "INSTAGRAM"
+      : input.platform === "linkedin"
+        ? "LINKEDIN"
+        : "YOUTUBE";
+  const gate = await assertCanStartSocialConnect({
+    organisationId: input.organisationId,
+    network,
+    connectedAccounts: accounts,
+  });
+  if (!gate.ok) {
+    return { ok: false, code: gate.code, error: gate.error };
   }
 
   const ensured = await ensureRemoteZernioProfile(input.organisationId);
@@ -399,7 +423,7 @@ export type ZernioNetworkStatus =
   | "DISCONNECTED";
 
 export type ZernioCanonicalNetwork = {
-  network: "INSTAGRAM" | "LINKEDIN";
+  network: "INSTAGRAM" | "LINKEDIN" | "YOUTUBE";
   status: ZernioNetworkStatus;
   provider: "ZERNIO";
   /** Server/diagnostics only — UI must not show this to normal users */
@@ -420,7 +444,9 @@ function sleep(ms: number) {
 }
 
 function platformNeedle(platform: ZernioConnectPlatform): string {
-  return platform === "instagram" ? "instagram" : "linkedin";
+  if (platform === "instagram") return "instagram";
+  if (platform === "linkedin") return "linkedin";
+  return "youtube";
 }
 
 function accountMatchesPlatform(account: ZernioConnectedAccount, platform: ZernioConnectPlatform) {
@@ -479,6 +505,9 @@ function accountTypeLabel(account: ZernioConnectedAccount | null, platform: Zern
     if (mode.includes("business") || mode.includes("instagram_login")) return "Business / Creator";
     return "Business / Creator";
   }
+  if (platform === "youtube") {
+    return "Channel";
+  }
   if (mode.includes("organization") || mode.includes("page") || mode.includes("company")) return "Page";
   if (mode.includes("personal")) return "Personal";
   return null;
@@ -491,7 +520,11 @@ export function buildCanonicalZernioNetworks(input: {
     connectedAccounts: unknown;
     lastSyncAt: Date | null;
   };
-}): { instagram: ZernioCanonicalNetwork; linkedin: ZernioCanonicalNetwork } {
+}): {
+  instagram: ZernioCanonicalNetwork;
+  linkedin: ZernioCanonicalNetwork;
+  youtube: ZernioCanonicalNetwork;
+} {
   const accounts = Array.isArray(input.profile.connectedAccounts)
     ? (input.profile.connectedAccounts as ZernioConnectedAccount[])
     : [];
@@ -500,11 +533,11 @@ export function buildCanonicalZernioNetworks(input: {
   const build = (platform: ZernioConnectPlatform): ZernioCanonicalNetwork => {
     const account = pickPrimaryAccount(accounts, platform);
     const status = deriveNetworkStatus(input.profile.status, accounts, platform);
-    const username = account?.username
-      ? account.username.replace(/^@/, "")
-      : null;
+    const username = account?.username ? account.username.replace(/^@/, "") : null;
+    const network =
+      platform === "instagram" ? "INSTAGRAM" : platform === "linkedin" ? "LINKEDIN" : "YOUTUBE";
     return {
-      network: platform === "instagram" ? "INSTAGRAM" : "LINKEDIN",
+      network,
       status,
       provider: "ZERNIO",
       providerProfileId: input.profile.zernioProfileId,
@@ -519,7 +552,11 @@ export function buildCanonicalZernioNetworks(input: {
     };
   };
 
-  return { instagram: build("instagram"), linkedin: build("linkedin") };
+  return {
+    instagram: build("instagram"),
+    linkedin: build("linkedin"),
+    youtube: build("youtube"),
+  };
 }
 
 export async function syncZernioConnectedAccounts(organisationId: string): Promise<{
@@ -723,7 +760,10 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
   const hasLi = accounts.some(
     (a) => accountMatchesPlatform(a, "linkedin") && isActivelyConnectedAccount(a),
   );
-  const status = hasIg || hasLi ? "CONNECTED" : "CONFIGURED";
+  const hasYt = accounts.some(
+    (a) => accountMatchesPlatform(a, "youtube") && isActivelyConnectedAccount(a),
+  );
+  const status = hasIg || hasLi || hasYt ? "CONNECTED" : "CONFIGURED";
   await prisma.zernioProfile.update({
     where: { organisationId },
     data: {
@@ -734,8 +774,10 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
       metadata: {
         instagramConnected: hasIg,
         linkedinConnected: hasLi,
+        youtubeConnected: hasYt,
         instagramStatus: hasIg ? "CONNECTED" : "DISCONNECTED",
         linkedinStatus: hasLi ? "CONNECTED" : "DISCONNECTED",
+        youtubeStatus: hasYt ? "CONNECTED" : "DISCONNECTED",
         requiresFacebookPage: false,
         instagramRequiresProfessionalAccount: true,
       },
@@ -845,7 +887,7 @@ export async function disconnectZernioPlatformAccount(input: {
     return {
       ok: true,
       remote: "already_disconnected",
-      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+      network: networks[input.platform],
     };
   }
 
@@ -892,7 +934,7 @@ export async function disconnectZernioPlatformAccount(input: {
     return {
       ok: true,
       remote: "already_disconnected",
-      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+      network: networks[input.platform],
     };
   }
 
@@ -914,7 +956,7 @@ export async function disconnectZernioPlatformAccount(input: {
       code: "RECONCILIATION_REQUIRED",
       error: "Provider disconnect outcome unknown — status not marked disconnected",
       remote: "unknown",
-      network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+      network: networks[input.platform],
     };
   }
 
@@ -957,7 +999,7 @@ export async function disconnectZernioPlatformAccount(input: {
   return {
     ok: true,
     remote: "disconnected",
-    network: input.platform === "instagram" ? networks.instagram : networks.linkedin,
+    network: networks[input.platform],
   };
 }
 
@@ -1086,11 +1128,24 @@ export function zernioLinkedInMessagingCapability(): {
   };
 }
 
+export function zernioYouTubeMessagingCapability(): {
+  directMessages: false;
+  note: string;
+} {
+  return {
+    directMessages: false,
+    note: "YouTube has no Direct Messages — use Open YouTube Channel + Copy Outreach",
+  };
+}
+
 export function preferredProviderForCapability(input: {
   network: SocialPlatformNetwork;
   capability: "CONNECT_ACCOUNT" | "PUBLISH" | "SCHEDULE" | "ANALYTICS" | "DIRECT_MESSAGES";
 }): "ZERNIO" | "AYRSHARE" | "META_INSTAGRAM" | "MANYCHAT" | "LINKEDIN_NATIVE" | "MANUAL" {
-  if (input.network === "LINKEDIN" && input.capability === "DIRECT_MESSAGES") {
+  if (
+    (input.network === "LINKEDIN" || input.network === "YOUTUBE") &&
+    input.capability === "DIRECT_MESSAGES"
+  ) {
     return "MANUAL";
   }
   if (isZernioConfigured()) {

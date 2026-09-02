@@ -35,6 +35,10 @@ const prismaMocks = vi.hoisted(() => ({
     })),
     updateMany: vi.fn(async () => ({ count: 1 })),
   },
+  organisationPreference: {
+    findUnique: vi.fn(async () => null),
+    upsert: vi.fn(async (args: { create: Record<string, unknown> }) => args.create),
+  },
   contact: { count: vi.fn(async () => 3) },
   conversation: { count: vi.fn(async () => 2) },
   message: { count: vi.fn(async () => 5) },

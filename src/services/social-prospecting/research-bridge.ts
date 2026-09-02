@@ -56,11 +56,27 @@ function guessCompany(text: string, icp?: StructuredIcp): string | undefined {
 
 function resultToCandidate(r: SourceResult, icp: StructuredIcp): SocialProspectCandidateInput | null {
   const blob = `${r.title}\n${r.content}\n${r.author || ""}`;
+
+  // Reject privacy/legal/listicle pages early
+  if (/privacy|terms of|cookie policy|instagram\.com\/(about|legal)/i.test(`${r.url} ${r.title}`)) {
+    return null;
+  }
+  if (/linkedin\.com\/company\//i.test(r.url) && icp.entityType !== "company") {
+    return null;
+  }
+
   const personName = r.author?.trim() || guessPersonName(blob);
   const companyName = guessCompany(blob, icp);
   if (!personName && !companyName) return null;
 
-  // Exclude obvious non-person pages
+  // Extract role/location from evidence — never stamp ICP onto every candidate
+  const roleFromEvidence = blob.match(
+    /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|ceo|owner|director|creator|dentist|influencer)s?\b/i,
+  )?.[1];
+  const locFromEvidence = blob.match(
+    /\b(london|manchester|birmingham|edinburgh|glasgow|uk|united kingdom|england|scotland|wales)\b/i,
+  )?.[1];
+
   if (/^https?:\/\/(www\.)?(bbc|reuters|wikipedia|gov\.uk)\./i.test(r.url) && !personName) {
     return null;
   }
@@ -68,11 +84,12 @@ function resultToCandidate(r: SourceResult, icp: StructuredIcp): SocialProspectC
   const base: SocialProspectCandidateInput = {
     personName,
     companyName,
-    role: icp.role,
-    location: icp.location,
-    companyWebsite: /^https?:\/\//i.test(r.url) && !/linkedin|instagram|tiktok|twitter|x\.com|threads/i.test(r.url)
-      ? r.url.split("?")[0]
-      : undefined,
+    role: roleFromEvidence,
+    location: locFromEvidence,
+    companyWebsite:
+      /^https?:\/\//i.test(r.url) && !/linkedin|instagram|tiktok|twitter|x\.com|threads/i.test(r.url)
+        ? r.url.split("?")[0]
+        : undefined,
     sourceEvidence: [
       {
         source: r.platform,
@@ -89,8 +106,8 @@ function resultToCandidate(r: SourceResult, icp: StructuredIcp): SocialProspectC
   const identities = resolveIdentitiesForCandidate({
     personName,
     companyName,
-    role: icp.role,
-    location: icp.location,
+    role: roleFromEvidence,
+    location: locFromEvidence,
     sourceResults: [r],
   });
 
@@ -167,6 +184,14 @@ export async function gatherProspectCandidatesFromResearch(input: {
   }
 
   const queries = buildResearchQueries(input.icp);
+  // Instagram creator searches: prioritize Instagram-targeted queries and Apify IG tier
+  const wantsInstagram = input.icp.preferredNetworks.includes("instagram");
+  const orderedQueries = wantsInstagram
+    ? [
+        ...queries.filter((q) => /instagram/i.test(q)),
+        ...queries.filter((q) => !/instagram/i.test(q)),
+      ]
+    : queries;
   let externalCalls = 0;
   let billableCents = 0;
   const allResults: SourceResult[] = [];
@@ -192,7 +217,7 @@ export async function gatherProspectCandidatesFromResearch(input: {
         fetch: async () => {
           tiersTried.push("tavily_http");
           const items: SourceResult[] = [];
-          for (const q of queries.slice(0, 2)) {
+          for (const q of orderedQueries.slice(0, wantsInstagram ? 4 : 2)) {
             if (externalCalls >= limits.maxExternalCalls) break;
             if (billableCents >= limits.maxEstimatedCostCents) break;
             externalCalls += 1;
@@ -258,7 +283,9 @@ export async function gatherProspectCandidatesFromResearch(input: {
           externalCalls += 1;
           try {
             const res = await searchConfiguredSources({
-              query: queries[0]!,
+              query: wantsInstagram
+                ? orderedQueries.find((q) => /instagram/i.test(q)) || queries[0]!
+                : queries[0]!,
               platforms,
               options: {
                 organisationId: input.organisationId,

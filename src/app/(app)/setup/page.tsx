@@ -43,7 +43,7 @@ export default function SetupAssistantPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Setup assistant failed");
       setProposal(json.proposal);
-      toast.success("Claude proposed a configuration");
+      toast.success("Agent Desk proposed a configuration");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -72,7 +72,7 @@ export default function SetupAssistantPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="One-time onboarding helper: describe your business, review Claude’s proposed agent tone, qualification questions, and starter knowledge, then approve to save." />
+      <PageHeader description="One-time onboarding helper: describe your business, review the proposed agent tone, qualification questions, and starter knowledge, then approve to save." />
 
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/50 px-4 py-3 text-sm text-[var(--muted)]">
         <p className="font-medium text-[var(--foreground)]">What this is for</p>
@@ -103,7 +103,7 @@ export default function SetupAssistantPage() {
           />
         </label>
         <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? "Asking Claude…" : "Ask Claude to configure"}
+          {busy ? "Configuring…" : "Propose configuration"}
         </button>
       </form>
 

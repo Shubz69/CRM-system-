@@ -3,6 +3,7 @@ import { jsonError, requirePermission, requireSession } from "@/lib/session";
 import {
   discoverSocialProspects,
   getSocialProspectForOrg,
+  listRecentSearchRuns,
   listSocialProspects,
 } from "@/services/social-prospecting/discovery";
 import { ingestProspectToCrm } from "@/services/social-prospecting/crm-ingest";
@@ -32,9 +33,18 @@ export async function GET(req: NextRequest) {
         linkedInV2: linkedInV2ActionSurface(),
       });
     }
-    const prospects = await listSocialProspects(session.organisationId);
+    const runId = req.nextUrl.searchParams.get("runId");
+    const includeRuns = req.nextUrl.searchParams.get("includeRuns") === "1";
+    const prospects = await listSocialProspects(session.organisationId, {
+      searchRunId: runId,
+    });
+    const previousRuns = includeRuns
+      ? await listRecentSearchRuns(session.organisationId)
+      : undefined;
     return Response.json({
       prospects,
+      activeRunId: runId || null,
+      previousRuns,
       linkedIn: linkedInV1ActionSurface(),
       linkedInV2: linkedInV2ActionSurface(),
     });

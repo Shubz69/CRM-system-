@@ -81,7 +81,7 @@ export default function GoLivePage() {
         },
         {
           key: "ai",
-          label: "AI Provider",
+          label: "Agent Desk intelligence",
           status: aiReady ? "ready" : "needs_attention",
           detail: `Adapter: ${providers.providers?.ai?.adapter || "unknown"}`,
         },

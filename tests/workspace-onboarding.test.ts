@@ -30,12 +30,20 @@ vi.mock("@/lib/db", () => {
     create: vi.fn(),
     update: vi.fn(),
   };
+  const organisationPreference = {
+    findUnique: vi.fn(async () => null),
+    upsert: vi.fn(async (args: { create: Record<string, unknown> }) => ({
+      id: "pref_1",
+      ...args.create,
+    })),
+  };
   return {
     prisma: {
       organisation,
       user,
       organisationMember,
       organisationInvitation,
+      organisationPreference,
       $transaction: vi.fn(async (ops: unknown) => {
         if (typeof ops === "function") {
           return ops({
@@ -43,6 +51,7 @@ vi.mock("@/lib/db", () => {
             user,
             organisationMember,
             organisationInvitation,
+            organisationPreference,
           });
         }
         if (Array.isArray(ops)) {
@@ -55,6 +64,7 @@ vi.mock("@/lib/db", () => {
         user,
         organisationMember,
         organisationInvitation,
+        organisationPreference,
       },
     },
   };

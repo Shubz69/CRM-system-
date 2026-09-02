@@ -3,6 +3,7 @@ import type {
   SocialNetworkId,
   SocialProfileIdentity,
   SocialProspectCandidateInput,
+  StructuredIcp,
 } from "@/services/social-prospecting/types";
 import {
   buildProspectDedupeKey,
@@ -10,6 +11,12 @@ import {
   normalizeLinkedInUrl,
 } from "@/services/social-prospecting/types";
 import { resolveIdentitiesForCandidate, applyIdentitiesToCandidate } from "@/services/social-prospecting/identity-resolver";
+import {
+  isWeakCompanyName,
+  validateProspectCandidate,
+  type RejectionCode,
+  type ValidationDecision,
+} from "@/services/social-prospecting/entity-validation";
 
 export type QualityResult = {
   ok: boolean;
@@ -17,7 +24,11 @@ export type QualityResult = {
   uncertaintyFlags: string[];
   reasonSelected: string;
   confidence: number;
+  /** Commercial fit — must not override identity gates */
   fitScore: number;
+  identityConfidence: number;
+  validation: ValidationDecision;
+  rejectionCode?: RejectionCode;
 };
 
 function evidenceStrength(evidence: ProspectEvidence[]): number {
@@ -37,14 +48,25 @@ function identityBoost(identities?: SocialProfileIdentity[]): number {
   return 0;
 }
 
+const DEFAULT_ICP: StructuredIcp = {
+  entityType: "person",
+  signals: [],
+  keywords: [],
+  exclusions: [],
+  preferredNetworks: ["any"],
+  desiredCount: 10,
+  rawQuery: "",
+};
+
 /**
  * Deduplicate + validate before presenting a prospect.
- * Never invent missing values. High confidence requires supporting evidence.
- * Unverified profile URLs are not shown as exact links.
+ * Hard identity gates cannot be compensated by commercial fit.
  */
 export function qualityCheckProspect(
   input: SocialProspectCandidateInput,
   seenDedupeKeys: Set<string>,
+  icp: StructuredIcp = DEFAULT_ICP,
+  seenProfileUrls?: Set<string>,
 ): QualityResult | null {
   let candidate: SocialProspectCandidateInput = {
     ...input,
@@ -55,6 +77,10 @@ export function qualityCheckProspect(
     location: input.location?.trim() || undefined,
     sourceEvidence: Array.isArray(input.sourceEvidence) ? input.sourceEvidence : [],
   };
+
+  if (candidate.companyName && isWeakCompanyName(candidate.companyName)) {
+    candidate = { ...candidate, companyName: undefined };
+  }
 
   if (!candidate.socialIdentities?.length) {
     const identities = resolveIdentitiesForCandidate({
@@ -71,7 +97,6 @@ export function qualityCheckProspect(
     });
     candidate = applyIdentitiesToCandidate(candidate, identities);
   } else {
-    // Re-apply so only VERIFIED/LIKELY become display URLs
     candidate = applyIdentitiesToCandidate(candidate, candidate.socialIdentities);
   }
 
@@ -83,65 +108,68 @@ export function qualityCheckProspect(
   if (!candidate.sourceEvidence.length) return null;
 
   const dedupeKey = buildProspectDedupeKey(candidate);
-  if (seenDedupeKeys.has(dedupeKey)) return null;
+  if (seenDedupeKeys.has(dedupeKey)) {
+    return null;
+  }
+
+  const validation = validateProspectCandidate(candidate, icp, {
+    seenProfileUrls: seenProfileUrls || new Set(),
+  });
+
+  if (!validation.accepted) {
+    return {
+      ok: false,
+      candidate,
+      uncertaintyFlags: [validation.rejectionCode || "REJECTED"],
+      reasonSelected: validation.rejectionReason || "Rejected",
+      confidence: validation.identityConfidence,
+      fitScore: 0,
+      identityConfidence: validation.identityConfidence,
+      validation,
+      rejectionCode: validation.rejectionCode,
+    };
+  }
+
   seenDedupeKeys.add(dedupeKey);
 
+  // Drop weak company association from persisted fields
+  if (validation.companyAssociationConfidence < 0.55) {
+    candidate = { ...candidate, companyName: undefined, companyWebsite: undefined };
+  } else if (validation.matchedRole) {
+    candidate = {
+      ...candidate,
+      role: validation.matchedRole,
+      location: validation.candidateLocation || candidate.location,
+    };
+  }
+
   const uncertaintyFlags: string[] = [...(candidate.uncertaintyFlags || [])];
-
-  if (candidate.personName && candidate.companyName) {
-    const personInEvidence = candidate.sourceEvidence.some((e) =>
-      (e.excerpt || "").toLowerCase().includes(candidate.personName!.toLowerCase().split(" ")[0] || ""),
-    );
-    if (!personInEvidence) uncertaintyFlags.push("person_company_relationship_unverified");
+  if (validation.companyAssociationConfidence > 0 && validation.companyAssociationConfidence < 0.7) {
+    uncertaintyFlags.push("company_association_uncertain");
   }
 
-  if (linkedinUrl && candidate.personName) {
-    const slug = linkedinUrl.toLowerCase();
-    const first = candidate.personName.toLowerCase().split(/\s+/)[0];
-    if (first && first.length > 2 && !slug.includes(first) && !/\/company\//.test(slug)) {
-      uncertaintyFlags.push("linkedin_url_name_mismatch");
-      // Drop wrong-profile LinkedIn from presentation
-      candidate = { ...candidate, linkedinUrl: undefined };
-      uncertaintyFlags.push("profile_not_verified");
-    }
-  }
-
-  const conflicting = candidate.sourceEvidence.filter((a, i) =>
-    candidate.sourceEvidence.some(
-      (b, j) =>
-        i < j && a.url && b.url && a.url !== b.url && (a.excerpt || "") && (b.excerpt || "") && a.excerpt !== b.excerpt,
-    ),
+  let confidence = Math.min(
+    evidenceStrength(candidate.sourceEvidence) + identityBoost(candidate.socialIdentities),
+    validation.identityConfidence + 0.15,
   );
-  if (conflicting.length > 2) uncertaintyFlags.push("conflicting_sources");
+  confidence = Math.min(confidence, validation.identityConfidence + 0.2);
+  if (uncertaintyFlags.length) confidence = Math.min(confidence, 0.7);
 
-  let confidence = evidenceStrength(candidate.sourceEvidence) + identityBoost(candidate.socialIdentities);
-  if (uncertaintyFlags.includes("profile_not_verified") || uncertaintyFlags.includes("conflicting_social_identities")) {
-    confidence = Math.min(confidence, 0.5);
-  }
-  if (uncertaintyFlags.length) confidence = Math.min(confidence, 0.55);
-  if (candidate.sourceEvidence.length < 2) confidence = Math.min(confidence, 0.5);
-
-  if (confidence >= 0.75 && candidate.sourceEvidence.length < 2) {
-    confidence = 0.6;
-    uncertaintyFlags.push("confidence_capped_insufficient_evidence");
-  }
-
-  let fitScore = confidence;
-  if (candidate.role) fitScore += 0.05;
-  if (candidate.location) fitScore += 0.03;
-  if (linkedinUrl || instagramUrl) fitScore += 0.05;
-  fitScore = Math.min(0.95, fitScore);
+  const fitScore = Math.min(validation.fitScore, 0.95);
+  // Never let fit exceed identity by a large margin for presentation ranking
+  const presentationFit = Math.min(fitScore, validation.identityConfidence + 0.25);
 
   const verifiedCount =
-    candidate.socialIdentities?.filter((i) => i.verificationState === "VERIFIED" || i.verificationState === "LIKELY")
-      .length || 0;
+    candidate.socialIdentities?.filter(
+      (i) => i.verificationState === "VERIFIED" || i.verificationState === "LIKELY",
+    ).length || 0;
 
   const reasonSelected =
     candidate.reasonSelected?.trim() ||
     [
-      candidate.role ? `Role matches ICP (${candidate.role})` : null,
+      validation.matchedRole ? `Role evidence: ${validation.matchedRole}` : null,
       candidate.companyName ? `Company: ${candidate.companyName}` : null,
-      candidate.location ? `Location: ${candidate.location}` : null,
+      validation.candidateLocation ? `Location evidence: ${validation.candidateLocation}` : null,
       verifiedCount ? `${verifiedCount} social profile(s) evidence-backed` : "Social profiles not verified",
       `Supported by ${candidate.sourceEvidence.length} evidence source(s)`,
     ]
@@ -154,25 +182,47 @@ export function qualityCheckProspect(
     candidate: {
       ...candidate,
       confidence,
-      fitScore,
+      fitScore: presentationFit,
       reasonSelected,
       uncertaintyFlags: [...new Set(uncertaintyFlags)],
+      qaDecision: {
+        accepted: true,
+        entityClass: validation.entityClass,
+        requestedRole: validation.requestedRole,
+        matchedRole: validation.matchedRole,
+        roleConfidence: validation.roleConfidence,
+        requestedLocation: validation.requestedLocation,
+        candidateLocation: validation.candidateLocation,
+        locationConfidence: validation.locationConfidence,
+        identityConfidence: validation.identityConfidence,
+        companyAssociationConfidence: validation.companyAssociationConfidence,
+      },
     },
     uncertaintyFlags: [...new Set(uncertaintyFlags)],
     reasonSelected,
     confidence,
-    fitScore,
+    fitScore: presentationFit,
+    identityConfidence: validation.identityConfidence,
+    validation,
   };
 }
 
-export function dedupeProspectBatch(inputs: SocialProspectCandidateInput[]): QualityResult[] {
+export function dedupeProspectBatch(
+  inputs: SocialProspectCandidateInput[],
+  icp?: StructuredIcp,
+): { accepted: QualityResult[]; rejected: QualityResult[] } {
   const seen = new Set<string>();
-  const out: QualityResult[] = [];
+  const seenProfiles = new Set<string>();
+  const accepted: QualityResult[] = [];
+  const rejected: QualityResult[] = [];
   for (const input of inputs) {
-    const checked = qualityCheckProspect(input, seen);
-    if (checked) out.push(checked);
+    const checked = qualityCheckProspect(input, seen, icp || DEFAULT_ICP, seenProfiles);
+    if (!checked) continue;
+    if (checked.ok) accepted.push(checked);
+    else rejected.push(checked);
   }
-  return out.sort((a, b) => b.fitScore - a.fitScore);
+  accepted.sort((a, b) => b.fitScore - a.fitScore);
+  return { accepted, rejected };
 }
 
 export function displayProfileLabel(identity: SocialProfileIdentity): string {

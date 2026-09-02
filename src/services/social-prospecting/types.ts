@@ -80,9 +80,12 @@ export type SocialProspectCandidateInput = {
   preferredNetworks?: string[];
   providerIdentifiers?: Record<string, string>;
   retrievedAt?: string;
+  /** Internal QA decision retained for diagnostics (not always customer-visible) */
+  qaDecision?: Record<string, unknown>;
 };
 
-const ROLE_HINTS = /\b(founder|ceo|cto|owner|director|manager|head of|vp|co-founder|creator)\b/i;
+const ROLE_HINTS =
+  /\b(founders?|co-founders?|ceos?|ctos?|owners?|directors?|managers?|head of|vps?|creators?|dentists?|influencers?)\b/i;
 const LOCATION_HINTS =
   /\b(uk|united kingdom|london|manchester|birmingham|scotland|wales|england|europe|eu|usa|us|new york|california)\b/i;
 
@@ -96,7 +99,7 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   const entityType: StructuredIcp["entityType"] = /\b(compan(?:y|ies)|clinic|business|agency|saas|practice)\b/i.test(
     text,
   )
-    ? /\b(founder|ceo|people|creators?|owners?)\b/i.test(text)
+    ? /\b(founder|ceo|people|creators?|owners?|dentists?)\b/i.test(text)
       ? "either"
       : "company"
     : "person";
@@ -112,8 +115,15 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   if (/\byoutube\b/i.test(text)) preferredNetworks.push("youtube");
   if (preferredNetworks.length === 0) preferredNetworks.push("any");
 
-  const role = text.match(ROLE_HINTS)?.[1];
-  const location = text.match(LOCATION_HINTS)?.[1];
+  const roleRaw = text.match(ROLE_HINTS)?.[1];
+  const role = roleRaw ? roleRaw.replace(/s$/, "").toLowerCase() : undefined;
+  // Prefer country/region context: "UK" wins over bare city when both present
+  let location = text.match(/\b(united kingdom|uk)\b/i)?.[1]?.toLowerCase();
+  if (!location) {
+    location = text.match(LOCATION_HINTS)?.[1]?.toLowerCase();
+  }
+  // Normalize uk variants
+  if (location === "united kingdom") location = "uk";
 
   const exclusions: string[] = [];
   if (/\bnot\s+([a-z0-9 -]{2,40})/i.test(text)) {
@@ -212,11 +222,17 @@ export function normalizeInstagramUrl(url?: string | null): string | undefined {
 }
 
 export function buildResearchQueries(icp: StructuredIcp): string[] {
+  const geo =
+    icp.location === "london" || icp.location === "manchester" || icp.location === "birmingham"
+      ? `${icp.location} UK`
+      : icp.location === "uk"
+        ? "UK"
+        : icp.location;
   const bits = [
     icp.role,
     icp.industry,
-    icp.location,
-    icp.entityType === "company" ? "company" : "founder",
+    geo,
+    icp.entityType === "company" ? "company" : icp.role || "founder",
     ...icp.keywords.slice(0, 6),
   ].filter(Boolean);
   const primary = bits.join(" ").trim() || icp.rawQuery;
@@ -225,10 +241,17 @@ export function buildResearchQueries(icp: StructuredIcp): string[] {
     queries.push(`${primary} site:linkedin.com/in`);
   }
   if (icp.preferredNetworks.includes("instagram")) {
-    queries.push(`${primary} site:instagram.com`);
+    // Creator-oriented Instagram queries — prefer profile pages over listicles
+    const creatorBits = [icp.industry, geo, icp.role || "creator", "Instagram"].filter(Boolean).join(" ");
+    queries.push(`${creatorBits} site:instagram.com`);
+    queries.push(`"${icp.industry || "creator"}" ${geo || ""} Instagram profile -privacy -terms`.trim());
+    queries.push(`${creatorBits} @instagram`);
+  }
+  if (icp.preferredNetworks.includes("youtube")) {
+    queries.push(`${primary} site:youtube.com/@`);
   }
   if (icp.location && icp.industry) {
-    queries.push(`${icp.industry} ${icp.role || "founder"} ${icp.location}`);
+    queries.push(`${icp.industry} ${icp.role || "founder"} ${geo}`);
   }
-  return [...new Set(queries)].slice(0, 4);
+  return [...new Set(queries)].slice(0, 6);
 }

@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
     const connectedNetworks = [
       networks.instagram.connected ? "instagram" : null,
       networks.linkedin.connected ? "linkedin" : null,
+      networks.youtube.connected ? "youtube" : null,
     ].filter(Boolean);
 
     if (connectedNetworks.length > 0) {

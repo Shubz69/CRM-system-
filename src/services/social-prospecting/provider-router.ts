@@ -96,6 +96,14 @@ export function universalOutreachSurface(network: SocialMessagingNetwork): Outre
         sendMessage: false,
         note: "Send Message only when an existing permitted conversation exists via dispatchOutboundMessage",
       };
+    case "YOUTUBE":
+      return {
+        network,
+        openLabel: "Open YouTube Channel",
+        copyActions: [{ id: "copy_outreach", label: "Copy Outreach", field: "generic" }],
+        sendMessage: false,
+        note: "YouTube Direct Messages are unsupported",
+      };
     default:
       return {
         network,
@@ -114,8 +122,8 @@ export const optionalZernioMessagingAdapter: SocialMessagingProviderAdapter = {
   },
   supportsNetwork(network) {
     if (!this.isConfigured()) return false;
-    // LinkedIn DMs not supported through Zernio
-    if (network === "LINKEDIN") return true; // publish/connect only; messaging gated by capability
+    // LinkedIn / YouTube DMs not supported through Zernio — connect/publish only
+    if (network === "LINKEDIN" || network === "YOUTUBE") return true;
     return network === "INSTAGRAM" || network === "FACEBOOK" || network === "X" || network === "TIKTOK";
   },
   capability(capability) {
