@@ -1,7 +1,5 @@
-import { NextRequest } from "next/server";
-import { z } from "zod";
-import { requirePermission, jsonError } from "@/lib/session";
-import { prisma } from "@/lib/db";
+import { listPublishTargets } from "@/services/publishing/publish-targets";
+import { cancelPublishingJob } from "@/services/publishing";
 import {
   createBriefAndPiece,
   createDraftPiece,
@@ -12,13 +10,16 @@ import {
   submitPieceForApproval,
   updatePiece,
 } from "@/services/content-os";
-import { cancelPublishingJob } from "@/services/publishing";
-import { listSocialConnections } from "@/services/social-connections";
+import { NextRequest } from "next/server";
+import { z } from "zod";
+import { requirePermission, jsonError } from "@/lib/session";
+import { prisma } from "@/lib/db";
+import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 
 export async function GET() {
   try {
     const session = await requirePermission("ask:use");
-    const [opportunities, pieces, jobs, connections] = await Promise.all([
+    const [opportunities, pieces, jobs, publishTargets] = await Promise.all([
       prisma.contentOpportunity.findMany({
         where: { organisationId: session.organisationId },
         orderBy: { createdAt: "desc" },
@@ -45,19 +46,23 @@ export async function GET() {
         orderBy: { createdAt: "desc" },
         take: 30,
       }),
-      listSocialConnections(session.organisationId),
+      listPublishTargets(session.organisationId),
     ]);
     return Response.json({
       opportunities,
       pieces,
       publishingJobs: jobs,
-      socialConnections: connections.map((c) => ({
-        id: c.id,
-        platform: c.platform,
-        displayName: c.displayName,
-        status: c.status,
-        externalAccountId: c.externalAccountId,
+      // Backward-compatible shape for Content OS UI (id/platform/displayName/status).
+      socialConnections: publishTargets.map((t) => ({
+        id: t.id,
+        platform: t.platform,
+        displayName: t.label,
+        status: t.status,
+        externalAccountId: t.externalAccountId,
+        provider: t.provider,
+        eligible: t.eligible,
       })),
+      publishTargets,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
@@ -123,7 +128,7 @@ const postSchema = z.discriminatedUnion("action", [
     action: z.literal("request_publish"),
     pieceId: z.string().min(1),
     platform: z.string().min(1).max(40),
-    socialConnectionId: z.string().optional(),
+    socialConnectionId: z.string().min(1),
     variantId: z.string().optional(),
     scheduledAt: z.string().datetime().optional(),
   }),
@@ -131,7 +136,7 @@ const postSchema = z.discriminatedUnion("action", [
     action: z.literal("schedule_publish"),
     pieceId: z.string().min(1),
     platform: z.string().min(1).max(40),
-    socialConnectionId: z.string().optional(),
+    socialConnectionId: z.string().min(1),
     variantId: z.string().optional(),
     scheduledAt: z.string().datetime(),
   }),
@@ -145,6 +150,7 @@ const postSchema = z.discriminatedUnion("action", [
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("ask:use");
+    assertOrgExpensiveRouteAllowed(session.organisationId, "content");
     const body = postSchema.parse(await req.json());
 
     switch (body.action) {
@@ -246,6 +252,9 @@ export async function POST(req: NextRequest) {
         return jsonError("Unknown action", 400);
     }
   } catch (error) {
+    if (error instanceof OrgRateLimitError) {
+      return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

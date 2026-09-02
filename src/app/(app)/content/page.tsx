@@ -40,7 +40,24 @@ type Connection = {
   platform: string;
   displayName: string | null;
   status: string;
+  eligible?: boolean;
 };
+
+const PUBLISHABLE_PLATFORMS = ["instagram", "linkedin", "youtube"] as const;
+
+function platformLabel(platform: string): string {
+  const p = platform.toLowerCase();
+  if (p === "instagram") return "Instagram";
+  if (p === "linkedin") return "LinkedIn";
+  if (p === "youtube") return "YouTube";
+  return platform;
+}
+
+function connectionOptionLabel(c: Connection): string {
+  const name = c.displayName?.trim();
+  if (name) return `${platformLabel(c.platform)} · ${name}`;
+  return platformLabel(c.platform);
+}
 
 const BUCKETS = [
   { id: "drafts" as const, title: "Drafts" },
@@ -96,7 +113,15 @@ export default function ContentPage() {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load content");
     setPieces(json.pieces ?? []);
-    setConnections(json.socialConnections ?? []);
+    const targets = (json.socialConnections ?? []) as Connection[];
+    const eligible = targets.filter(
+      (c) => c.status === "ACTIVE" && c.eligible !== false,
+    );
+    setConnections(eligible);
+    if (eligible.length === 1) {
+      setPublishConnectionId(eligible[0]!.id);
+      setPublishPlatform(eligible[0]!.platform.toLowerCase());
+    }
   }, []);
 
   useEffect(() => {
@@ -516,79 +541,105 @@ export default function ContentPage() {
 
                 {publishPieceId === p.id && (
                   <div className="space-y-2 border-t border-[var(--border)] pt-3">
-                    <select
-                      className="input"
-                      value={publishPlatform}
-                      onChange={(e) => setPublishPlatform(e.target.value)}
-                    >
-                      {["instagram", "linkedin", "tiktok", "youtube", "x", "facebook"].map(
-                        (pl) => (
-                          <option key={pl} value={pl}>
-                            {pl}
-                          </option>
-                        ),
-                      )}
-                    </select>
-                    <select
-                      className="input"
-                      value={publishConnectionId}
-                      onChange={(e) => setPublishConnectionId(e.target.value)}
-                    >
-                      <option value="">No social connection</option>
-                      {connections
-                        .filter((c) => c.status === "ACTIVE")
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.platform}
-                            {c.displayName ? ` · ${c.displayName}` : ""}
-                          </option>
-                        ))}
-                    </select>
-                    <input
-                      className="input"
-                      type="datetime-local"
-                      value={scheduledAt}
-                      onChange={(e) => setScheduledAt(e.target.value)}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="btn btn-primary"
-                        type="button"
-                        onClick={async () => {
-                          try {
-                            const payload: Record<string, unknown> = {
-                              action: scheduledAt ? "schedule_publish" : "request_publish",
-                              pieceId: p.id,
-                              platform: publishPlatform,
-                              socialConnectionId: publishConnectionId || undefined,
-                            };
-                            if (scheduledAt) {
-                              payload.scheduledAt = new Date(scheduledAt).toISOString();
+                    {connections.length === 0 ? (
+                      <p className="text-sm text-[var(--muted)]">
+                        Connect Instagram, LinkedIn, or YouTube in Social Accounts before
+                        publishing.{" "}
+                        <a href="/integrations" className="underline underline-offset-2">
+                          Open Social Accounts
+                        </a>
+                      </p>
+                    ) : (
+                      <>
+                        <select
+                          className="input"
+                          value={publishConnectionId}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            setPublishConnectionId(id);
+                            const match = connections.find((c) => c.id === id);
+                            if (match) {
+                              setPublishPlatform(match.platform.toLowerCase());
                             }
-                            await postAction(payload);
-                            toast.success(
-                              scheduledAt
-                                ? "Scheduled — not live until the platform confirms"
-                                : "Publish queued — not confirmed until the platform returns an id",
-                            );
-                            setPublishPieceId(null);
-                            setActiveBucket(scheduledAt ? "scheduled" : "attention");
-                            await load();
-                          } catch (e) {
-                            toast.error(e instanceof Error ? e.message : "Failed");
-                          }
-                        }}
-                      >
-                        {scheduledAt ? "Schedule" : "Queue publish"}
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        type="button"
-                        onClick={() => setPublishPieceId(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                          }}
+                          required
+                        >
+                          <option value="">Select account…</option>
+                          {connections.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {connectionOptionLabel(c)}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          className="input"
+                          value={publishPlatform}
+                          onChange={(e) => setPublishPlatform(e.target.value)}
+                        >
+                          {PUBLISHABLE_PLATFORMS.filter((pl) =>
+                            connections.some(
+                              (c) => c.platform.toLowerCase() === pl || publishPlatform === pl,
+                            ),
+                          ).map((pl) => (
+                            <option key={pl} value={pl}>
+                              {platformLabel(pl)}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="input"
+                          type="datetime-local"
+                          value={scheduledAt}
+                          onChange={(e) => setScheduledAt(e.target.value)}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="btn btn-primary"
+                            type="button"
+                            disabled={!publishConnectionId}
+                            onClick={async () => {
+                              if (!publishConnectionId) {
+                                toast.error("Select a connected social account to publish");
+                                return;
+                              }
+                              try {
+                                const payload: Record<string, unknown> = {
+                                  action: scheduledAt
+                                    ? "schedule_publish"
+                                    : "request_publish",
+                                  pieceId: p.id,
+                                  platform: publishPlatform,
+                                  socialConnectionId: publishConnectionId,
+                                };
+                                if (scheduledAt) {
+                                  payload.scheduledAt = new Date(scheduledAt).toISOString();
+                                }
+                                await postAction(payload);
+                                toast.success(
+                                  scheduledAt
+                                    ? "Scheduled — not live until the platform confirms"
+                                    : "Publish queued — not confirmed until the platform returns an id",
+                                );
+                                setPublishPieceId(null);
+                                setActiveBucket(scheduledAt ? "scheduled" : "attention");
+                                await load();
+                              } catch (e) {
+                                toast.error(e instanceof Error ? e.message : "Failed");
+                              }
+                            }}
+                          >
+                            {scheduledAt ? "Schedule" : "Queue publish"}
+                          </button>
+                          <button
+                            className="btn btn-secondary"
+                            type="button"
+                            onClick={() => setPublishPieceId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </article>

@@ -371,21 +371,22 @@ export async function requestPublish(input: {
   }
 
   let accountLabel = "(no connected account)";
-  if (input.socialConnectionId) {
-    const connection = await prisma.socialConnection.findFirst({
-      where: {
-        id: input.socialConnectionId,
-        organisationId: input.organisationId,
-      },
-      select: { id: true, displayName: true, externalAccountId: true, platform: true },
-    });
-    if (!connection) {
-      throw new Error("Social connection not found for this workspace");
-    }
-    accountLabel =
-      connection.displayName?.trim() ||
-      `${connection.platform}:${connection.externalAccountId}`;
+  if (!input.socialConnectionId) {
+    throw new Error("Select a connected social account to publish");
   }
+  const { resolvePublishTargetConnection } = await import(
+    "@/services/publishing/publish-targets"
+  );
+  const connection = await resolvePublishTargetConnection({
+    organisationId: input.organisationId,
+    socialConnectionId: input.socialConnectionId,
+  });
+  if (!connection) {
+    throw new Error("Social connection not found for this workspace");
+  }
+  accountLabel =
+    connection.displayName?.trim() ||
+    `${connection.platform}:${connection.externalAccountId}`;
 
   const needsApproval = policy.effect === "require_approval";
   const scheduledFuture =

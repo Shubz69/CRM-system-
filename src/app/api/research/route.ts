@@ -1,3 +1,4 @@
+import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import { NextRequest } from "next/server";
 import { ResearchJobKind, ResearchJobStatus } from "@prisma/client";
 import { z } from "zod";
@@ -132,6 +133,7 @@ const postSchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("ask:use");
+    assertOrgExpensiveRouteAllowed(session.organisationId, "research");
     const body = postSchema.parse(await req.json());
 
     const job = await prisma.researchJob.create({
@@ -151,6 +153,9 @@ export async function POST(req: NextRequest) {
         "Research job created as PENDING with no findings yet. Run research via Ask to populate sources.",
     });
   } catch (error) {
+    if (error instanceof OrgRateLimitError) {
+      return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

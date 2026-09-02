@@ -306,11 +306,15 @@ async function executeClaimed(
     };
   }
 
-  const connection = await prisma.socialConnection.findFirst({
-    where: {
-      id: job.socialConnectionId,
-      organisationId: job.organisationId,
-    },
+  const {
+    isZernioBackedConnection,
+    resolvePublishTargetConnection,
+    zernioAccountIdFromConnection,
+  } = await import("@/services/publishing/publish-targets");
+
+  const connection = await resolvePublishTargetConnection({
+    organisationId: job.organisationId,
+    socialConnectionId: job.socialConnectionId,
   });
   if (!connection) {
     await markFailed(
@@ -344,6 +348,134 @@ async function executeClaimed(
     };
   }
 
+  // Canonical path: Zernio-connected Social Accounts (no native OAuth required).
+  if (isZernioBackedConnection(connection)) {
+    const accountId = zernioAccountIdFromConnection(connection);
+    if (!accountId) {
+      await markFailed(job.id, job.organisationId, "Connected account id missing for publish target");
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "missing_connection",
+        status: PublishingJobStatus.FAILED,
+        externalOutcome: MissionExternalOutcome.FAILED,
+      };
+    }
+
+    // Caption-only is allowed for Zernio; media is optional.
+    const zernioContent = await buildZernioPublishContent(job);
+    if (!zernioContent.ok) {
+      await markFailed(job.id, job.organisationId, zernioContent.error);
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "missing_media",
+        status: PublishingJobStatus.FAILED,
+        externalOutcome: MissionExternalOutcome.FAILED,
+      };
+    }
+
+    const { publishViaZernio } = await import("@/adapters/zernio");
+    const { writeAuditLog } = await import("@/services/audit");
+    const timeoutMs = 60_000;
+    const raced = await racePublish(async () => {
+      const result = await publishViaZernio({
+        organisationId: job.organisationId,
+        content: zernioContent.caption,
+        accountIds: [accountId],
+        mediaUrls: zernioContent.mediaUrl ? [zernioContent.mediaUrl] : undefined,
+        scheduledAt: job.scheduledAt?.toISOString(),
+      });
+      if (!result.ok) {
+        return { ok: false as const, error: result.error || "Publish failed" };
+      }
+      return { ok: true as const, externalPostId: result.id || undefined };
+    }, timeoutMs);
+
+    if (raced.kind === "timeout") {
+      await markReconciliation(
+        job.id,
+        job.organisationId,
+        `Provider publish timed out after ${timeoutMs}ms — outcome unknown; do not blind-retry to CONFIRMED`,
+      );
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "provider_timeout",
+        status: PublishingJobStatus.RECONCILIATION_REQUIRED,
+        externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+      };
+    }
+    if (raced.kind === "unknown") {
+      await markReconciliation(job.id, job.organisationId, raced.message);
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "provider_unknown",
+        status: PublishingJobStatus.RECONCILIATION_REQUIRED,
+        externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+      };
+    }
+    const publishResult = raced.result;
+    if (!publishResult.ok) {
+      const err = publishResult.error || "Provider rejected publish";
+      await markFailed(job.id, job.organisationId, err);
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "provider_rejected",
+        status: PublishingJobStatus.FAILED,
+        externalOutcome: MissionExternalOutcome.FAILED,
+      };
+    }
+    if (!publishResult.externalPostId) {
+      await markReconciliation(
+        job.id,
+        job.organisationId,
+        "Provider returned success without external post id — reconciliation required",
+      );
+      return {
+        ok: false,
+        jobId: job.id,
+        claimed: true,
+        reason: "missing_external_id",
+        status: PublishingJobStatus.RECONCILIATION_REQUIRED,
+        externalOutcome: MissionExternalOutcome.RECONCILIATION_REQUIRED,
+      };
+    }
+    await recordPublishResult({
+      organisationId: job.organisationId,
+      jobId: job.id,
+      externalPostId: publishResult.externalPostId,
+      externalUrl: null,
+    });
+    await writeAuditLog({
+      organisationId: job.organisationId,
+      action: "content.publish.confirmed",
+      entityType: "PublishingJob",
+      entityId: job.id,
+      metadata: {
+        socialConnectionId: connection.id,
+        provider: "ZERNIO",
+        externalPostId: publishResult.externalPostId,
+        platform: job.platform,
+      },
+    });
+    return {
+      ok: true,
+      jobId: job.id,
+      claimed: true,
+      status: PublishingJobStatus.PUBLISHED,
+      externalOutcome: MissionExternalOutcome.CONFIRMED,
+      externalPostId: publishResult.externalPostId,
+    };
+  }
+
   if (connection.expiresAt && connection.expiresAt < now) {
     await markFailed(job.id, job.organisationId, "OAuth credentials expired");
     return {
@@ -351,6 +483,19 @@ async function executeClaimed(
       jobId: job.id,
       claimed: true,
       reason: "expired_credentials",
+      status: PublishingJobStatus.FAILED,
+      externalOutcome: MissionExternalOutcome.FAILED,
+    };
+  }
+
+  const contentBuilt = await buildPublishContent(job);
+  if (!contentBuilt.ok) {
+    await markFailed(job.id, job.organisationId, contentBuilt.error);
+    return {
+      ok: false,
+      jobId: job.id,
+      claimed: true,
+      reason: "missing_media",
       status: PublishingJobStatus.FAILED,
       externalOutcome: MissionExternalOutcome.FAILED,
     };
@@ -395,19 +540,6 @@ async function executeClaimed(
       jobId: job.id,
       claimed: true,
       reason: "missing_token",
-      status: PublishingJobStatus.FAILED,
-      externalOutcome: MissionExternalOutcome.FAILED,
-    };
-  }
-
-  const contentBuilt = await buildPublishContent(job);
-  if (!contentBuilt.ok) {
-    await markFailed(job.id, job.organisationId, contentBuilt.error);
-    return {
-      ok: false,
-      jobId: job.id,
-      claimed: true,
-      reason: "missing_media",
       status: PublishingJobStatus.FAILED,
       externalOutcome: MissionExternalOutcome.FAILED,
     };
@@ -575,6 +707,41 @@ async function racePublish(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function buildZernioPublishContent(job: {
+  organisationId: string;
+  pieceId: string;
+  platform: string;
+  variantId: string | null;
+  piece: {
+    body: string;
+    title: string;
+    assetId: string | null;
+    variants: Array<{
+      id: string;
+      platform: string;
+      body: string;
+      metadata: unknown;
+    }>;
+  };
+}): Promise<{ ok: true; caption: string; mediaUrl?: string } | { ok: false; error: string }> {
+  const built = await buildPublishContent(job);
+  if (built.ok) {
+    return { ok: true, caption: built.content.caption || "", mediaUrl: built.content.mediaUrl };
+  }
+  // Fall back to caption-only when media is missing (Zernio text posts).
+  const variant = job.variantId
+    ? job.piece.variants.find((v) => v.id === job.variantId)
+    : job.piece.variants.find(
+        (v) => v.platform.toLowerCase() === job.platform.toLowerCase(),
+      ) || job.piece.variants[0];
+  const caption =
+    variant?.body?.trim() || job.piece.body?.trim() || job.piece.title?.trim() || "";
+  if (!caption) {
+    return { ok: false, error: "Publish requires caption text" };
+  }
+  return { ok: true, caption };
 }
 
 async function buildPublishContent(job: {

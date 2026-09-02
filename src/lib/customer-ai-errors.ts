@@ -28,6 +28,21 @@ export function toCustomerAiError(error: unknown): string {
     return CUSTOMER_AI_UNAVAILABLE;
   }
 
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: string }).code === "SPEND_CAP_EXCEEDED"
+  ) {
+    const withMsg = error as { toCustomerMessage?: () => string };
+    if (typeof withMsg.toCustomerMessage === "function") {
+      return withMsg.toCustomerMessage();
+    }
+  }
+  if (/spend cap exceeded|usage limit for this period/i.test(raw)) {
+    return "This workspace has reached its Agent Desk intelligence usage limit for this period. CRM data is preserved — try again next period or contact your administrator.";
+  }
+
   // Generic operational messages are OK if they don't name vendors
   if (raw.length > 200) return CUSTOMER_AI_UNAVAILABLE;
   return raw || CUSTOMER_AI_UNAVAILABLE;

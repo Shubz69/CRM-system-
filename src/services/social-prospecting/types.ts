@@ -179,7 +179,42 @@ export function mergeDiscoveryCostLimits(
 ): DiscoveryCostLimits {
   const base = { ...DEFAULT_DISCOVERY_COST_LIMITS };
   base.maxCandidates = Math.min(base.maxCandidates, Math.max(1, icpDesired));
-  return { ...base, ...overrides, maxCandidates: overrides?.maxCandidates ?? base.maxCandidates };
+
+  /** Server hard ceiling — client cannot raise these. */
+  const CEILING: DiscoveryCostLimits = {
+    maxCandidates: 20,
+    maxSources: 12,
+    maxExternalCalls: 10,
+    maxEstimatedCostCents: 100,
+    maxResearchDepth: "DEEP",
+  };
+
+  const depthRank = { FAST: 0, STANDARD: 1, DEEP: 2 } as const;
+  const requestedDepth = overrides?.maxResearchDepth ?? base.maxResearchDepth;
+  const clampedDepth =
+    depthRank[requestedDepth] <= depthRank[CEILING.maxResearchDepth]
+      ? requestedDepth
+      : CEILING.maxResearchDepth;
+
+  return {
+    maxCandidates: Math.min(
+      CEILING.maxCandidates,
+      Math.max(1, overrides?.maxCandidates ?? base.maxCandidates),
+    ),
+    maxSources: Math.min(
+      CEILING.maxSources,
+      Math.max(1, overrides?.maxSources ?? base.maxSources),
+    ),
+    maxExternalCalls: Math.min(
+      CEILING.maxExternalCalls,
+      Math.max(1, overrides?.maxExternalCalls ?? base.maxExternalCalls),
+    ),
+    maxEstimatedCostCents: Math.min(
+      CEILING.maxEstimatedCostCents,
+      Math.max(1, overrides?.maxEstimatedCostCents ?? base.maxEstimatedCostCents),
+    ),
+    maxResearchDepth: clampedDepth,
+  };
 }
 
 export function buildProspectDedupeKey(input: SocialProspectCandidateInput): string {

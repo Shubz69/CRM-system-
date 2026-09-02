@@ -76,15 +76,15 @@ export default function AcceptInviteClient() {
           email: email.trim().toLowerCase(),
           password,
           redirect: false,
-          callbackUrl: "/ask",
+          callbackUrl: "/onboarding",
         });
         if (!signInResult?.error) {
-          router.push("/ask");
+          router.push("/onboarding");
           router.refresh();
           return;
         }
       }
-      router.push("/login");
+      router.push("/login?callbackUrl=/onboarding");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Accept failed");
     } finally {

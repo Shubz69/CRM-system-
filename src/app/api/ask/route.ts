@@ -7,6 +7,7 @@ import {
   confirmImagingPromptAndEnqueue,
   createAndEnqueueAgentRun,
 } from "@/services/agent-runs";
+import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import {
   WorkspaceAccessError,
   assertActiveWorkspaceAccess,
@@ -20,6 +21,9 @@ const createSchema = z.object({
 });
 
 function askErrorResponse(error: unknown, fallbackStatus = 503) {
+  if (error instanceof OrgRateLimitError) {
+    return Response.json({ error: error.message, code: error.code }, { status: 429 });
+  }
   if (error instanceof WorkspaceAccessError) {
     const status = error.code === "NO_WORKSPACE_MEMBERSHIP" ? 403 : 401;
     return Response.json({ error: error.message, code: error.code }, { status });
@@ -50,6 +54,7 @@ export async function POST(req: NextRequest) {
       userId: session.userId,
       organisationId: session.organisationId,
     });
+    assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(await req.json());
     const { runId, jobId } = await createAndEnqueueAgentRun({
       organisationId: session.organisationId,

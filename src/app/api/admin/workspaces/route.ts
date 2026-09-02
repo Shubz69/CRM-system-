@@ -1,11 +1,54 @@
+/**
+ * Platform Admin — Organisations / Workspaces API
+ * Create beta workspaces, suspend/reactivate, list with beta + social policy.
+ */
+
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { MemberRole, OrganisationStatus } from "@prisma/client";
+import { InvitationStatus, MemberRole, OrganisationStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import { assertOrganisationMutable } from "@/lib/platform-org";
 import { softDeleteOrganisation } from "@/services/organisation-lifecycle";
+import {
+  createBetaWorkspaceAndInvite,
+  OnboardingError,
+  resendInvite,
+  revokeInvite,
+} from "@/services/workspace-onboarding";
+import {
+  countConnectedSocialAccounts,
+  getBetaWorkspaceMeta,
+  setBetaWorkspaceMeta,
+  AI_BUDGET_WARNING_PREF_KEY,
+  getAiBudgetWarningThresholdCents,
+} from "@/services/beta-workspace";
+import {
+  getSocialConnectionPolicy,
+  SOCIAL_CONNECTION_POLICY_KEY,
+} from "@/services/social-connection-policy";
+import { setOrganisationAiBudget } from "@/services/ai-spend-gate";
+import { setOrganisationPreference } from "@/services/agent-memory";
+
+const createBetaSchema = z.object({
+  action: z.literal("create_beta"),
+  name: z.string().min(2).max(120),
+  ownerFullName: z.string().min(2).max(120),
+  ownerEmail: z.string().email(),
+  role: z
+    .enum(["OWNER", "ADMINISTRATOR", "MANAGER", "SALES_AGENT", "ANALYST", "READ_ONLY"])
+    .optional(),
+  betaLabel: z.string().max(80).optional(),
+  betaExpiresAt: z.string().datetime().optional().nullable(),
+  internalNotes: z.string().max(2000).optional().nullable(),
+  socialConnectionsEnabled: z.boolean().optional(),
+  maxConnectedSocialAccounts: z.number().int().min(0).max(50).nullable().optional(),
+  allowedNetworks: z
+    .array(z.enum(["INSTAGRAM", "LINKEDIN", "YOUTUBE"]))
+    .min(1)
+    .optional(),
+});
 
 const createSchema = z.object({
   action: z.literal("create"),
@@ -20,12 +63,30 @@ const createSchema = z.object({
 });
 
 const mutateSchema = z.object({
-  action: z.enum(["suspend", "reactivate", "update", "archive"]),
+  action: z.enum([
+    "suspend",
+    "reactivate",
+    "update",
+    "archive",
+    "set_ai_budget",
+    "invite",
+    "resend_invite",
+    "revoke_invite",
+    "set_beta_status",
+  ]),
   organisationId: z.string().min(1),
   name: z.string().min(2).max(120).optional(),
   timezone: z.string().optional(),
   plan: z.string().optional(),
   reason: z.string().max(500).optional(),
+  monthlyCapCents: z.number().int().min(0).nullable().optional(),
+  warningThresholdCents: z.number().int().min(0).nullable().optional(),
+  inviteEmail: z.string().email().optional(),
+  inviteRole: z
+    .enum(["OWNER", "ADMINISTRATOR", "MANAGER", "SALES_AGENT", "ANALYST", "READ_ONLY"])
+    .optional(),
+  inviteId: z.string().optional(),
+  betaStatus: z.enum(["BETA_ACTIVE", "BETA_SUSPENDED", "BETA_COMPLETED"]).optional(),
 });
 
 export async function GET() {
@@ -47,22 +108,48 @@ export async function GET() {
           select: { id: true, aiProvider: true },
           take: 1,
         },
+        invitations: {
+          where: { status: InvitationStatus.PENDING },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+          select: {
+            id: true,
+            email: true,
+            role: true,
+            status: true,
+            expiresAt: true,
+            createdAt: true,
+          },
+        },
+        organisationPreferences: {
+          where: {
+            key: {
+              in: ["beta_workspace", SOCIAL_CONNECTION_POLICY_KEY, AI_BUDGET_WARNING_PREF_KEY],
+            },
+          },
+        },
+        aiBudget: true,
         _count: {
           select: {
             members: true,
             contacts: true,
             conversations: true,
             leads: true,
+            invitations: true,
           },
         },
       },
     });
 
-    return Response.json({
-      workspaces: orgs.map((org) => {
+    const workspaces = await Promise.all(
+      orgs.map(async (org) => {
         const owner = org.members[0]?.user;
         const manychat = org.integrations.find((i) => i.type === "MANYCHAT");
         const booking = org.integrations.find((i) => i.type === "BOOKING");
+        const beta = await getBetaWorkspaceMeta(org.id);
+        const socialPolicy = await getSocialConnectionPolicy(org.id);
+        const connectedSocialCount = await countConnectedSocialAccounts(org.id);
+        const warningCents = await getAiBudgetWarningThresholdCents(org.id);
         return {
           id: org.id,
           name: org.name,
@@ -75,7 +162,9 @@ export async function GET() {
           timezone: org.timezone,
           createdAt: org.createdAt.toISOString(),
           lastActivityAt: org.lastActivityAt?.toISOString() ?? null,
-          owner: owner ? { id: owner.id, email: owner.email, name: owner.name } : null,
+          owner: owner
+            ? { id: owner.id, email: owner.email, name: owner.name }
+            : null,
           users: org._count.members,
           contacts: org._count.contacts,
           conversations: org._count.conversations,
@@ -83,9 +172,20 @@ export async function GET() {
           aiStatus: org.agentConfigurations[0] ? "Configured" : "Not configured",
           manychatStatus: manychat?.isActive ? "Connected" : "Not connected",
           bookingStatus: booking?.isActive ? "Connected" : "Not connected",
+          betaStatus: beta?.status ?? (org.plan === "beta" ? "BETA_ACTIVE" : null),
+          betaLabel: beta?.label ?? null,
+          connectedSocialCount,
+          socialLimit: socialPolicy.maxConnectedSocialAccounts,
+          socialConnectionsEnabled: socialPolicy.socialConnectionsEnabled,
+          allowedNetworks: socialPolicy.allowedNetworks,
+          pendingInvites: org.invitations,
+          aiBudgetMonthlyCapCents: org.aiBudget?.monthlyCapCents ?? null,
+          aiBudgetWarningThresholdCents: warningCents,
         };
       }),
-    });
+    );
+
+    return Response.json({ workspaces });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -97,7 +197,26 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePlatformAccess();
-    const body = z.union([createSchema, mutateSchema]).parse(await req.json());
+    const body = z
+      .union([createBetaSchema, createSchema, mutateSchema])
+      .parse(await req.json());
+
+    if (body.action === "create_beta") {
+      const result = await createBetaWorkspaceAndInvite({
+        name: body.name,
+        ownerFullName: body.ownerFullName,
+        ownerEmail: body.ownerEmail,
+        role: (body.role as MemberRole | undefined) ?? MemberRole.OWNER,
+        betaLabel: body.betaLabel,
+        betaExpiresAt: body.betaExpiresAt ?? null,
+        internalNotes: body.internalNotes ?? null,
+        socialConnectionsEnabled: body.socialConnectionsEnabled,
+        maxConnectedSocialAccounts: body.maxConnectedSocialAccounts,
+        allowedNetworks: body.allowedNetworks,
+        createdByUserId: session.userId,
+      });
+      return Response.json({ ok: true, ...result });
+    }
 
     if (body.action === "create") {
       const existing = await prisma.organisation.findUnique({ where: { slug: body.slug } });
@@ -139,7 +258,9 @@ export async function POST(req: NextRequest) {
       });
 
       if (body.ownerEmail) {
-        const user = await prisma.user.findUnique({ where: { email: body.ownerEmail.toLowerCase() } });
+        const user = await prisma.user.findUnique({
+          where: { email: body.ownerEmail.toLowerCase() },
+        });
         if (user) {
           await prisma.organisationMember.create({
             data: {
@@ -155,6 +276,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const { ensureNewOrgSocialConnectionPolicy } = await import(
+        "@/services/social-connection-policy"
+      );
+      await ensureNewOrgSocialConnectionPolicy(org.id);
+
       await writeAuditLog({
         organisationId: org.id,
         userId: session.userId,
@@ -164,7 +290,10 @@ export async function POST(req: NextRequest) {
         metadata: { name: org.name, slug: org.slug },
       });
 
-      return Response.json({ ok: true, workspace: { id: org.id, name: org.name, slug: org.slug } });
+      return Response.json({
+        ok: true,
+        workspace: { id: org.id, name: org.name, slug: org.slug },
+      });
     }
 
     const org = await prisma.organisation.findFirst({
@@ -185,12 +314,21 @@ export async function POST(req: NextRequest) {
         where: { id: org.id },
         data: { status: OrganisationStatus.SUSPENDED, autopilotMode: "PAUSED" },
       });
+      const beta = await getBetaWorkspaceMeta(org.id);
+      if (beta) {
+        await setBetaWorkspaceMeta({
+          organisationId: org.id,
+          meta: { ...beta, status: "BETA_SUSPENDED" },
+          updatedByUserId: session.userId,
+        });
+      }
       await writeAuditLog({
         organisationId: org.id,
         userId: session.userId,
         action: "workspace.suspend",
         entityType: "Organisation",
         entityId: org.id,
+        metadata: { reason: body.reason ?? null, preserveSocial: true },
       });
       return Response.json({ ok: true, status: updated.status });
     }
@@ -200,6 +338,14 @@ export async function POST(req: NextRequest) {
         where: { id: org.id },
         data: { status: OrganisationStatus.ACTIVE },
       });
+      const beta = await getBetaWorkspaceMeta(org.id);
+      if (beta) {
+        await setBetaWorkspaceMeta({
+          organisationId: org.id,
+          meta: { ...beta, status: "BETA_ACTIVE" },
+          updatedByUserId: session.userId,
+        });
+      }
       await writeAuditLog({
         organisationId: org.id,
         userId: session.userId,
@@ -211,7 +357,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "archive") {
-      // Soft-delete only. Hard purge is a separate deliberate export-then-wipe path.
       const result = await softDeleteOrganisation({
         organisationId: org.id,
         actorUserId: session.userId,
@@ -222,6 +367,105 @@ export async function POST(req: NextRequest) {
         archived: true,
         deletedAt: result.deletedAt.toISOString(),
       });
+    }
+
+    if (body.action === "set_ai_budget") {
+      const budget = await setOrganisationAiBudget({
+        organisationId: org.id,
+        monthlyCapCents: body.monthlyCapCents ?? null,
+      });
+      if (body.warningThresholdCents !== undefined) {
+        await setOrganisationPreference({
+          organisationId: org.id,
+          key: AI_BUDGET_WARNING_PREF_KEY,
+          value: { cents: body.warningThresholdCents },
+          updatedByUserId: session.userId,
+        });
+      }
+      await writeAuditLog({
+        organisationId: org.id,
+        userId: session.userId,
+        action: "workspace.ai_budget.set",
+        entityType: "OrganisationAiBudget",
+        entityId: budget.id,
+        metadata: {
+          monthlyCapCents: budget.monthlyCapCents,
+          warningThresholdCents: body.warningThresholdCents ?? null,
+        },
+      });
+      return Response.json({
+        ok: true,
+        monthlyCapCents: budget.monthlyCapCents,
+        warningThresholdCents: body.warningThresholdCents ?? null,
+      });
+    }
+
+    if (body.action === "set_beta_status") {
+      if (!body.betaStatus) return jsonError("betaStatus required", 400);
+      const existing = (await getBetaWorkspaceMeta(org.id)) ?? {
+        status: "BETA_ACTIVE" as const,
+        label: "Beta",
+      };
+      await setBetaWorkspaceMeta({
+        organisationId: org.id,
+        meta: { ...existing, status: body.betaStatus },
+        updatedByUserId: session.userId,
+      });
+      if (body.betaStatus === "BETA_SUSPENDED") {
+        await prisma.organisation.update({
+          where: { id: org.id },
+          data: { status: OrganisationStatus.SUSPENDED, autopilotMode: "PAUSED" },
+        });
+      } else if (body.betaStatus === "BETA_ACTIVE") {
+        await prisma.organisation.update({
+          where: { id: org.id },
+          data: { status: OrganisationStatus.ACTIVE },
+        });
+      }
+      await writeAuditLog({
+        organisationId: org.id,
+        userId: session.userId,
+        action: "workspace.beta.status",
+        entityType: "Organisation",
+        entityId: org.id,
+        metadata: { status: body.betaStatus },
+      });
+      return Response.json({ ok: true, betaStatus: body.betaStatus });
+    }
+
+    if (body.action === "invite") {
+      if (!body.inviteEmail) return jsonError("inviteEmail required", 400);
+      const { inviteMember } = await import("@/services/workspace-onboarding");
+      const invite = await inviteMember({
+        organisationId: org.id,
+        email: body.inviteEmail,
+        role: (body.inviteRole as MemberRole | undefined) ?? MemberRole.OWNER,
+        invitedByUserId: session.userId,
+        includeInviteUrl: true,
+        allowOwnerRole: true,
+      });
+      return Response.json({ ok: true, invite });
+    }
+
+    if (body.action === "resend_invite") {
+      if (!body.inviteId) return jsonError("inviteId required", 400);
+      const invite = await resendInvite({
+        organisationId: org.id,
+        inviteId: body.inviteId,
+        invitedByUserId: session.userId,
+        includeInviteUrl: true,
+      });
+      return Response.json({ ok: true, invite });
+    }
+
+    if (body.action === "revoke_invite") {
+      if (!body.inviteId) return jsonError("inviteId required", 400);
+      const invite = await revokeInvite({
+        organisationId: org.id,
+        inviteId: body.inviteId,
+        revokedByUserId: session.userId,
+      });
+      return Response.json({ ok: true, invite });
     }
 
     const updated = await prisma.organisation.update({
@@ -242,13 +486,31 @@ export async function POST(req: NextRequest) {
     });
     return Response.json({
       ok: true,
-      workspace: { id: updated.id, name: updated.name, plan: updated.plan, timezone: updated.timezone },
+      workspace: {
+        id: updated.id,
+        name: updated.name,
+        plan: updated.plan,
+        timezone: updated.timezone,
+      },
     });
   } catch (error) {
+    if (error instanceof OnboardingError) {
+      const status =
+        error.code === "CONFLICT"
+          ? 409
+          : error.code === "NOT_FOUND"
+            ? 404
+            : error.code === "FORBIDDEN"
+              ? 403
+              : 400;
+      return jsonError(error.message, status);
+    }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    if (error instanceof z.ZodError) return jsonError(error.errors[0]?.message || "Invalid request", 400);
+    if (error instanceof z.ZodError) {
+      return jsonError(error.errors[0]?.message || "Invalid request", 400);
+    }
     return jsonError(message, 500);
   }
 }

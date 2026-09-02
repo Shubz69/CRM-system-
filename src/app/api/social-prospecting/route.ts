@@ -1,3 +1,4 @@
+import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import { NextRequest } from "next/server";
 import { jsonError, requirePermission, requireSession } from "@/lib/session";
 import {
@@ -58,6 +59,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("leads:write");
+    assertOrgExpensiveRouteAllowed(session.organisationId, "social-prospecting");
     const body = (await req.json()) as {
       action?: string;
       query?: string;
@@ -176,6 +178,9 @@ export async function POST(req: NextRequest) {
 
     return jsonError("Unknown action", 400);
   } catch (error) {
+    if (error instanceof OrgRateLimitError) {
+      return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError(message, 401);
     if (message === "FORBIDDEN") return jsonError(message, 403);

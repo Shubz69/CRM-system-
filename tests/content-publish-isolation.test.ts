@@ -60,12 +60,10 @@ describe("requestPublish — social connection org isolation", () => {
       }),
     ).rejects.toThrow(/Social connection not found/i);
     expect(connectionFindFirst).toHaveBeenCalledWith({
-      where: { id: "conn_other_org", organisationId: "org_a" },
-      select: {
-        id: true,
-        displayName: true,
-        externalAccountId: true,
-        platform: true,
+      where: {
+        id: "conn_other_org",
+        organisationId: "org_a",
+        status: "ACTIVE",
       },
     });
     expect($transaction).not.toHaveBeenCalled();
@@ -77,6 +75,7 @@ describe("requestPublish — social connection org isolation", () => {
       displayName: "Acme",
       externalAccountId: "ig_1",
       platform: "INSTAGRAM",
+      status: "ACTIVE",
     });
     $transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
       const created = { id: "job_1", status: PublishingJobStatus.PENDING_APPROVAL };

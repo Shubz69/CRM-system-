@@ -784,6 +784,11 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
     },
   });
   await ensureZernioMessagingBindings(organisationId, accounts);
+  // Keep Content OS publish targets in sync with canonical connected-account state.
+  const { syncPublishTargetsFromConnectedAccounts } = await import(
+    "@/services/publishing/publish-targets"
+  );
+  await syncPublishTargetsFromConnectedAccounts(organisationId).catch(() => undefined);
 }
 
 /**

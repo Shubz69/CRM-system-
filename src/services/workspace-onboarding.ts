@@ -22,6 +22,12 @@ export const INVITE_ROLES: MemberRole[] = [
   MemberRole.READ_ONLY,
 ];
 
+/** Platform-admin beta create may invite the primary owner. */
+export const PLATFORM_INVITE_ROLES: MemberRole[] = [
+  MemberRole.OWNER,
+  ...INVITE_ROLES,
+];
+
 /** Roles that can be set via changeMemberRole (includes OWNER for ownership transfer). */
 export const ASSIGNABLE_MEMBER_ROLES: MemberRole[] = [
   MemberRole.OWNER,
@@ -76,12 +82,16 @@ async function uniqueSlug(preferred: string): Promise<string> {
   throw new OnboardingError("Could not allocate a unique workspace slug", "CONFLICT");
 }
 
-function assertInviteRole(role: MemberRole): void {
-  if (!INVITE_ROLES.includes(role)) {
+function assertInviteRole(role: MemberRole, allowOwner = false): void {
+  const allowed = allowOwner ? PLATFORM_INVITE_ROLES : INVITE_ROLES;
+  if (!allowed.includes(role)) {
     throw new OnboardingError(
-      `Invite role must be one of: ${INVITE_ROLES.join(", ")} (OWNER is not invitible)`,
+      `Invite role must be one of: ${allowed.join(", ")}`,
       "VALIDATION",
     );
+  }
+  if (role === MemberRole.SUPER_ADMIN) {
+    throw new OnboardingError("SUPER_ADMIN cannot be invited", "FORBIDDEN");
   }
 }
 
@@ -263,6 +273,10 @@ export type InviteMemberInput = {
   invitedByUserId: string;
   /** When true, always include inviteUrl for copy-link (members:manage callers). */
   includeInviteUrl?: boolean;
+  /** Platform-admin only: allow OWNER invitations for beta workspace create. */
+  allowOwnerRole?: boolean;
+  /** Optional display name stored only for email personalization context. */
+  inviteeName?: string | null;
 };
 
 export type InviteMemberResult = {
@@ -312,7 +326,7 @@ async function sendInviteEmail(params: {
 }
 
 export async function inviteMember(input: InviteMemberInput): Promise<InviteMemberResult> {
-  assertInviteRole(input.role);
+  assertInviteRole(input.role, Boolean(input.allowOwnerRole));
   const email = normalizeEmail(input.email);
 
   const org = await prisma.organisation.findFirst({
@@ -413,7 +427,7 @@ export async function resendInvite(input: {
     throw new OnboardingError("Invitation was revoked", "REVOKED");
   }
 
-  assertInviteRole(invite.role);
+  assertInviteRole(invite.role, invite.role === MemberRole.OWNER);
 
   const rawToken = randomBytes(32).toString("hex");
   const tokenHash = hashToken(rawToken);
@@ -784,4 +798,147 @@ export async function getInviteByToken(rawToken: string) {
     return { ...invite, status: InvitationStatus.EXPIRED };
   }
   return invite;
+}
+
+export type CreateBetaWorkspaceInput = {
+  name: string;
+  ownerFullName: string;
+  ownerEmail: string;
+  role?: MemberRole;
+  betaLabel?: string | null;
+  betaExpiresAt?: string | null;
+  internalNotes?: string | null;
+  socialConnectionsEnabled?: boolean;
+  maxConnectedSocialAccounts?: number | null;
+  allowedNetworks?: Array<"INSTAGRAM" | "LINKEDIN" | "YOUTUBE">;
+  createdByUserId: string;
+};
+
+/**
+ * Platform-admin atomic beta workspace create + OWNER invite.
+ * No partial orgs: rolls back on failure. Never grants isPlatformAdmin.
+ */
+export async function createBetaWorkspaceAndInvite(input: CreateBetaWorkspaceInput) {
+  const name = input.name.trim();
+  if (name.length < 2) throw new OnboardingError("Organisation name is required");
+  const ownerEmail = normalizeEmail(input.ownerEmail);
+  if (!ownerEmail.includes("@")) throw new OnboardingError("Valid owner email is required");
+  const ownerName = input.ownerFullName.trim();
+  if (ownerName.length < 2) throw new OnboardingError("Owner full name is required");
+
+  const role = input.role ?? MemberRole.OWNER;
+  assertInviteRole(role, true);
+
+  const slug = await uniqueSlug(slugify(name));
+
+  const org = await prisma.$transaction(async (tx) => {
+    const created = await tx.organisation.create({
+      data: {
+        name,
+        slug,
+        timezone: "UTC",
+        status: OrganisationStatus.ACTIVE,
+        autopilotMode: "OFF",
+        plan: "beta",
+        pipelines: {
+          create: {
+            name: "Default",
+            isDefault: true,
+            stages: { create: DEFAULT_PIPELINE_STAGES },
+          },
+        },
+        agentConfigurations: {
+          create: {
+            name: "Default Agent",
+            isActive: true,
+          },
+        },
+      },
+    });
+    return created;
+  });
+
+  try {
+    const { setSocialConnectionPolicy, NEW_ORG_BETA_POLICY } = await import(
+      "@/services/social-connection-policy"
+    );
+    await setSocialConnectionPolicy({
+      organisationId: org.id,
+      policy: {
+        socialConnectionsEnabled: input.socialConnectionsEnabled ?? true,
+        maxConnectedSocialAccounts:
+          input.maxConnectedSocialAccounts === undefined
+            ? NEW_ORG_BETA_POLICY.maxConnectedSocialAccounts
+            : input.maxConnectedSocialAccounts,
+        allowedNetworks: input.allowedNetworks?.length
+          ? input.allowedNetworks
+          : NEW_ORG_BETA_POLICY.allowedNetworks,
+      },
+      updatedByUserId: input.createdByUserId,
+    });
+
+    const { setBetaWorkspaceMeta, ensureBetaAiBudget } = await import(
+      "@/services/beta-workspace"
+    );
+    await setBetaWorkspaceMeta({
+      organisationId: org.id,
+      meta: {
+        status: "BETA_ACTIVE",
+        label: input.betaLabel?.trim() || "Beta",
+        expiresAt: input.betaExpiresAt || null,
+        internalNotes: input.internalNotes?.trim() || null,
+        createdByUserId: input.createdByUserId,
+      },
+      updatedByUserId: input.createdByUserId,
+    });
+    await ensureBetaAiBudget(org.id);
+
+    const invite = await inviteMember({
+      organisationId: org.id,
+      email: ownerEmail,
+      role,
+      invitedByUserId: input.createdByUserId,
+      includeInviteUrl: true,
+      allowOwnerRole: true,
+      inviteeName: ownerName,
+    });
+
+    await writeAuditLog({
+      organisationId: org.id,
+      userId: input.createdByUserId,
+      action: "workspace.beta.create",
+      entityType: "Organisation",
+      entityId: org.id,
+      metadata: {
+        name: org.name,
+        slug: org.slug,
+        ownerEmail,
+        ownerName,
+        role,
+        inviteId: invite.inviteId,
+        emailSent: invite.emailSent,
+      },
+    });
+
+    return {
+      organisation: { id: org.id, name: org.name, slug: org.slug },
+      invite: {
+        inviteId: invite.inviteId,
+        emailSent: invite.emailSent,
+        inviteUrl: invite.inviteUrl,
+        emailError: invite.emailError,
+        email: ownerEmail,
+        role,
+      },
+    };
+  } catch (error) {
+    // Best-effort cleanup so we don't leave ownerless partial beta orgs.
+    await prisma.organisation
+      .update({
+        where: { id: org.id },
+        data: { deletedAt: new Date(), status: OrganisationStatus.SUSPENDED },
+      })
+      .catch(() => undefined);
+    throw error;
+  }
 }

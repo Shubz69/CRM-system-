@@ -13,6 +13,11 @@ export class SpendCapExceededError extends Error {
     super(message);
     this.name = "SpendCapExceededError";
   }
+
+  /** Customer-safe message — never exposes vendor pricing. */
+  toCustomerMessage(): string {
+    return "This workspace has reached its Agent Desk intelligence usage limit for this period. CRM data is preserved — try again next period or contact your administrator.";
+  }
 }
 
 function startOfUtcMonth(d = new Date()): Date {
@@ -43,6 +48,15 @@ export async function getOrganisationAiBudget(organisationId: string) {
  * Upsert per-org monthly AI spend cap (cents). null = unlimited.
  * Always org-scoped.
  */
+/** Safe default for new beta / tester workspaces ($25 / month). */
+export const BETA_ORG_AI_MONTHLY_CAP_CENTS = 2_500;
+
+/** Warning fires at this fraction of the monthly hard cap (no schema change). */
+export const AI_BUDGET_WARNING_RATIO = 0.8;
+
+export const CUSTOMER_AI_ALLOWANCE_EXCEEDED =
+  "You've reached this workspace's AI allowance for the month. It resets next month, or an admin can raise it.";
+
 export async function setOrganisationAiBudget(input: {
   organisationId: string;
   monthlyCapCents: number | null;
@@ -59,6 +73,75 @@ export async function setOrganisationAiBudget(input: {
   });
 }
 
+/** Idempotent beta default — does not overwrite an existing budget row. */
+export async function ensureBetaOrganisationAiBudget(
+  organisationId: string,
+  monthlyCapCents: number = BETA_ORG_AI_MONTHLY_CAP_CENTS,
+) {
+  const existing = await prisma.organisationAiBudget.findUnique({
+    where: { organisationId },
+  });
+  if (existing) return existing;
+  return setOrganisationAiBudget({ organisationId, monthlyCapCents });
+}
+
+export type OrganisationAiBudgetStatus = {
+  organisationId: string;
+  spentCents: number;
+  capCents: number | null;
+  warningThresholdCents: number | null;
+  warning: boolean;
+  limited: boolean;
+  /** Platform / diagnostics — real numbers. */
+  diagnosticReason: string | null;
+  /** Customer-safe message when limited; null otherwise. */
+  customerMessage: string | null;
+};
+
+export async function getOrganisationAiBudgetStatus(
+  organisationId: string,
+): Promise<OrganisationAiBudgetStatus> {
+  const budget = await getOrganisationAiBudget(organisationId);
+  const capCents = budget?.monthlyCapCents ?? null;
+  if (capCents == null) {
+    return {
+      organisationId,
+      spentCents: 0,
+      capCents: null,
+      warningThresholdCents: null,
+      warning: false,
+      limited: false,
+      diagnosticReason: null,
+      customerMessage: null,
+    };
+  }
+  const spentCents = await getOrganisationPeriodSpendCents(organisationId);
+  let warningThresholdCents = Math.floor(capCents * AI_BUDGET_WARNING_RATIO);
+  try {
+    const { getAiBudgetWarningThresholdCents } = await import("@/services/beta-workspace");
+    const preferred = await getAiBudgetWarningThresholdCents(organisationId);
+    if (preferred != null) warningThresholdCents = preferred;
+  } catch {
+    /* preference lookup optional */
+  }
+  const limited = spentCents >= capCents;
+  const warning = !limited && spentCents >= warningThresholdCents;
+  return {
+    organisationId,
+    spentCents,
+    capCents,
+    warningThresholdCents,
+    warning,
+    limited,
+    diagnosticReason: limited
+      ? `SPEND_CAP_EXCEEDED: ${spentCents}¢ / ${capCents}¢ this UTC month`
+      : warning
+        ? `SPEND_WARNING: ${spentCents}¢ / ${capCents}¢ (threshold ${warningThresholdCents}¢)`
+        : null,
+    customerMessage: limited ? CUSTOMER_AI_ALLOWANCE_EXCEEDED : null,
+  };
+}
+
 /**
  * PRE-DISPATCH spend gate. Rejects before any AI call when the org is over cap.
  * No cap configured → allow (preserves existing sales-path behaviour).
@@ -66,16 +149,20 @@ export async function setOrganisationAiBudget(input: {
 export async function assertWithinSpendCap(
   organisationId: string,
   estimatedAdditionalCents = 0,
-): Promise<{ ok: true; spentCents: number; capCents: number | null }> {
+): Promise<{ ok: true; spentCents: number; capCents: number | null; warning: boolean }> {
   const budget = await prisma.organisationAiBudget.findUnique({
     where: { organisationId },
   });
   const capCents = budget?.monthlyCapCents ?? null;
   if (capCents == null) {
-    return { ok: true, spentCents: 0, capCents: null };
+    return { ok: true, spentCents: 0, capCents: null, warning: false };
   }
 
   const spentCents = await getOrganisationPeriodSpendCents(organisationId);
+  const warning =
+    spentCents + estimatedAdditionalCents >= Math.floor(capCents * AI_BUDGET_WARNING_RATIO) &&
+    spentCents + estimatedAdditionalCents <= capCents;
+
   if (spentCents + estimatedAdditionalCents > capCents) {
     logger.warn("AI spend cap exceeded — blocking dispatch", {
       organisationId,
@@ -91,7 +178,7 @@ export async function assertWithinSpendCap(
     );
   }
 
-  return { ok: true, spentCents, capCents };
+  return { ok: true, spentCents, capCents, warning };
 }
 
 export type SpendBreakdownRow = {

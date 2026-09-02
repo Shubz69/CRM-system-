@@ -1,4 +1,12 @@
 export {
+  listPublishTargets,
+  syncPublishTargetsFromConnectedAccounts,
+  resolvePublishTargetConnection,
+  isZernioBackedConnection,
+  zernioAccountIdFromConnection,
+  type PublishTarget,
+} from "@/services/publishing/publish-targets";
+export {
   dispatchPublishingJob,
   type DispatchResult,
   type PublishingDispatchDeps,

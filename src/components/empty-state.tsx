@@ -6,7 +6,7 @@ export type EmptyStateAction = {
   primary?: boolean;
 };
 
-/** First-run / empty surface with up to three clear next actions. */
+/** First-run / empty surface with clear next actions. */
 export function EmptyState({
   title,
   body,
@@ -23,7 +23,7 @@ export function EmptyState({
 }) {
   const resolved: EmptyStateAction[] =
     actions && actions.length > 0
-      ? actions.slice(0, 3)
+      ? actions.slice(0, 5)
       : actionHref && actionLabel
         ? [{ href: actionHref, label: actionLabel, primary: true }]
         : [];

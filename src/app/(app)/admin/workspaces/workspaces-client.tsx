@@ -21,6 +21,18 @@ export type WorkspaceRow = {
   createdAt: string;
   lastActivityAt: string | null;
   demoData: boolean;
+  betaStatus?: string | null;
+  betaLabel?: string | null;
+  connectedSocialCount?: number;
+  socialLimit?: number | null;
+  pendingInvites?: Array<{
+    id: string;
+    email: string;
+    role: string;
+    status: string;
+    expiresAt: string;
+  }>;
+  aiBudgetMonthlyCapCents?: number | null;
 };
 
 type SocialPolicy = {
@@ -168,9 +180,20 @@ function SocialAccessControls({
 export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
   const router = useRouter();
   const [rows, setRows] = useState(initial);
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
+
+  // Beta create form
+  const [orgName, setOrgName] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [betaLabel, setBetaLabel] = useState("Beta");
+  const [socialMax, setSocialMax] = useState(2);
+  const [networks, setNetworks] = useState<Array<"INSTAGRAM" | "LINKEDIN" | "YOUTUBE">>([
+    "INSTAGRAM",
+    "LINKEDIN",
+    "YOUTUBE",
+  ]);
 
   async function refresh() {
     const res = await fetch("/api/admin/workspaces");
@@ -179,20 +202,38 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
     setRows(json.workspaces || []);
   }
 
-  async function createWorkspace(e: FormEvent) {
+  async function createBeta(e: FormEvent) {
     e.preventDefault();
-    setBusy("create");
+    setBusy("create-beta");
+    setLastInviteUrl(null);
     try {
       const res = await fetch("/api/admin/workspaces", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create", name, slug }),
+        body: JSON.stringify({
+          action: "create_beta",
+          name: orgName,
+          ownerFullName: ownerName,
+          ownerEmail,
+          role: "OWNER",
+          betaLabel: betaLabel || "Beta",
+          socialConnectionsEnabled: true,
+          maxConnectedSocialAccounts: socialMax,
+          allowedNetworks: networks,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Create failed");
-      toast.success("Workspace created");
-      setName("");
-      setSlug("");
+      const url = json.invite?.inviteUrl as string | undefined;
+      setLastInviteUrl(url || null);
+      if (json.invite?.emailSent) {
+        toast.success("Beta workspace created — invite email sent");
+      } else {
+        toast.success("Beta workspace created — copy invite link below");
+      }
+      setOrgName("");
+      setOwnerName("");
+      setOwnerEmail("");
       await refresh();
       router.refresh();
     } catch (err) {
@@ -202,7 +243,11 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
     }
   }
 
-  async function mutate(organisationId: string, action: "suspend" | "reactivate" | "update", extra?: object) {
+  async function mutate(
+    organisationId: string,
+    action: string,
+    extra?: object,
+  ) {
     setBusy(`${action}-${organisationId}`);
     try {
       const res = await fetch("/api/admin/workspaces", {
@@ -212,7 +257,18 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Action failed");
-      toast.success(action === "update" ? "Saved" : action === "suspend" ? "Suspended" : "Reactivated");
+      if (json.invite?.inviteUrl) {
+        setLastInviteUrl(json.invite.inviteUrl);
+        toast.success("Invite ready — copy link below");
+      } else {
+        toast.success(
+          action === "suspend"
+            ? "Suspended"
+            : action === "reactivate"
+              ? "Reactivated"
+              : "Saved",
+        );
+      }
       await refresh();
       router.refresh();
     } catch (err) {
@@ -222,85 +278,122 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
     }
   }
 
-  async function impersonate(organisationId: string, targetUserId?: string) {
-    if (!targetUserId) {
-      toast.error("No owner user to impersonate for this workspace");
-      return;
-    }
-    setBusy(`impersonate-${organisationId}`);
+  async function copyLink(url: string) {
     try {
-      const res = await fetch("/api/admin/impersonate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start", targetUserId, organisationId }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Impersonation failed");
-      sessionStorage.setItem("dm_impersonation", JSON.stringify(json.impersonation));
-      await fetch("/api/session/organisation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organisationId }),
-      });
-      toast.success(`Viewing workspace as ${json.impersonation.targetName}`);
-      // Full reload so session/JWT and middleware pick up the impersonation cookie.
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      window.location.href = "/dashboard";
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Impersonation failed");
-    } finally {
-      setBusy(null);
+      await navigator.clipboard.writeText(url);
+      toast.success("Invite link copied");
+    } catch {
+      toast.error("Could not copy — select the link manually");
     }
+  }
+
+  function toggleNetwork(n: "INSTAGRAM" | "LINKEDIN" | "YOUTUBE") {
+    setNetworks((prev) =>
+      prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n],
+    );
   }
 
   return (
     <div className="space-y-6">
-      <form onSubmit={createWorkspace} className="surface flex flex-wrap items-end gap-3 p-4">
-        <label className="text-sm">
-          <span className="text-[var(--muted)]">Workspace name</span>
-          <input
-            className="mt-1 block w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              if (!slug || slug === name.toLowerCase().replace(/[^a-z0-9]+/g, "-")) {
-                setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
-              }
-            }}
-            required
-          />
-        </label>
-        <label className="text-sm">
-          <span className="text-[var(--muted)]">Slug</span>
-          <input
-            className="mt-1 block w-48 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            required
-            pattern="[a-z0-9-]+"
-          />
-        </label>
-        <button className="btn btn-primary" disabled={busy === "create"} type="submit">
-          Create workspace
+      <form onSubmit={createBeta} className="surface space-y-4 p-4">
+        <div>
+          <h2 className="text-base font-medium">Create Beta Workspace</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Create organisation + OWNER invite in one step. Copy link works without email.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm">
+            <span className="text-[var(--muted)]">Organisation name</span>
+            <input
+              className="mt-1 block w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="text-sm">
+            <span className="text-[var(--muted)]">Owner full name</span>
+            <input
+              className="mt-1 block w-48 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+              value={ownerName}
+              onChange={(e) => setOwnerName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="text-sm">
+            <span className="text-[var(--muted)]">Owner email</span>
+            <input
+              className="mt-1 block w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+              type="email"
+              value={ownerEmail}
+              onChange={(e) => setOwnerEmail(e.target.value)}
+              required
+            />
+          </label>
+          <label className="text-sm">
+            <span className="text-[var(--muted)]">Beta label</span>
+            <input
+              className="mt-1 block w-32 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+              value={betaLabel}
+              onChange={(e) => setBetaLabel(e.target.value)}
+            />
+          </label>
+          <label className="text-sm">
+            <span className="text-[var(--muted)]">Social max</span>
+            <input
+              className="mt-1 block w-20 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+              type="number"
+              min={0}
+              max={10}
+              value={socialMax}
+              onChange={(e) => setSocialMax(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-3 text-sm">
+          {(["INSTAGRAM", "LINKEDIN", "YOUTUBE"] as const).map((n) => (
+            <label key={n} className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={networks.includes(n)}
+                onChange={() => toggleNetwork(n)}
+              />
+              {n.charAt(0) + n.slice(1).toLowerCase()}
+            </label>
+          ))}
+        </div>
+        <button className="btn btn-primary" disabled={busy === "create-beta"} type="submit">
+          {busy === "create-beta" ? "Creating…" : "Create & Invite"}
         </button>
+        {lastInviteUrl ? (
+          <div className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm">
+            <p className="font-medium">Invite link</p>
+            <p className="mt-1 break-all text-[var(--muted)]">{lastInviteUrl}</p>
+            <button
+              type="button"
+              className="btn btn-secondary mt-2 text-xs"
+              onClick={() => void copyLink(lastInviteUrl)}
+            >
+              Copy Invite Link
+            </button>
+          </div>
+        ) : null}
       </form>
 
       <div className="surface overflow-x-auto">
-        <table className="w-full min-w-[1100px] text-left text-sm">
+        <table className="w-full min-w-[1200px] text-left text-sm">
           <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
             <tr>
-              <th className="px-3 py-3">Workspace</th>
+              <th className="px-3 py-3">Organisation</th>
               <th className="px-3 py-3">Owner</th>
-              <th className="px-3 py-3">Plan</th>
-              <th className="px-3 py-3">Users</th>
-              <th className="px-3 py-3">Contacts</th>
-              <th className="px-3 py-3">Conversations</th>
-              <th className="px-3 py-3">AI</th>
-              <th className="px-3 py-3">ManyChat</th>
-              <th className="px-3 py-3">Booking</th>
+              <th className="px-3 py-3">Status</th>
+              <th className="px-3 py-3">Beta</th>
+              <th className="px-3 py-3">Members</th>
+              <th className="px-3 py-3">Social</th>
+              <th className="px-3 py-3">AI budget</th>
               <th className="px-3 py-3">Created</th>
               <th className="px-3 py-3">Activity</th>
-              <th className="px-3 py-3">Status</th>
               <th className="px-3 py-3">Actions</th>
             </tr>
           </thead>
@@ -310,26 +403,29 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
                 <td className="px-3 py-3">
                   <div className="font-medium">{org.name}</div>
                   <div className="text-xs text-[var(--muted)]">{org.slug}</div>
-                  <div className="mt-1 text-xs text-[var(--muted)]">Autopilot: {org.autopilotMode}</div>
                 </td>
-                <td className="px-3 py-3 text-[var(--muted)]">{org.owner?.email || "—"}</td>
+                <td className="px-3 py-3 text-[var(--muted)]">
+                  <div>{org.owner?.name || "—"}</div>
+                  <div className="text-xs">{org.owner?.email || "Pending invite"}</div>
+                </td>
                 <td className="px-3 py-3">
-                  <input
-                    className="w-24 rounded border border-[var(--border)] px-2 py-1"
-                    defaultValue={org.plan}
-                    onBlur={(e) => {
-                      if (e.target.value !== org.plan) {
-                        void mutate(org.id, "update", { plan: e.target.value });
-                      }
-                    }}
-                  />
+                  <span className={org.status === "SUSPENDED" ? "badge badge-warn" : "badge"}>
+                    {org.status}
+                  </span>
+                </td>
+                <td className="px-3 py-3 text-xs">
+                  {org.betaStatus || (org.plan === "beta" ? "BETA" : "—")}
                 </td>
                 <td className="px-3 py-3">{org.users}</td>
-                <td className="px-3 py-3">{org.contacts}</td>
-                <td className="px-3 py-3">{org.conversations}</td>
-                <td className="px-3 py-3">{org.aiStatus}</td>
-                <td className="px-3 py-3">{org.manychatStatus}</td>
-                <td className="px-3 py-3">{org.bookingStatus}</td>
+                <td className="px-3 py-3 text-xs">
+                  {org.connectedSocialCount ?? 0}
+                  {org.socialLimit != null ? ` / ${org.socialLimit}` : " / ∞"}
+                </td>
+                <td className="px-3 py-3 text-xs text-[var(--muted)]">
+                  {org.aiBudgetMonthlyCapCents == null
+                    ? "Unlimited"
+                    : `$${(org.aiBudgetMonthlyCapCents / 100).toFixed(0)}/mo`}
+                </td>
                 <td className="px-3 py-3 text-xs text-[var(--muted)]">
                   {new Date(org.createdAt).toLocaleDateString()}
                 </td>
@@ -337,25 +433,75 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
                   {org.lastActivityAt ? new Date(org.lastActivityAt).toLocaleString() : "—"}
                 </td>
                 <td className="px-3 py-3">
-                  <span className={org.status === "SUSPENDED" ? "badge badge-warn" : "badge"}>
-                    {org.status}
-                  </span>
-                </td>
-                <td className="px-3 py-3">
                   <div className="flex min-w-[160px] flex-col gap-1">
-                    <a className="text-[var(--accent)] hover:underline" href={`/dashboard`}>
-                      Open
-                    </a>
                     <a className="text-[var(--accent)] hover:underline" href={`/admin/users?organisationId=${org.id}`}>
-                      View users
+                      Manage
                     </a>
-                    <a className="text-[var(--accent)] hover:underline" href={`/admin/usage`}>
-                      View usage
-                    </a>
-                    <a className="text-[var(--accent)] hover:underline" href={`/admin/audit`}>
-                      Audit log
-                    </a>
+                    <button
+                      type="button"
+                      className="text-left text-[var(--accent)] hover:underline"
+                      disabled={busy === `invite-${org.id}`}
+                      onClick={() => {
+                        const email = window.prompt("Invite email");
+                        if (!email) return;
+                        void mutate(org.id, "invite", {
+                          inviteEmail: email,
+                          inviteRole: "ADMINISTRATOR",
+                        });
+                      }}
+                    >
+                      Invite
+                    </button>
+                    {(org.pendingInvites || []).slice(0, 3).map((inv) => (
+                      <div key={inv.id} className="text-xs text-[var(--muted)]">
+                        {inv.email}{" "}
+                        <button
+                          type="button"
+                          className="text-[var(--accent)] hover:underline"
+                          onClick={() =>
+                            void mutate(org.id, "resend_invite", { inviteId: inv.id })
+                          }
+                        >
+                          Resend
+                        </button>{" "}
+                        <button
+                          type="button"
+                          className="text-[var(--danger)] hover:underline"
+                          onClick={() =>
+                            void mutate(org.id, "revoke_invite", { inviteId: inv.id })
+                          }
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ))}
                     <SocialAccessControls organisationId={org.id} busy={busy} setBusy={setBusy} />
+                    <button
+                      type="button"
+                      className="text-left text-[var(--accent)] hover:underline"
+                      onClick={() => {
+                        const dollars = window.prompt(
+                          "Monthly AI budget (USD). Empty = unlimited",
+                          org.aiBudgetMonthlyCapCents != null
+                            ? String(org.aiBudgetMonthlyCapCents / 100)
+                            : "25",
+                        );
+                        if (dollars === null) return;
+                        const monthlyCapCents =
+                          dollars.trim() === ""
+                            ? null
+                            : Math.max(0, Math.round(Number(dollars) * 100));
+                        void mutate(org.id, "set_ai_budget", {
+                          monthlyCapCents,
+                          warningThresholdCents:
+                            monthlyCapCents == null
+                              ? null
+                              : Math.floor(monthlyCapCents * 0.8),
+                        });
+                      }}
+                    >
+                      Set AI budget
+                    </button>
                     {org.status === "SUSPENDED" ? (
                       <button
                         type="button"
@@ -375,14 +521,6 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
                         Suspend
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="text-left text-[var(--accent)] hover:underline"
-                      disabled={busy === `impersonate-${org.id}` || !org.owner?.id}
-                      onClick={() => void impersonate(org.id, org.owner?.id)}
-                    >
-                      Impersonate workspace
-                    </button>
                   </div>
                 </td>
               </tr>
@@ -390,7 +528,9 @@ export function WorkspacesClient({ initial }: { initial: WorkspaceRow[] }) {
           </tbody>
         </table>
         {rows.length === 0 && (
-          <p className="p-6 text-sm text-[var(--muted)]">No workspaces yet. Create one above.</p>
+          <p className="p-6 text-sm text-[var(--muted)]">
+            No organisations yet. Create a beta workspace above.
+          </p>
         )}
       </div>
     </div>

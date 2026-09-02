@@ -291,17 +291,32 @@ export async function executeAgentRun(input: {
     });
   }
 
-  // Map answer mode into Compute Governor (single pipeline).
+  // Map answer mode into Compute Governor (single pipeline) and apply budgets.
+  let governedMaxSteps = maxSteps;
+  let governedContextChars: number | null = null;
   if (run.answerMode) {
     try {
       const hints = computeHintsForAnswerMode(run.answerMode);
-      await planCompute({
+      const computePlan = await planCompute({
         organisationId: input.organisationId,
         taskType: "insight_generation",
         ...hints,
         evidenceState: {
           hasBusinessState: businessContextKnownFacts.length > 0,
         },
+      });
+      // Governor budgets always influence execution (even when model selection is shadow).
+      governedMaxSteps = Math.min(maxSteps, Math.max(1, computePlan.toolBudget));
+      governedContextChars = Math.min(12_000, Math.max(500, computePlan.contextBudget * 2));
+      logger.info("Compute governor applied answer-mode plan", {
+        runId: run.id,
+        answerMode: run.answerMode,
+        governorMode: computePlan.governorMode,
+        activeMode: computePlan.activeMode,
+        toolBudget: computePlan.toolBudget,
+        verificationDepth: computePlan.verificationDepth,
+        estimatedCostCents: computePlan.estimatedCostCents,
+        shadowOnly: computePlan.shadowOnly,
       });
     } catch (error) {
       logger.warn("Compute governor plan for answer mode skipped", {
@@ -311,7 +326,7 @@ export async function executeAgentRun(input: {
     }
   }
 
-  const stepsToRun = plan.steps.slice(0, maxSteps);
+  const stepsToRun = plan.steps.slice(0, governedMaxSteps);
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
   let totalCostCents = run.totalCostCents || 0;
@@ -353,7 +368,7 @@ export async function executeAgentRun(input: {
           ...retrieved.chunks.map((c) => c.slice(0, 2000)),
         ]
           .join("\n\n")
-          .slice(0, 12_000);
+          .slice(0, governedContextChars ?? 12_000);
       }
       pendingKnowledgeTool = {
         durationMs: Date.now() - startedKnowledge,
@@ -839,8 +854,8 @@ export async function executeAgentRun(input: {
     }
   }
 
-  // Truncated by maxSteps
-  if (plan.steps.length > maxSteps) {
+  // Truncated by maxSteps / governor tool budget
+  if (plan.steps.length > governedMaxSteps) {
     const shapedPartial = await finalizeModeOutput({
       organisationId: input.organisationId,
       agentRunId: run.id,

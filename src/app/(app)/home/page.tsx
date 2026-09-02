@@ -154,11 +154,18 @@ export default function HomePage() {
   const attention = briefing?.items ?? [];
   const actions = briefing?.nextActions ?? [];
   const setupNeeded = Boolean(briefing?.setupNeeded);
+  const isEmptyDesk =
+    (snapshot.needsReply ?? 0) === 0 &&
+    (snapshot.activeLeads ?? 0) === 0 &&
+    (snapshot.openDeals ?? 0) === 0 &&
+    !setupNeeded;
   const statusLine = setupNeeded
-    ? "Setup is incomplete — finish Integrations to unlock the full desk."
+    ? "A few setup steps will unlock the full desk — start with your business profile or social accounts."
     : attention.length > 0
       ? `${attention.length} item${attention.length === 1 ? "" : "s"} need your attention.`
-      : "Nothing urgent. Here is where commercial work lives today.";
+      : isEmptyDesk
+        ? "Your workspace is ready. Pick a first action below."
+        : "Nothing urgent. Here is where commercial work lives today.";
 
   if (loading) {
     return (
@@ -180,20 +187,40 @@ export default function HomePage() {
 
       {setupNeeded ? (
         <div className="surface border-[color-mix(in_oklab,var(--accent)_35%,var(--border))] p-5 md:p-6">
-          <p className="section-title">Finish setup to go live</p>
+          <p className="section-title">Get started</p>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Connect messaging, confirm booking, and verify AI — then Agent Desk can work your
-            conversations.
+            Tell Agent Desk about your business, then connect social accounts when you&apos;re ready.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Link href="/integrations" className="btn btn-primary">
-              Open Integrations
+            <Link href="/onboarding" className="btn btn-primary">
+              Short onboarding
             </Link>
-            <Link href="/settings/go-live" className="btn btn-secondary">
-              Setup progress
+            <Link href="/business-context" className="btn btn-secondary">
+              Business profile
             </Link>
-            <Link href="/setup" className="btn btn-secondary">
-              Guided assistant
+            <Link href="/integrations" className="btn btn-secondary">
+              Social accounts
+            </Link>
+          </div>
+        </div>
+      ) : isEmptyDesk ? (
+        <div className="surface p-5 md:p-6">
+          <p className="section-title">First actions</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Start with a question, draft content, or find prospects — no provider setup required.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/ask" className="btn btn-primary">
+              Ask Agent Desk
+            </Link>
+            <Link href="/content" className="btn btn-secondary">
+              Draft content
+            </Link>
+            <Link href="/growth/prospecting" className="btn btn-secondary">
+              Find prospects
+            </Link>
+            <Link href="/inbox" className="btn btn-secondary">
+              Open inbox
             </Link>
           </div>
         </div>
@@ -263,11 +290,14 @@ export default function HomePage() {
         <SectionCard title="Recommended next moves">
           {actions.length === 0 ? (
             <EmptyState
-              title="You're clear"
-              body="When there is something useful to do, it will show up here."
+              title="Start with the essentials"
+              body="Your workspace is ready. Pick a next step — no setup jargon required."
               actions={[
-                { href: "/inbox", label: "Open Inbox", primary: true },
-                { href: "/growth", label: "Explore Growth" },
+                { href: "/ask", label: "Ask Agent Desk", primary: true },
+                { href: "/growth/prospecting", label: "Find prospects" },
+                { href: "/integrations", label: "Connect social" },
+                { href: "/knowledge", label: "Add knowledge" },
+                { href: "/contacts", label: "Open CRM" },
               ]}
             />
           ) : (
