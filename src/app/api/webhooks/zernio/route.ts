@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { NextRequest } from "next/server";
-import { Prisma } from "@prisma/client";
+import { Prisma, WebhookProcessingStatus } from "@prisma/client";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { prisma } from "@/lib/db";
@@ -16,6 +16,10 @@ import {
   verifyZernioWebhookSignature,
   type ZernioConnectedAccount,
 } from "@/adapters/zernio";
+import {
+  handleZernioCoverageEvent,
+  ZERNIO_SUPPORTED_WEBHOOK_EVENTS,
+} from "@/adapters/zernio/webhook-coverage";
 
 function pickString(...values: unknown[]): string | undefined {
   for (const v of values) {
@@ -24,9 +28,24 @@ function pickString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+async function markWebhook(
+  eventId: string,
+  data: { status: WebhookProcessingStatus; error?: string | null },
+) {
+  await prisma.webhookEvent.update({
+    where: { provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId } },
+    data: {
+      status: data.status,
+      error: data.error ?? null,
+      processedAt: new Date(),
+    },
+  });
+}
+
 /**
  * Zernio webhooks — fail-closed auth, tenant from stored Profile/account map,
- * Instagram message.received → canonical processInboundMessage.
+ * Instagram message.received → canonical processInboundMessage,
+ * lifecycle / engagement / publish events → webhook-coverage handlers.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -36,7 +55,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (!isZernioWebhookConfigured()) {
-      // Provider-scoped NOT_CONFIGURED — does not affect CRM / other webhooks / worker.
       return Response.json(
         {
           ok: false,
@@ -94,7 +112,6 @@ export async function POST(req: NextRequest) {
         eventId: eventId.slice(0, 12),
         code: tenant.code,
       });
-      // Quarantine without inventing an organisation
       return Response.json(
         { ok: false, ignored: true, reason: tenant.code },
         { status: tenant.code === "UNKNOWN_PROFILE" || tenant.code === "UNKNOWN_ACCOUNT" ? 404 : 400 },
@@ -129,13 +146,9 @@ export async function POST(req: NextRequest) {
     if (eventType === "message.received") {
       const normalized = normalizeZernioInboundMessage(payload);
       if (!normalized) {
-        await prisma.webhookEvent.update({
-          where: { provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId } },
-          data: {
-            status: "IGNORED",
-            error: "unnormalizable_or_non_instagram_or_missing_sender",
-            processedAt: new Date(),
-          },
+        await markWebhook(eventId, {
+          status: WebhookProcessingStatus.IGNORED,
+          error: "unnormalizable_or_non_instagram_or_missing_sender",
         });
         return Response.json({ ok: true, ignored: true, reason: "unnormalizable_message" });
       }
@@ -171,12 +184,8 @@ export async function POST(req: NextRequest) {
         { provider: MESSAGING_PROVIDER.ZERNIO, rawPayload: payload },
       );
 
-      await prisma.webhookEvent.update({
-        where: { provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId } },
-        data: {
-          status: result.duplicate ? "DUPLICATE" : "PROCESSED",
-          processedAt: new Date(),
-        },
+      await markWebhook(eventId, {
+        status: result.duplicate ? WebhookProcessingStatus.DUPLICATE : WebhookProcessingStatus.PROCESSED,
       });
 
       return Response.json({
@@ -229,33 +238,66 @@ export async function POST(req: NextRequest) {
           });
         }
       });
+
+      await prisma.$transaction(async (tx) => {
+        await appendDomainEvent(tx, {
+          organisationId,
+          eventType:
+            eventType === "account.connected" ? "INTEGRATION_CONNECTED" : "INTEGRATION_DISCONNECTED",
+          aggregateType: "ZernioProfile",
+          aggregateId: organisationId,
+          payload: {
+            organisationId,
+            providerKey: "ZERNIO",
+            connectionRef: accountId || tenant.zernioProfileId,
+          },
+          dedupeKey: `zernio:${organisationId}:${eventId}`,
+        });
+      });
+
+      await markWebhook(eventId, { status: WebhookProcessingStatus.PROCESSED });
+      return Response.json({ ok: true });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await appendDomainEvent(tx, {
-        organisationId,
-        eventType: "INTEGRATION_CONNECTED",
-        aggregateType: "ZernioProfile",
-        aggregateId: organisationId,
-        payload: {
-          organisationId,
-          providerKey: "ZERNIO",
-          zernioEvent: eventType,
-          accountId,
-          profileId: tenant.zernioProfileId,
-        },
-        dedupeKey: `zernio:${organisationId}:${eventId}`,
+    const coverage = await handleZernioCoverageEvent({
+      organisationId,
+      zernioProfileId: tenant.zernioProfileId,
+      eventType,
+      eventId,
+      payload,
+      accountId,
+    });
+
+    if (coverage.handled) {
+      await markWebhook(eventId, {
+        status: coverage.ignored ? WebhookProcessingStatus.IGNORED : WebhookProcessingStatus.PROCESSED,
+        error: coverage.reason || null,
       });
-    });
+      return Response.json({
+        ok: true,
+        ignored: coverage.ignored === true,
+        reason: coverage.reason,
+        coverage: coverage.detail,
+      });
+    }
 
-    await prisma.webhookEvent.update({
-      where: {
-        provider_idempotencyKey: { provider: "ZERNIO", idempotencyKey: eventId },
-      },
-      data: { status: "PROCESSED", processedAt: new Date() },
+    // Unknown event type: ack safely with diagnostic provenance — no business guess.
+    logger.info("Zernio webhook unknown event type acknowledged", {
+      eventType,
+      eventId: eventId.slice(0, 12),
+      organisationId,
+      supported: ZERNIO_SUPPORTED_WEBHOOK_EVENTS.length,
     });
-
-    return Response.json({ ok: true });
+    await markWebhook(eventId, {
+      status: WebhookProcessingStatus.IGNORED,
+      error: `unknown_event_type:${eventType}`,
+    });
+    return Response.json({
+      ok: true,
+      ignored: true,
+      reason: "unknown_event_type",
+      eventType,
+    });
   } catch (error) {
     logger.error("Zernio webhook failed", {
       message: error instanceof Error ? error.message : "unknown",
