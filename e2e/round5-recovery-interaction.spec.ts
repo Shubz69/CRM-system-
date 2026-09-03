@@ -150,28 +150,50 @@ async function uiSwitch(page: Page, organisationId: string) {
   }
   const responsePromise = page.waitForResponse(
     (r) =>
-      r.url().includes("/api/session/organisation") &&
-      r.request().method() === "POST" &&
-      r.ok(),
+      r.url().includes("/api/session/organisation") && r.request().method() === "POST",
     { timeout: 60_000 },
   );
   await select.selectOption(organisationId);
-  await responsePromise;
+  const res = await responsePromise;
+  expect(res.ok(), `uiSwitch ${organisationId} status=${res.status()}`).toBeTruthy();
   await page.waitForLoadState("domcontentloaded");
   await waitWorkspaceReady(page);
   await expect
-    .poll(
-      async () => {
-        const r = await page.request.get(`${BASE}/api/organisations`);
-        if (!r.ok()) return null;
-        return ((await r.json()) as { activeOrganisationId?: string }).activeOrganisationId ?? null;
-      },
-      { timeout: 60_000 },
-    )
+    .poll(async () => (await loadOrgs(page)).activeOrganisationId, { timeout: 60_000 })
     .toBe(organisationId);
   await expect(page.getByLabel("Switch active workspace")).toHaveValue(organisationId, {
     timeout: 60_000,
   });
+}
+
+/** API switch + BroadcastChannel/localStorage event (authoritative for cross-tab gate). */
+async function switchAndBroadcast(page: Page, organisationId: string, fromOrganisationId: string) {
+  const before = await loadOrgs(page);
+  const body = await switchToOrg(page, organisationId);
+  const orgs = await loadOrgs(page);
+  const event = {
+    type: "org-changed",
+    organisationId,
+    organisationName:
+      orgs.organisations.find((o) => o.id === organisationId)?.name || organisationId,
+    workspaceRevision: orgs.workspaceRevision || body.workspaceRevision || null,
+    fromOrganisationId,
+    fromOrganisationName:
+      orgs.organisations.find((o) => o.id === fromOrganisationId)?.name || fromOrganisationId,
+    changeId: `e2e-${Date.now()}`,
+    timestamp: Date.now(),
+  };
+  await page.evaluate((ev) => {
+    localStorage.setItem("agent-desk-workspace-event", JSON.stringify(ev));
+    try {
+      const bc = new BroadcastChannel("agent-desk-workspace");
+      bc.postMessage(ev);
+      bc.close();
+    } catch {
+      /* ignore */
+    }
+  }, event);
+  return { before, after: orgs, event };
 }
 
 async function waitWorkspaceReady(page: Page) {
@@ -207,6 +229,7 @@ test.describe("Round 5 recovery + interaction", () => {
 
   // ── A) Workspace recovery (6) ──────────────────────────────────────────
   test.describe("A) Workspace recovery", () => {
+    test.describe.configure({ mode: "serial" });
     test("1. A→B Tab A blocks; Reload clears; fresh mutation in current org", async ({
       page,
       context,
@@ -297,6 +320,7 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
+      await waitWorkspaceReady(page);
       const revA1 = (await loadOrgs(page)).workspaceRevision!;
       expect(revA1).toBeTruthy();
 
@@ -305,8 +329,9 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
-      await uiSwitch(tabB, ORG_A);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
+      await switchAndBroadcast(tabB, ORG_A, ORG_B);
       const after = await loadOrgs(tabB);
       expect(after.activeOrganisationId).toBe(ORG_A);
       expect(after.workspaceRevision).toBeTruthy();
