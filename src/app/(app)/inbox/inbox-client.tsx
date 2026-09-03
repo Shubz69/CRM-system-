@@ -534,8 +534,14 @@ export default function InboxPage() {
         </section>
 
         <section className={`surface flex flex-col overflow-hidden ${mobilePanel === "list" ? "hidden md:flex" : "flex"}`}>
-          {!detail ? (
-            <div className="p-6 text-[var(--muted)]">Select a conversation</div>
+          {!selectedId ? (
+            <div className="p-6 text-[var(--muted)]" data-inbox-empty="true">
+              Select a conversation
+            </div>
+          ) : !detail || detail.id !== selectedId ? (
+            <div className="p-6 text-[var(--muted)]" data-inbox-loading={selectedId}>
+              Loading conversation…
+            </div>
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">

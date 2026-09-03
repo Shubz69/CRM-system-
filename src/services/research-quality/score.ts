@@ -188,7 +188,21 @@ function scoreFactualAccuracy(input: ScoreResearchInput): {
 } {
   const failures: ResearchHardGateFailure[] = [];
   const claimConfidences: ResearchQualityReport["claimConfidences"] = [];
-  const allowed = new Set(input.sources.map((s) => s.url));
+  const allowed = new Set(
+    input.sources.map((s) => s.url).filter(Boolean),
+  );
+  const normalize = (u: string) => {
+    try {
+      const parsed = new URL(u.trim());
+      parsed.hash = "";
+      const path = parsed.pathname.replace(/\/+$/, "") || "/";
+      return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}`;
+    } catch {
+      return u.trim().replace(/\/+$/, "");
+    }
+  };
+  const allowedNorm = new Set([...allowed].map(normalize));
+  const urlInSources = (url: string) => allowed.has(url) || allowedNorm.has(normalize(url));
 
   if (!input.claims.length && input.sources.length === 0) {
     failures.push({
@@ -203,14 +217,14 @@ function scoreFactualAccuracy(input: ScoreResearchInput): {
     const url = c.sourceUrl || "";
     const kind = mapClaimKind(c.claimKind);
     let conf = typeof c.confidence === "number" ? Math.round(c.confidence * 100) : 55;
-    if (!url || !allowed.has(url) || looksFabricatedUrl(url)) {
+    if (!url || !urlInSources(url) || looksFabricatedUrl(url)) {
       conf = Math.min(conf, 15);
       if (url && looksFabricatedUrl(url)) {
         failures.push({
           code: "FABRICATED_URL",
           message: `Claim cites a non-reviewable or fabricated URL.`,
         });
-      } else if (url && !allowed.has(url)) {
+      } else if (url && !urlInSources(url)) {
         failures.push({
           code: "FABRICATED_URL",
           message: "Claim cites a URL that was not in the collected source set.",
@@ -439,6 +453,43 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
   const crossVerification = scoreCrossVerification(input);
   const freshness = scoreFreshness(input);
   const uncertainty = scoreUncertainty(input);
+
+  // Sources collected but no claim→source linkage: do not invent a mid-band % (e.g. 48).
+  // Still preserve prompt-fidelity / contamination hard fails from above.
+  if (!input.claims.length && input.sources.length > 0) {
+    const hardGateFailures: ResearchHardGateFailure[] = [...fidelity.failures];
+    hardGateFailures.push({
+      code: "UNSUPPORTED_DEFINITIVE_CLAIM",
+      message:
+        "Quality gate failed — sources were collected but no verifiable claims were linked for scoring.",
+    });
+    return {
+      version: 1,
+      overall: 0,
+      confidenceLabel: "Not accepted",
+      breakdown: {
+        promptFidelity: fidelity.score,
+        businessRelevance: clamp(businessRelevance),
+        factualAccuracy: 0,
+        sourceQuality: clamp(sourceQuality),
+        crossVerification: clamp(crossVerification),
+        freshness: clamp(freshness),
+        uncertainty: clamp(uncertainty),
+      },
+      hardGateFailures: Array.from(
+        new Map(hardGateFailures.map((f) => [f.code + f.message, f])).values(),
+      ),
+      accepted: false,
+      claimConfidences: [],
+      limitations: [
+        "Quality gate failed — sources were collected but claim-to-source linkage was missing.",
+        ...fidelity.failures.map((f) => f.message),
+      ],
+      originalUserPrompt: stripClarificationMetadata(input.originalUserPrompt),
+      resolvedIntent: input.resolvedIntent ?? null,
+      answerMode: input.answerMode ?? null,
+    };
+  }
 
   const breakdown = {
     promptFidelity: fidelity.score,

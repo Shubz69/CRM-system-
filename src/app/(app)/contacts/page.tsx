@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { formatLeadSource } from "@/lib/lead-source";
 import { SlideOver } from "@/components/ui/slide-over";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { useWorkspaceReady } from "@/hooks/use-workspace-ready";
 
 type Contact = {
   id: string;
@@ -25,6 +26,7 @@ type Contact = {
 
 export default function ContactsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const workspaceReady = useWorkspaceReady();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [q, setQ] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -107,8 +109,15 @@ export default function ContactsPage() {
                 Search
               </button>
             </form>
-            <button className="btn btn-primary" type="button" data-testid="add-contact" onClick={() => setDrawerOpen(true)}>
-              + Add contact
+            <button
+              className="btn btn-primary disabled:cursor-wait disabled:opacity-60"
+              type="button"
+              data-testid="add-contact"
+              disabled={!workspaceReady}
+              aria-disabled={!workspaceReady}
+              onClick={() => setDrawerOpen(true)}
+            >
+              {workspaceReady ? "+ Add contact" : "Loading…"}
             </button>
             <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>
               Export CSV

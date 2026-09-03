@@ -152,7 +152,35 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
       throw new Error("Research job not found for this organisation");
     }
 
-    const allowedUrls = new Set(job.sources.map((s) => s.url));
+    const allowedUrls = new Set(job.sources.map((s) => s.url).filter(Boolean));
+    const normalizeUrl = (u: string) => {
+      try {
+        const parsed = new URL(u.trim());
+        parsed.hash = "";
+        // Treat http/https and trailing slashes as the same citation target.
+        const path = parsed.pathname.replace(/\/+$/, "") || "/";
+        return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}`;
+      } catch {
+        return u.trim().replace(/\/+$/, "");
+      }
+    };
+    const allowedNormalized = new Set([...allowedUrls].map(normalizeUrl));
+    const urlAllowed = (u: string | undefined | null) => {
+      if (!u) return false;
+      if (allowedUrls.has(u)) return true;
+      return allowedNormalized.has(normalizeUrl(u));
+    };
+    // Resolve model URLs that differ only by slash/scheme back onto collected URLs.
+    const resolveAllowedUrl = (u: string | undefined | null): string | null => {
+      if (!u) return null;
+      if (allowedUrls.has(u)) return u;
+      const n = normalizeUrl(u);
+      for (const allowed of allowedUrls) {
+        if (normalizeUrl(allowed) === n) return allowed;
+      }
+      return null;
+    };
+
     if (!allowedUrls.size) {
       const empty: AnalystOutput = {
         researchJobId: job.id,
@@ -237,7 +265,7 @@ ${catalog.slice(0, 70_000)}`,
           const fallbackClaims = job.findings
             .map((f) => {
               const src = job.sources.find((s) => s.id === f.researchSourceId);
-              if (!src?.url || !allowedUrls.has(src.url)) return null;
+              if (!src?.url || !urlAllowed(src.url)) return null;
               return {
                 claim: f.claim,
                 sourceUrl: src.url,
@@ -253,7 +281,7 @@ ${catalog.slice(0, 70_000)}`,
           const sourceGrounded =
             fallbackClaims.length === 0
               ? job.sources
-                  .filter((s) => s.url && allowedUrls.has(s.url))
+                  .filter((s) => s.url && urlAllowed(s.url))
                   .slice(0, 8)
                   .map((s) => {
                     const excerpt = (s.content || "").replace(/\s+/g, " ").trim().slice(0, 220);
@@ -268,9 +296,14 @@ ${catalog.slice(0, 70_000)}`,
                     };
                   })
               : [];
-          const groundedClaims = fallbackClaims.length > 0 ? fallbackClaims : sourceGrounded;
+          const groundedClaims = (fallbackClaims.length > 0 ? fallbackClaims : sourceGrounded).map(
+            (c) => {
+              const resolved = resolveAllowedUrl(c.sourceUrl) || c.sourceUrl;
+              return { ...c, sourceUrl: resolved };
+            },
+          );
           const sourceCards = job.sources
-            .filter((s) => s.url && allowedUrls.has(s.url))
+            .filter((s) => s.url && urlAllowed(s.url))
             .slice(0, 12)
             .map((s) => ({
               title: s.title || s.url,
@@ -307,12 +340,24 @@ ${catalog.slice(0, 70_000)}`,
           };
         })();
 
-    const claims = brief.claims.filter((c) => allowedUrls.has(c.sourceUrl));
-    const viralExamples = (brief.viralExamples || []).filter((v) => allowedUrls.has(v.sourceUrl));
+    const claims = brief.claims
+      .map((c) => {
+        const resolved = resolveAllowedUrl(c.sourceUrl);
+        return resolved ? { ...c, sourceUrl: resolved } : null;
+      })
+      .filter((c): c is NonNullable<typeof c> => Boolean(c));
+    const viralExamples = (brief.viralExamples || [])
+      .map((v) => {
+        const resolved = resolveAllowedUrl(v.sourceUrl);
+        return resolved ? { ...v, sourceUrl: resolved } : null;
+      })
+      .filter((v): v is NonNullable<typeof v> => Boolean(v));
     const contradictions = (brief.contradictions || [])
       .map((c) => ({
         description: c.description,
-        sourceUrls: c.sourceUrls.filter((u) => allowedUrls.has(u)),
+        sourceUrls: c.sourceUrls
+          .map((u) => resolveAllowedUrl(u))
+          .filter((u): u is string => Boolean(u)),
       }))
       .filter((c) => c.sourceUrls.length > 0);
 
@@ -320,9 +365,14 @@ ${catalog.slice(0, 70_000)}`,
       "sources" in brief && Array.isArray((brief as { sources?: unknown }).sources)
         ? ((brief as { sources: Array<{ title: string; url: string; platform?: string }> }).sources ||
             []
-          ).filter((s) => allowedUrls.has(s.url))
+          )
+            .map((s) => {
+              const resolved = resolveAllowedUrl(s.url);
+              return resolved ? { ...s, url: resolved } : null;
+            })
+            .filter((s): s is NonNullable<typeof s> => Boolean(s))
         : job.sources
-            .filter((s) => s.url && allowedUrls.has(s.url))
+            .filter((s) => s.url && urlAllowed(s.url))
             .slice(0, 12)
             .map((s) => ({
               title: s.title || s.url,

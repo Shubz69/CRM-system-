@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { SlideOver } from "@/components/ui/slide-over";
 import { statusLabel } from "@/lib/customer-labels";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { useWorkspaceReady } from "@/hooks/use-workspace-ready";
 
 type Deal = {
   id: string;
@@ -42,6 +43,7 @@ function formatMoney(cents: number | null, currency: string) {
 
 export default function DealsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const workspaceReady = useWorkspaceReady();
   const [deals, setDeals] = useState<Deal[]>([]);
   const [companies, setCompanies] = useState<Array<{ id: string; name: string }>>([]);
   const [name, setName] = useState("");
@@ -135,8 +137,15 @@ export default function DealsPage() {
             <Link className="btn btn-secondary" href="/pipeline">
               Pipeline
             </Link>
-            <button type="button" className="btn btn-primary" onClick={() => setDrawerOpen(true)}>
-              + New deal
+            <button
+              type="button"
+              className="btn btn-primary disabled:cursor-wait disabled:opacity-60"
+              data-testid="new-deal"
+              disabled={!workspaceReady}
+              aria-disabled={!workspaceReady}
+              onClick={() => setDrawerOpen(true)}
+            >
+              {workspaceReady ? "+ New deal" : "Loading…"}
             </button>
           </div>
         }

@@ -9,7 +9,7 @@ import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
 import { isModeShapedOutput } from "@/services/answer-modes/shape";
-import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { getImmutableWorkspaceContext, isWorkspaceContextReady, subscribeWorkspaceContextReady, workspaceFetch } from "@/lib/workspace-client";
 
 type Progress = {
   runId: string;
@@ -284,6 +284,7 @@ function WorkingPulse({ label }: { label: string }) {
 export default function AskPage() {
   const router = useRouter();
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const [workspaceReady, setWorkspaceReady] = useState(() => isWorkspaceContextReady());
   const [request, setRequest] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -298,6 +299,14 @@ export default function AskPage() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const lowAllowanceToastShown = useRef(false);
   const prefillApplied = useRef(false);
+
+  useEffect(() => {
+    if (isWorkspaceContextReady()) {
+      setWorkspaceReady(true);
+      return;
+    }
+    return subscribeWorkspaceContextReady(() => setWorkspaceReady(true));
+  }, []);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -385,6 +394,7 @@ export default function AskPage() {
   }, []);
 
   function applyOutcome(card: (typeof ASK_OUTCOME_CARDS)[number]) {
+    if (!workspaceReady || submitting) return;
     if (card.href) {
       router.push(card.href);
       return;
@@ -959,11 +969,15 @@ export default function AskPage() {
                       key={card.id}
                       type="button"
                       data-testid={`ask-tile-${card.id}`}
+                      disabled={!workspaceReady || submitting}
+                      aria-disabled={!workspaceReady || submitting}
                       onClick={() => applyOutcome(card)}
-                      className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition"
+                      className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition disabled:cursor-wait disabled:opacity-60"
                     >
                       <p className="font-medium text-[var(--foreground)]">{card.title}</p>
-                      <p className="mt-1 text-sm text-[var(--muted)]">{card.hint}</p>
+                      <p className="mt-1 text-sm text-[var(--muted)]">
+                        {!workspaceReady ? "Loading workspace…" : card.hint}
+                      </p>
                     </button>
                   ))}
                 </div>

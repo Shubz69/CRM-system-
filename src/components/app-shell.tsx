@@ -213,8 +213,13 @@ export function AppShell({
     );
   }
 
+  const workspaceReady = Boolean(workspaceRevision) && orgs.length > 0;
+
   return (
-    <div className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]">
+    <div
+      className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]"
+      data-workspace-ready={workspaceReady ? "true" : "false"}
+    >
       <WorkspaceChangedGate
         currentOrganisationId={session?.user?.organisationId}
         currentWorkspaceRevision={workspaceRevision}

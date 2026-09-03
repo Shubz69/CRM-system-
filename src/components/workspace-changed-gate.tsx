@@ -8,16 +8,51 @@
  * NOT live session.organisationId. Cookies are shared across tabs — when Tab B
  * switches, Tab A's NextAuth session can update to B without a reload. Using the
  * live session would clear the gate and let stale forms submit.
+ *
+ * Event lifecycle: localStorage holds the latest switch EVENT. After reload into
+ * the destination org+revision, the event is acknowledged and must not re-block.
  */
 
 import { useEffect, useState } from "react";
 import {
+  acknowledgeOrgChangedEvent,
   getImmutableWorkspaceContext,
+  isWorkspaceContextReady,
   readLastOrgChangedEvent,
   subscribeOrgChanged,
+  subscribeWorkspaceContextReady,
   workspaceGateShouldBlock,
   type OrgChangedBroadcast,
 } from "@/lib/workspace-client";
+
+function evaluateGate(
+  currentOrganisationId: string | null | undefined,
+  currentWorkspaceRevision: string | null | undefined,
+  event: OrgChangedBroadcast | null,
+): OrgChangedBroadcast | null {
+  const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
+  // Prefer frozen snapshot once ready; never treat a previous-document freeze as truth.
+  const baselineOrg = isWorkspaceContextReady()
+    ? snap.loadedOrganisationId || currentOrganisationId || null
+    : snap.loadedOrganisationId || null;
+  const baselineRev = isWorkspaceContextReady()
+    ? snap.workspaceRevision || currentWorkspaceRevision || null
+    : snap.workspaceRevision || null;
+
+  if (!baselineOrg) return null;
+
+  if (
+    workspaceGateShouldBlock({
+      currentOrganisationId: baselineOrg,
+      currentWorkspaceRevision: baselineRev,
+      event,
+    })
+  ) {
+    return event;
+  }
+  if (event) acknowledgeOrgChangedEvent(event);
+  return null;
+}
 
 export function WorkspaceChangedGate({
   currentOrganisationId,
@@ -31,32 +66,28 @@ export function WorkspaceChangedGate({
   const [pending, setPending] = useState<OrgChangedBroadcast | null>(null);
 
   useEffect(() => {
-    // Prefer the per-tab loaded snapshot. Fall back to props only before freeze.
-    const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
-    const baselineOrg = snap.loadedOrganisationId || currentOrganisationId || null;
-    const baselineRev = snap.workspaceRevision || currentWorkspaceRevision || null;
+    function recompute(event?: OrgChangedBroadcast | null) {
+      const existing = event === undefined ? readLastOrgChangedEvent() : event;
+      setPending(evaluateGate(currentOrganisationId, currentWorkspaceRevision, existing));
+    }
 
-    // Wait until this tab has a known loaded org — avoid hydration false-positives.
-    if (!baselineOrg) return;
-
-    const existing = readLastOrgChangedEvent();
-    if (
-      workspaceGateShouldBlock({
-        currentOrganisationId: baselineOrg,
-        currentWorkspaceRevision: baselineRev,
-        event: existing,
-      })
-    ) {
-      setPending(existing);
+    // Do not arm from localStorage until this document has frozen authoritative context
+    // (avoids reload re-blocking from a previous page's sessionStorage snapshot).
+    if (isWorkspaceContextReady()) {
+      recompute();
     } else {
       setPending(null);
     }
 
-    return subscribeOrgChanged((msg) => {
-      const latest = getImmutableWorkspaceContext(baselineOrg);
-      const org = latest.loadedOrganisationId || baselineOrg;
-      const rev = latest.workspaceRevision || baselineRev;
+    const unsubReady = subscribeWorkspaceContextReady(() => recompute());
+    const unsub = subscribeOrgChanged((msg) => {
+      // Live events always evaluate immediately — even before freeze — using the
+      // last known immutable snapshot so open forms block without waiting.
+      const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
+      const org = snap.loadedOrganisationId || currentOrganisationId || null;
+      const rev = snap.workspaceRevision || currentWorkspaceRevision || null;
       if (
+        org &&
         workspaceGateShouldBlock({
           currentOrganisationId: org,
           currentWorkspaceRevision: rev,
@@ -66,6 +97,11 @@ export function WorkspaceChangedGate({
         setPending(msg);
       }
     });
+
+    return () => {
+      unsub();
+      unsubReady();
+    };
   }, [currentOrganisationId, currentWorkspaceRevision]);
 
   useEffect(() => {
@@ -75,11 +111,15 @@ export function WorkspaceChangedGate({
       if (target?.closest?.("[data-workspace-gate]")) return;
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation?.();
     };
+    // Capture early so stale pages cannot mutate; remove when pending clears after reload.
+    document.addEventListener("pointerdown", block, true);
     document.addEventListener("click", block, true);
     document.addEventListener("keydown", block, true);
     document.addEventListener("submit", block, true);
     return () => {
+      document.removeEventListener("pointerdown", block, true);
       document.removeEventListener("click", block, true);
       document.removeEventListener("keydown", block, true);
       document.removeEventListener("submit", block, true);
@@ -99,6 +139,8 @@ export function WorkspaceChangedGate({
       aria-modal="true"
       aria-labelledby="workspace-changed-title"
       aria-describedby="workspace-changed-desc"
+      data-workspace-gate-overlay="true"
+      style={{ pointerEvents: "auto" }}
     >
       <div className="surface max-w-md rounded-2xl p-6 shadow-2xl" data-workspace-gate>
         <h2 id="workspace-changed-title" className="font-[family-name:var(--font-fraunces)] text-xl">
@@ -113,7 +155,9 @@ export function WorkspaceChangedGate({
           <button
             type="button"
             className="btn btn-primary"
+            data-testid="workspace-gate-reload"
             onClick={() => {
+              // Full navigation reload reinitialises immutable context for this document.
               window.location.reload();
             }}
           >
