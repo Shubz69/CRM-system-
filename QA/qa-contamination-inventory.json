@@ -169,6 +169,30 @@
       "evidence": "Round 3 Platform + prior E2E/Northstar inventory — no deletes; Automated QA preferred for mutations"
     },
     {
+      "recordType": "inventory_marker",
+      "recordId": "QA-stale-form-probe-R3",
+      "recordName": "QA-stale-form-probe-R3",
+      "createdAt": "2026-09-03T11:00:00.000Z",
+      "organisationId": "cmtkp47vk0000l504gvfzi1sj",
+      "evidence": "Round 3 stale-form workspace safety probe"
+    },
+    {
+      "recordType": "inventory_marker",
+      "recordId": "E2E-tenant-probe-*",
+      "recordName": "E2E-tenant-probe-*",
+      "createdAt": null,
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "Historic company probes retained in inventory"
+    },
+    {
+      "recordType": "inventory_marker",
+      "recordId": "Northstar*",
+      "recordName": "Northstar*",
+      "createdAt": null,
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "Northstar company/deal records retained in inventory"
+    },
+    {
       "recordType": "organisation",
       "recordId": "cmtkp47vk0000l504gvfzi1sj",
       "recordName": "Agent Desk Automated QA",

@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { PageLoading } from "@/components/ui/page-state";
 import { statusLabel } from "@/lib/customer-labels";
 import { useSession } from "next-auth/react";
-import { workspaceFetch } from "@/lib/workspace-client";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type ConversationListItem = {
   id: string;
@@ -83,7 +83,10 @@ type Member = { id: string; name: string | null; email: string; role: string };
 export default function InboxPage() {
   const searchParams = useSearchParams();
   const { data: session } = useSession();
-  const expectedOrgId = session?.user?.organisationId ?? null;
+  const workspaceContext = useMemo(
+    () => getImmutableWorkspaceContext(session?.user?.organisationId ?? null),
+    [session?.user?.organisationId],
+  );
   const [items, setItems] = useState<ConversationListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(
     searchParams.get("c") || searchParams.get("conversationId"),
@@ -207,11 +210,16 @@ export default function InboxPage() {
       toast.error("Do not contact — customer opted out.");
       return;
     }
-    const res = await workspaceFetch(expectedOrgId, `/api/conversations/${selectedId}`, {
+    const res = await workspaceFetch(
+      workspaceContext.loadedOrganisationId,
+      workspaceContext.workspaceRevision,
+      `/api/conversations/${selectedId}`,
+      {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+      },
+    );
     const json = await res.json();
     if (!res.ok) {
       toast.error(json.error || "Update failed");

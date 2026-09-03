@@ -10,6 +10,7 @@ import {
   statusLabel,
 } from "@/lib/customer-labels";
 import { normalizeContentPlatform } from "@/lib/content-platform";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type PubJob = {
   id: string;
@@ -108,6 +109,7 @@ function statusTone(status: string): string {
 }
 
 export default function ContentPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [pieces, setPieces] = useState<Piece[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [activeBucket, setActiveBucket] = useState<(typeof BUCKETS)[number]["id"]>("drafts");
@@ -151,7 +153,7 @@ export default function ContentPage() {
   }, [load]);
 
   async function postAction(payload: Record<string, unknown>) {
-    const res = await fetch("/api/content", {
+    const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/content", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

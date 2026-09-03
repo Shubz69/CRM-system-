@@ -4,6 +4,10 @@ import { jsonError, requireSession } from "@/lib/session";
 export async function GET() {
   try {
     const session = await requireSession();
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { updatedAt: true, activeOrganisationId: true },
+    });
     const memberships = await prisma.organisationMember.findMany({
       where: { userId: session.userId },
       include: { organisation: { select: { id: true, name: true, slug: true, demoData: true } } },
@@ -11,7 +15,8 @@ export async function GET() {
     });
 
     return Response.json({
-      activeOrganisationId: session.organisationId,
+      activeOrganisationId: user?.activeOrganisationId || session.organisationId,
+      workspaceRevision: user?.updatedAt.toISOString() || null,
       organisations: memberships.map((m) => ({
         id: m.organisation.id,
         name: m.organisation.name,

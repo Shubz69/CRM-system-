@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatKpiValue, kpiLabel, statusLabel, unitLabel } from "@/lib/customer-labels";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type GoalRow = {
   id: string;
@@ -22,6 +23,7 @@ type GoalRow = {
 type Calculator = { key: string; unit: string; description: string };
 
 export default function GoalsPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [calculators, setCalculators] = useState<Calculator[]>([]);
   const [name, setName] = useState("");
@@ -93,7 +95,7 @@ export default function GoalsPage() {
               type="button"
               onClick={async () => {
                 try {
-                  const res = await fetch("/api/goals", {
+                  const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/goals", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "create_goal", name }),
@@ -175,7 +177,7 @@ export default function GoalsPage() {
                     return;
                   }
                   try {
-                    const createRes = await fetch("/api/goals", {
+                    const createRes = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/goals", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -192,7 +194,7 @@ export default function GoalsPage() {
                     }
                     const kpiId = createJson.kpi?.id as string | undefined;
                     if (!kpiId) throw new Error("KPI created without an id");
-                    const attachRes = await fetch("/api/goals", {
+                    const attachRes = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/goals", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -275,7 +277,7 @@ export default function GoalsPage() {
                     className="btn btn-secondary"
                     type="button"
                     onClick={async () => {
-                      const res = await fetch("/api/goals", {
+                      const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/goals", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
@@ -300,7 +302,7 @@ export default function GoalsPage() {
                     className="btn btn-secondary"
                     type="button"
                     onClick={async () => {
-                      const res = await fetch("/api/goals", {
+                      const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/goals", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({

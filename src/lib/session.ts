@@ -2,12 +2,15 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { assertPermission, roleHasPermission, type Permission } from "@/lib/permissions";
 import type { MemberRole } from "@prisma/client";
+import { prisma } from "@/lib/db";
 import {
   assertActiveWorkspaceAccess,
   WorkspaceAccessError,
 } from "@/services/workspace-access";
 import {
   assertExpectedOrganisation,
+  assertExpectedWorkspaceRevision,
+  readExpectedWorkspaceRevision,
   readExpectedOrganisationId,
   WorkspaceChangedError,
   workspaceChangedJsonResponse,
@@ -51,7 +54,18 @@ export async function requireSessionForMutation(
   body?: Record<string, unknown> | null,
 ) {
   const session = await requireSession();
-  assertExpectedOrganisation(session.organisationId, readExpectedOrganisationId(req, body));
+  const expectedOrgId = readExpectedOrganisationId(req, body);
+  const expectedRevision = readExpectedWorkspaceRevision(req, body);
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { activeOrganisationId: true, updatedAt: true },
+  });
+  const authoritativeOrgId = user?.activeOrganisationId || session.organisationId;
+  const authoritativeRevision = user?.updatedAt.toISOString();
+  assertExpectedOrganisation(authoritativeOrgId, expectedOrgId);
+  if (authoritativeRevision) {
+    assertExpectedWorkspaceRevision(authoritativeRevision, expectedRevision);
+  }
   return session;
 }
 
@@ -67,7 +81,18 @@ export async function requirePermissionForMutation(
   body?: Record<string, unknown> | null,
 ) {
   const session = await requirePermission(permission);
-  assertExpectedOrganisation(session.organisationId, readExpectedOrganisationId(req, body));
+  const expectedOrgId = readExpectedOrganisationId(req, body);
+  const expectedRevision = readExpectedWorkspaceRevision(req, body);
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { activeOrganisationId: true, updatedAt: true },
+  });
+  const authoritativeOrgId = user?.activeOrganisationId || session.organisationId;
+  const authoritativeRevision = user?.updatedAt.toISOString();
+  assertExpectedOrganisation(authoritativeOrgId, expectedOrgId);
+  if (authoritativeRevision) {
+    assertExpectedWorkspaceRevision(authoritativeRevision, expectedRevision);
+  }
   return session;
 }
 
@@ -92,5 +117,7 @@ export {
   WorkspaceChangedError,
   workspaceChangedJsonResponse,
   readExpectedOrganisationId,
+  readExpectedWorkspaceRevision,
   assertExpectedOrganisation,
+  assertExpectedWorkspaceRevision,
 };

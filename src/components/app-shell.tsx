@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { WorkspaceChangedGate } from "@/components/workspace-changed-gate";
-import { broadcastOrgChanged } from "@/lib/workspace-client";
+import { broadcastOrgChanged, setImmutableWorkspaceContext } from "@/lib/workspace-client";
 
 type OrgOption = {
   id: string;
@@ -97,6 +97,7 @@ export function AppShell({
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [workspaceRevision, setWorkspaceRevision] = useState<string | null>(null);
 
   const locked = navigationLocked || Boolean(session?.user?.mustChangePassword);
 
@@ -112,6 +113,11 @@ export function AppShell({
         if (!r.ok) return;
         const j = await r.json();
         setOrgs(j.organisations || []);
+        setWorkspaceRevision(typeof j.workspaceRevision === "string" ? j.workspaceRevision : null);
+        setImmutableWorkspaceContext({
+          loadedOrganisationId: (j.activeOrganisationId as string) || session?.user?.organisationId || null,
+          workspaceRevision: typeof j.workspaceRevision === "string" ? j.workspaceRevision : null,
+        });
       })
       .catch(() => undefined);
   }, [session?.user?.organisationId, locked]);
@@ -158,6 +164,7 @@ export function AppShell({
         type: "org-changed",
         organisationId,
         organisationName: json.organisationName,
+        workspaceRevision,
         fromOrganisationId: fromId,
         fromOrganisationName: fromName,
       });
@@ -205,6 +212,7 @@ export function AppShell({
     <div className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]">
       <WorkspaceChangedGate
         currentOrganisationId={session?.user?.organisationId}
+        currentWorkspaceRevision={workspaceRevision}
         currentOrganisationName={
           orgs.find((o) => o.isActive)?.name ||
           session?.user?.organisationName ||

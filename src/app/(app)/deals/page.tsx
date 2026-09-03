@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SlideOver } from "@/components/ui/slide-over";
 import { statusLabel } from "@/lib/customer-labels";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Deal = {
   id: string;
@@ -40,6 +41,7 @@ function formatMoney(cents: number | null, currency: string) {
 }
 
 export default function DealsPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [companies, setCompanies] = useState<Array<{ id: string; name: string }>>([]);
   const [name, setName] = useState("");
@@ -80,7 +82,7 @@ export default function DealsPage() {
       toast.error("Amount must be a non-negative number");
       return;
     }
-    const res = await fetch("/api/deals", {
+    const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/deals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -104,7 +106,7 @@ export default function DealsPage() {
   }
 
   async function setStatus(id: string, status: (typeof STATUSES)[number]) {
-    const res = await fetch("/api/deals", {
+    const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/deals", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, status }),

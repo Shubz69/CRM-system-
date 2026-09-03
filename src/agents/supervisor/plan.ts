@@ -48,7 +48,8 @@ function looksLikeCrmInternal(request: string): boolean {
     /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
     /\b(goals? at risk|content awaiting approval)\b/.test(t) ||
-    /\b(crm|our (contacts|deals|leads)|internal (crm|data))\b/.test(t)
+    /\b(my|our)\s+(contacts|deals|leads|crm)\b/.test(t) ||
+    /\binternal (crm|data)\b/.test(t)
   );
 }
 
@@ -206,7 +207,9 @@ export function classifyResearchIntent(topic: string): ResearchIntentKind {
   if (looksLikeCrmInternal(topic)) return "crm_internal";
   if (/\b(summaris|summariz|tl;?dr|condense|shorten)\b/.test(t)) return "summarisation";
   if (/\b(prospect|find (leads|buyers|customers)|outreach list|icp)\b/.test(t)) return "prospecting";
-  if (/\b(crm|pipeline|inbox|our (contacts|deals|leads)|internal)\b/.test(t)) return "crm_internal";
+  if (/\b(pipeline|inbox)\b/.test(t) || /\b(my|our)\s+(contacts|deals|leads|crm)\b/.test(t) || /\binternal\b/.test(t)) {
+    return "crm_internal";
+  }
   if (
     /\b(viral|trending|hooks?|reels?|shorts?|algorithm|social listening|what('?s| is) getting attention|content themes)\b/.test(
       t,

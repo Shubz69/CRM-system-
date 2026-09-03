@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertExpectedOrganisation,
+  assertExpectedWorkspaceRevision,
   WorkspaceChangedError,
 } from "@/lib/workspace-mutation-guard";
 import { pickActiveWorkspace } from "@/services/active-workspace";
@@ -25,6 +26,12 @@ describe("workspace expected-organisation guard", () => {
       expect(e).toBeInstanceOf(WorkspaceChangedError);
       expect((e as WorkspaceChangedError).code).toBe("WORKSPACE_CHANGED");
     }
+  });
+
+  it("rejects stale workspace revision", () => {
+    expect(() => assertExpectedWorkspaceRevision("2026-01-01T00:00:00.000Z", "2025-12-31T23:59:59.000Z")).toThrow(
+      WorkspaceChangedError,
+    );
   });
 });
 
@@ -75,6 +82,22 @@ describe("pipeline Ask routing uses internal CRM", () => {
     expect(plan.plan.steps[0]?.agentName).toBe("crm_desk");
     expect(plan.plan.steps.some((s) => s.agentName === "research")).toBe(false);
     expect(plan.plan.steps.some((s) => s.agentName === "echo")).toBe(false);
+  });
+
+  it("routes GDPR research queries to research pipeline", () => {
+    const plan = planAgentRunDeterministic(
+      "Research UK GDPR lawful basis requirements for marketing emails with sources",
+      { organisationId: "org_1", answerMode: "DEEP" },
+    );
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps[0]?.agentName).toBe("research");
+    expect(plan.plan.steps.some((s) => s.agentName === "crm_desk")).toBe(false);
+  });
+
+  it("does not route generic CRM mentions to internal desk", () => {
+    const plan = planAgentRunDeterministic("What does CRM stand for in sales?");
+    expect(plan.kind).toBe("clarification");
   });
 
   it("pipeline outcome card has a complete prefill (one-click runnable)", () => {

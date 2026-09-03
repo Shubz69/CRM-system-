@@ -11,6 +11,7 @@ import {
   automationActionLabel,
   automationTriggerLabel,
 } from "@/lib/customer-labels";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type WorkflowStep = {
   id: string;
@@ -55,6 +56,7 @@ function summarizeActions(actions: unknown): string {
 }
 
 export default function AutomationsPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [name, setName] = useState("");
@@ -84,7 +86,7 @@ export default function AutomationsPage() {
 
   async function createRule(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/automations", {
+    const response = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/automations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, triggerType, actions: [{ type: actionType }] }),
@@ -99,7 +101,7 @@ export default function AutomationsPage() {
 
   async function compileNl(event: FormEvent) {
     event.preventDefault();
-    const response = await fetch("/api/automations", {
+    const response = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/automations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "compile", naturalLanguage: nl }),
@@ -111,7 +113,7 @@ export default function AutomationsPage() {
   }
 
   async function saveNlRule() {
-    const response = await fetch("/api/automations", {
+    const response = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/automations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -129,7 +131,7 @@ export default function AutomationsPage() {
   }
 
   async function toggle(rule: Rule) {
-    const response = await fetch("/api/automations", {
+    const response = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/automations", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: rule.id, isActive: !rule.isActive }),

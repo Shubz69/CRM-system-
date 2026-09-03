@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatLeadSource } from "@/lib/lead-source";
 import { SlideOver } from "@/components/ui/slide-over";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Contact = {
   id: string;
@@ -23,6 +24,7 @@ type Contact = {
 };
 
 export default function ContactsPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [q, setQ] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -51,7 +53,7 @@ export default function ContactsPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetch("/api/contacts", {
+      const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/contacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

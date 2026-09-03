@@ -6,34 +6,67 @@
  */
 
 import { useEffect, useState } from "react";
-import { subscribeOrgChanged, type OrgChangedBroadcast } from "@/lib/workspace-client";
+import {
+  readLastOrgChangedEvent,
+  subscribeOrgChanged,
+  type OrgChangedBroadcast,
+} from "@/lib/workspace-client";
 
 export function WorkspaceChangedGate({
   currentOrganisationId,
+  currentWorkspaceRevision,
   currentOrganisationName,
 }: {
   currentOrganisationId?: string | null;
+  currentWorkspaceRevision?: string | null;
   currentOrganisationName?: string | null;
 }) {
   const [pending, setPending] = useState<OrgChangedBroadcast | null>(null);
 
   useEffect(() => {
+    const existing = readLastOrgChangedEvent();
+    if (
+      existing &&
+      existing.organisationId &&
+      (existing.organisationId !== currentOrganisationId ||
+        (existing.workspaceRevision &&
+          currentWorkspaceRevision &&
+          existing.workspaceRevision !== currentWorkspaceRevision))
+    ) {
+      setPending(existing);
+    }
     return subscribeOrgChanged((msg) => {
       if (!msg.organisationId) return;
-      if (currentOrganisationId && msg.organisationId === currentOrganisationId) return;
+      if (
+        currentOrganisationId &&
+        msg.organisationId === currentOrganisationId &&
+        (!msg.workspaceRevision ||
+          !currentWorkspaceRevision ||
+          msg.workspaceRevision === currentWorkspaceRevision)
+      ) {
+        return;
+      }
       setPending(msg);
     });
-  }, [currentOrganisationId]);
+  }, [currentOrganisationId, currentWorkspaceRevision]);
 
   useEffect(() => {
     if (!pending) return;
     const block = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("[data-workspace-gate]")) return;
       e.preventDefault();
       e.stopPropagation();
     };
     // Capture-phase: stop form submits and mutation-like clicks until reload.
+    document.addEventListener("click", block, true);
+    document.addEventListener("keydown", block, true);
     document.addEventListener("submit", block, true);
-    return () => document.removeEventListener("submit", block, true);
+    return () => {
+      document.removeEventListener("click", block, true);
+      document.removeEventListener("keydown", block, true);
+      document.removeEventListener("submit", block, true);
+    };
   }, [pending]);
 
   if (!pending) return null;
@@ -50,7 +83,7 @@ export function WorkspaceChangedGate({
       aria-labelledby="workspace-changed-title"
       aria-describedby="workspace-changed-desc"
     >
-      <div className="surface max-w-md rounded-2xl p-6 shadow-2xl">
+      <div className="surface max-w-md rounded-2xl p-6 shadow-2xl" data-workspace-gate>
         <h2 id="workspace-changed-title" className="font-[family-name:var(--font-fraunces)] text-xl">
           Workspace changed
         </h2>

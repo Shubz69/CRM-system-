@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SlideOver } from "@/components/ui/slide-over";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Company = {
   id: string;
@@ -19,6 +20,7 @@ type Company = {
 };
 
 export default function CompaniesPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
@@ -52,7 +54,7 @@ export default function CompaniesPage() {
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
-    const res = await fetch("/api/companies", {
+    const res = await workspaceFetch(workspaceContext.loadedOrganisationId, workspaceContext.workspaceRevision, "/api/companies", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
