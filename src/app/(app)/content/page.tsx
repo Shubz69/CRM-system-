@@ -180,7 +180,7 @@ export default function ContentPage() {
       <PageHeader
         description="Organise drafts through approval, schedule, and published results — failures stay in plain English."
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setComposerOpen(true)}>
+          <button type="button" className="btn btn-primary" data-testid="create-content" onClick={() => setComposerOpen(true)}>
             + Create
           </button>
         }
@@ -460,6 +460,7 @@ export default function ContentPage() {
                       <button
                         className="btn btn-secondary"
                         type="button"
+                        data-testid="submit-approval"
                         onClick={async () => {
                           try {
                             await postAction({ action: "submit_approval", pieceId: p.id });

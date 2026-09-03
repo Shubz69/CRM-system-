@@ -107,7 +107,7 @@ export default function ContactsPage() {
                 Search
               </button>
             </form>
-            <button className="btn btn-primary" type="button" onClick={() => setDrawerOpen(true)}>
+            <button className="btn btn-primary" type="button" data-testid="add-contact" onClick={() => setDrawerOpen(true)}>
               + Add contact
             </button>
             <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>

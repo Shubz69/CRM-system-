@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { MemberRole } from "@prisma/client";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePermission, requirePermissionForMutation, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import {
   ASSIGNABLE_MEMBER_ROLES,
   changeMemberRole,
@@ -35,11 +35,12 @@ type Ctx = { params: Promise<{ userId: string }> };
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
-    const session = await requirePermission("members:manage");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("members:manage", req, raw);
     const { userId } = await ctx.params;
     if (!userId) return jsonError("userId required", 400);
 
-    const body = patchSchema.parse(await req.json());
+    const body = patchSchema.parse(raw);
 
     if (body.action === "remove") {
       const result = await removeMember({
@@ -69,6 +70,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       member: { userId: updated.userId, role: updated.role },
     });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     if (error instanceof z.ZodError) {
       return jsonError(error.errors[0]?.message || "Invalid request", 400);
     }

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageError, PageLoading } from "@/components/ui/page-state";
 import { Customer360Panel } from "@/components/crm/customer-360-panel";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Contact = {
   id: string;
@@ -30,6 +31,7 @@ type Contact = {
 
 export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [contact, setContact] = useState<Contact | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -52,11 +54,16 @@ export default function ContactDetailPage() {
   }, [id]);
 
   async function patch(body: Record<string, unknown>) {
-    const response = await fetch(`/api/contacts/${id}`, {
+    const response = await workspaceFetch(
+      workspaceContext.loadedOrganisationId,
+      workspaceContext.workspaceRevision,
+      `/api/contacts/${id}`,
+      {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+      },
+    );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Update failed");
     await load();

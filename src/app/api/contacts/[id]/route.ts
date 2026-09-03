@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePermission, requirePermissionForMutation, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { applyOptOut, clearOptOut } from "@/services/opt-out";
 
 type Params = { params: Promise<{ id: string }> };
@@ -40,9 +40,10 @@ export async function GET(_req: Request, { params }: Params) {
 
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const session = await requirePermission("leads:write");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
     const { id } = await params;
-    const body = patchSchema.parse(await req.json());
+    const body = patchSchema.parse(raw);
     const contact = await prisma.contact.findFirst({
       where: { id, organisationId: session.organisationId, deletedAt: null },
       select: { id: true },
@@ -72,6 +73,7 @@ export async function PATCH(req: Request, { params }: Params) {
     }
     return Response.json({ ok: true });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 500);

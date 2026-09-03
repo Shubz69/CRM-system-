@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Channel = {
   id: string;
@@ -75,6 +76,7 @@ function StatusChip({ ok, label }: { ok: boolean; label: string }) {
 }
 
 export default function SettingsPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<PendingInvite[]>([]);
@@ -154,11 +156,16 @@ export default function SettingsPage() {
     setInviteBusy(true);
     setLastInviteUrl(null);
     try {
-      const res = await fetch("/api/workspace/members", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/workspace/members",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error || "Invite failed");
@@ -179,7 +186,12 @@ export default function SettingsPage() {
   }
 
   async function resendInvite(id: string) {
-    const res = await fetch(`/api/workspace/invitations/${id}/resend`, { method: "POST" });
+    const res = await workspaceFetch(
+      workspaceContext.loadedOrganisationId,
+      workspaceContext.workspaceRevision,
+      `/api/workspace/invitations/${id}/resend`,
+      { method: "POST" },
+    );
     const json = await res.json();
     if (!res.ok) {
       toast.error(json.error || "Resend failed");
@@ -194,7 +206,12 @@ export default function SettingsPage() {
   }
 
   async function revokeInvite(id: string) {
-    const res = await fetch(`/api/workspace/invitations/${id}/revoke`, { method: "POST" });
+    const res = await workspaceFetch(
+      workspaceContext.loadedOrganisationId,
+      workspaceContext.workspaceRevision,
+      `/api/workspace/invitations/${id}/revoke`,
+      { method: "POST" },
+    );
     const json = await res.json();
     if (!res.ok) {
       toast.error(json.error || "Revoke failed");
@@ -207,11 +224,16 @@ export default function SettingsPage() {
   async function changeRole(userId: string, role: string) {
     setMemberActionBusy(`role-${userId}`);
     try {
-      const res = await fetch(`/api/workspace/members/${userId}`, {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        `/api/workspace/members/${userId}`,
+        {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "role", role }),
-      });
+        },
+      );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(json.error || "Role change failed");
@@ -230,11 +252,16 @@ export default function SettingsPage() {
     if (!window.confirm("Remove this member from the workspace?")) return;
     setMemberActionBusy(`remove-${userId}`);
     try {
-      const res = await fetch(`/api/workspace/members/${userId}`, {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        `/api/workspace/members/${userId}`,
+        {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove" }),
-      });
+        },
+      );
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(json.error || "Remove failed");
@@ -461,6 +488,7 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       className="btn btn-secondary py-1 text-xs"
+                      data-testid={`team-remove-${m.userId}`}
                       disabled={Boolean(memberActionBusy)}
                       onClick={() => removeMember(m.userId)}
                     >

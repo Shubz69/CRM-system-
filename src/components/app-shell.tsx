@@ -160,11 +160,16 @@ export function AppShell({
         );
       }
 
+      const nextRevision =
+        (typeof json.workspaceRevision === "string" && json.workspaceRevision) ||
+        (typeof orgsJson?.workspaceRevision === "string" && orgsJson.workspaceRevision) ||
+        null;
+
       broadcastOrgChanged({
         type: "org-changed",
         organisationId,
         organisationName: json.organisationName,
-        workspaceRevision,
+        workspaceRevision: nextRevision,
         fromOrganisationId: fromId,
         fromOrganisationName: fromName,
       });

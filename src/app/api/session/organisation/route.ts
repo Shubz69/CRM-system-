@@ -39,7 +39,7 @@ export async function POST(req: Request) {
     // READ BACK — User.activeOrganisationId is the durable source of truth.
     const readback = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { activeOrganisationId: true },
+      select: { activeOrganisationId: true, updatedAt: true },
     });
 
     if (!readback?.activeOrganisationId || readback.activeOrganisationId !== requestedId) {
@@ -79,6 +79,7 @@ export async function POST(req: Request) {
       organisationName: verified.membership.organisation.name,
       role: verified.membership.role,
       isPlatform: verified.membership.organisation.isPlatform,
+      workspaceRevision: readback.updatedAt.toISOString(),
       verified: true,
     });
   } catch (error) {

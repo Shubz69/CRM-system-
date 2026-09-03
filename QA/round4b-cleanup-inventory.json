@@ -1,0 +1,16 @@
+{
+  "round": "4B",
+  "at": "2026-09-03T17:00:00.000Z",
+  "runIdPrefix": "E2E-R4B-",
+  "orgsTouched": [
+    "Agent Desk Automated QA (cmtkp47vk0000l504gvfzi1sj)",
+    "Agent Desk Workspace Safety QA (created for switch tests; no Shobhit Agency mutations)"
+  ],
+  "records": [
+    "E2E-R4B-*-fresh-contact (contacts in Automated QA)",
+    "E2E-R4B-*-submit-content (content drafts / approvals in Automated QA)",
+    "E2E-R4B-*-inbox-* simulator conversations in Automated QA"
+  ],
+  "shobhitAgencyMutations": "NONE",
+  "cleanup": "Manual cleanup of E2E-R4B-* contacts/content/simulator rows in Automated QA and Safety QA when accepted"
+}

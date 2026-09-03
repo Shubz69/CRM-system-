@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SlideOver } from "@/components/ui/slide-over";
 import { knowledgeFreshness, statusLabel } from "@/lib/customer-labels";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Doc = {
   id: string;
@@ -47,6 +48,7 @@ function freshnessBadge(updatedAt?: string) {
 }
 
 export default function KnowledgePage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [title, setTitle] = useState("");
@@ -78,11 +80,16 @@ export default function KnowledgePage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (replaceId) {
-      const res = await fetch("/api/knowledge", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/knowledge",
+        {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: replaceId, title, category, content, status: "ACTIVE" }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error || "Replace failed");
@@ -91,11 +98,16 @@ export default function KnowledgePage() {
       toast.success("Document replaced");
       setReplaceId(null);
     } else {
-      const res = await fetch("/api/knowledge", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/knowledge",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, category, content }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         toast.error(json.error || "Save failed");
@@ -199,14 +211,19 @@ export default function KnowledgePage() {
                     className="btn btn-secondary"
                     type="button"
                     onClick={async () => {
-                      const res = await fetch("/api/knowledge", {
+                      const res = await workspaceFetch(
+                        workspaceContext.loadedOrganisationId,
+                        workspaceContext.workspaceRevision,
+                        "/api/knowledge",
+                        {
                         method: "PATCH",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                           id: doc.id,
                           status: doc.status === "ACTIVE" ? "INACTIVE" : "ACTIVE",
                         }),
-                      });
+                        },
+                      );
                       if (!res.ok) {
                         toast.error("Update failed");
                         return;
@@ -241,11 +258,16 @@ export default function KnowledgePage() {
                   type="button"
                   className="btn btn-primary"
                   onClick={async () => {
-                    const res = await fetch("/api/knowledge/recommendations", {
+                    const res = await workspaceFetch(
+                      workspaceContext.loadedOrganisationId,
+                      workspaceContext.workspaceRevision,
+                      "/api/knowledge/recommendations",
+                      {
                       method: "PATCH",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ id: rec.id, status: "APPROVED" }),
-                    });
+                      },
+                    );
                     if (!res.ok) {
                       toast.error("Update failed");
                       return;
@@ -260,11 +282,16 @@ export default function KnowledgePage() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={async () => {
-                    const res = await fetch("/api/knowledge/recommendations", {
+                    const res = await workspaceFetch(
+                      workspaceContext.loadedOrganisationId,
+                      workspaceContext.workspaceRevision,
+                      "/api/knowledge/recommendations",
+                      {
                       method: "PATCH",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ id: rec.id, status: "DISMISSED" }),
-                    });
+                      },
+                    );
                     if (!res.ok) {
                       toast.error("Update failed");
                       return;
@@ -357,7 +384,12 @@ export default function KnowledgePage() {
               e.preventDefault();
               const form = e.currentTarget;
               const data = new FormData(form);
-              const res = await fetch("/api/knowledge", { method: "POST", body: data });
+              const res = await workspaceFetch(
+                workspaceContext.loadedOrganisationId,
+                workspaceContext.workspaceRevision,
+                "/api/knowledge",
+                { method: "POST", body: data },
+              );
               const json = await res.json();
               if (!res.ok) {
                 toast.error(json.error || "Upload failed");

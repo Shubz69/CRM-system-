@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { BusinessOpportunityStatus } from "@prisma/client";
-import { jsonError, requirePermission } from "@/lib/session";
+import {
+  jsonError,
+  requirePermission,
+  requirePermissionForMutation,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import {
   acceptOpportunityAsMission,
   getOpportunityForOrg,
@@ -55,8 +61,9 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("agent:manage");
-    const body = bodySchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("agent:manage", req, raw);
+    const body = bodySchema.parse(raw);
 
     if (body.action === "run_detectors") {
       const result = await runOpportunityDetectorsForOrg(session.organisationId);
@@ -114,6 +121,7 @@ export async function POST(req: Request) {
     }
     return jsonError("Unknown action", 400);
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

@@ -47,7 +47,7 @@ function looksLikeCrmInternal(request: string): boolean {
   return (
     /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
-    /\b(goals? at risk|content awaiting approval)\b/.test(t) ||
+    /\b(goals? at risk|goals? are at risk|content awaiting approval|content is awaiting approval)\b/.test(t) ||
     /\b(my|our)\s+(contacts|deals|leads|crm)\b/.test(t) ||
     /\binternal (crm|data)\b/.test(t)
   );
@@ -63,8 +63,8 @@ function crmDeskIntentFromRequest(
   | "content_awaiting_approval"
   | "desk_overview" {
   const t = request.toLowerCase();
-  if (/\bgoals? at risk\b/.test(t)) return "goals_at_risk";
-  if (/\bcontent awaiting approval|awaiting approval\b/.test(t)) return "content_awaiting_approval";
+  if (/\bgoals?\s+(are\s+)?at risk\b/.test(t)) return "goals_at_risk";
+  if (/\bcontent\s+(is\s+)?awaiting approval|awaiting approval\b/.test(t)) return "content_awaiting_approval";
   if (/\bneeding (a )?human|handoff|needs? human\b/.test(t)) return "conversations_needing_human";
   if (/\bfollow[- ]?ups?|needing reply|needs? reply\b/.test(t)) return "follow_ups";
   if (/\bpipeline|stalled deals?|open deals?\b/.test(t)) return "pipeline_summary";

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 
 export async function GET() {
@@ -40,8 +40,9 @@ const moveSchema = z.object({
 
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await requirePermission("leads:write");
-    const body = moveSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
+    const body = moveSchema.parse(raw);
 
     const lead = await prisma.lead.findFirst({
       where: { id: body.leadId, organisationId: session.organisationId, deletedAt: null },
@@ -72,6 +73,7 @@ export async function PATCH(req: NextRequest) {
 
     return Response.json({ ok: true });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 500);

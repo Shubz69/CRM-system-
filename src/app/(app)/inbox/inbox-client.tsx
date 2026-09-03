@@ -121,12 +121,18 @@ export default function InboxPage() {
     const ac = new AbortController();
     detailAbort.current = ac;
     const seq = ++detailSeq.current;
-    const res = await fetch(`/api/conversations/${id}`, { signal: ac.signal });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed to load conversation");
-    // Late response for A must not overwrite B.
-    if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
-    setDetail(json.conversation);
+    try {
+      const res = await fetch(`/api/conversations/${id}`, { signal: ac.signal });
+      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
+      const json = await res.json();
+      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
+      if (!res.ok) throw new Error(json.error || "Failed to load conversation");
+      setDetail(json.conversation);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
+      throw e;
+    }
   }, []);
 
   useEffect(() => {
@@ -405,7 +411,7 @@ export default function InboxPage() {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-inbox-ready="true" data-selected-conversation-id={selectedId || ""}>
       <PageHeader description="Reply, qualify, and hand off — Agent Desk keeps safety rules on every send." />
 
       {!loading && items.length === 0 ? (
@@ -494,6 +500,8 @@ export default function InboxPage() {
               <button
                 key={c.id}
                 type="button"
+                data-testid={`inbox-row-${c.id}`}
+                data-conversation-id={c.id}
                 onClick={() => {
                   setSelectedId(c.id);
                   setMobilePanel("thread");
@@ -540,7 +548,7 @@ export default function InboxPage() {
                       Customer
                     </button>
                   </div>
-                  <h2 className="truncate font-semibold">{detail.contact.fullName}</h2>
+                  <h2 className="truncate font-semibold" data-testid="inbox-detail-header" data-conversation-id={detail.id}>{detail.contact.fullName}</h2>
                   <p className="text-sm text-[var(--muted)]">
                     @{detail.contact.instagramUsername} · {detail.intent || "No intent"} · {detail.sentiment || "—"}
                   </p>
@@ -638,7 +646,12 @@ export default function InboxPage() {
                 ))}
               </div>
 
-              <form onSubmit={onReply} className="border-t border-[var(--border)] p-4">
+              <form
+                onSubmit={onReply}
+                className="border-t border-[var(--border)] p-4"
+                data-testid="inbox-compose"
+                data-action-target={selectedId || ""}
+              >
                 {!sendTargetMatches ? (
                   <p className="mb-2 text-xs text-[var(--muted)]">
                     Loading the selected conversation — send is blocked until the thread matches.

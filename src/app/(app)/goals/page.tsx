@@ -57,7 +57,7 @@ export default function GoalsPage() {
       <PageHeader
         description="Set targets, attach KPIs, and track progress from real workspace data."
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setShowCreate((v) => !v)}>
+          <button type="button" className="btn btn-primary" data-testid="new-goal" onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? "Close" : "New goal"}
           </button>
         }

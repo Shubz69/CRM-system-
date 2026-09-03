@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { processInboundMessage } from "@/services/inbound-pipeline";
 import { logger } from "@/lib/logger";
 
@@ -20,9 +20,9 @@ const simulatorSchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("inbox:write");
-    const body = await req.json();
-    const parsed = simulatorSchema.safeParse(body);
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("inbox:write", req, raw);
+    const parsed = simulatorSchema.safeParse(raw);
     if (!parsed.success) {
       return jsonError(parsed.error.message, 400);
     }
@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
 
     return Response.json({ ok: true, result });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Simulator failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

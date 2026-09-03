@@ -7,7 +7,12 @@ import { EXPECTED_WORKSPACE_REVISION_HEADER } from "@/lib/workspace-mutation-gua
 
 const CHANNEL = "agent-desk-workspace";
 const STORAGE_EVENT_KEY = "agent-desk-workspace-event";
+// Immutable workspace snapshot must be per-tab (not shared across tabs) so
+// a stale form opened in Tab A cannot "inherit" expected context from Tab B.
+// sessionStorage is isolated between tabs. Freeze only for THIS document load —
+// a full reload (after a genuine workspace switch) must take a fresh snapshot.
 const IMMUTABLE_CONTEXT_KEY = "agent-desk-workspace-context";
+let frozenForThisDocument = false;
 
 export type OrgChangedBroadcast = {
   type: "org-changed";
@@ -83,13 +88,33 @@ export function readLastOrgChangedEvent(): OrgChangedBroadcast | null {
   }
 }
 
+/** True when another tab switched workspace (or revision) vs this tab's loaded context. */
+export function workspaceGateShouldBlock(args: {
+  currentOrganisationId?: string | null;
+  currentWorkspaceRevision?: string | null;
+  event: OrgChangedBroadcast | null;
+}): boolean {
+  const currentOrg = args.currentOrganisationId;
+  const event = args.event;
+  if (!currentOrg || !event?.organisationId) return false;
+  if (event.organisationId !== currentOrg) return true;
+  if (
+    event.workspaceRevision &&
+    args.currentWorkspaceRevision &&
+    event.workspaceRevision !== args.currentWorkspaceRevision
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function setImmutableWorkspaceContext(ctx: ImmutableWorkspaceContext) {
   try {
-    const existing = localStorage.getItem(IMMUTABLE_CONTEXT_KEY);
-    if (existing) return;
-    localStorage.setItem(IMMUTABLE_CONTEXT_KEY, JSON.stringify(ctx));
+    if (frozenForThisDocument) return;
+    frozenForThisDocument = true;
+    sessionStorage.setItem(IMMUTABLE_CONTEXT_KEY, JSON.stringify(ctx));
   } catch {
-    /* storage unavailable */
+    frozenForThisDocument = true;
   }
 }
 
@@ -97,7 +122,7 @@ export function getImmutableWorkspaceContext(
   fallbackOrganisationId?: string | null,
 ): ImmutableWorkspaceContext {
   try {
-    const raw = localStorage.getItem(IMMUTABLE_CONTEXT_KEY);
+    const raw = sessionStorage.getItem(IMMUTABLE_CONTEXT_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as ImmutableWorkspaceContext;
       return {

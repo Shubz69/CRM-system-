@@ -3,12 +3,19 @@
 /**
  * Option B — session-wide workspace change: block mutations until the operator
  * acknowledges and reloads. Never silently rewrite the tab mid-edit.
+ *
+ * CRITICAL: compare against this tab's immutable loaded snapshot (sessionStorage),
+ * NOT live session.organisationId. Cookies are shared across tabs — when Tab B
+ * switches, Tab A's NextAuth session can update to B without a reload. Using the
+ * live session would clear the gate and let stale forms submit.
  */
 
 import { useEffect, useState } from "react";
 import {
+  getImmutableWorkspaceContext,
   readLastOrgChangedEvent,
   subscribeOrgChanged,
+  workspaceGateShouldBlock,
   type OrgChangedBroadcast,
 } from "@/lib/workspace-client";
 
@@ -24,29 +31,40 @@ export function WorkspaceChangedGate({
   const [pending, setPending] = useState<OrgChangedBroadcast | null>(null);
 
   useEffect(() => {
+    // Prefer the per-tab loaded snapshot. Fall back to props only before freeze.
+    const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
+    const baselineOrg = snap.loadedOrganisationId || currentOrganisationId || null;
+    const baselineRev = snap.workspaceRevision || currentWorkspaceRevision || null;
+
+    // Wait until this tab has a known loaded org — avoid hydration false-positives.
+    if (!baselineOrg) return;
+
     const existing = readLastOrgChangedEvent();
     if (
-      existing &&
-      existing.organisationId &&
-      (existing.organisationId !== currentOrganisationId ||
-        (existing.workspaceRevision &&
-          currentWorkspaceRevision &&
-          existing.workspaceRevision !== currentWorkspaceRevision))
+      workspaceGateShouldBlock({
+        currentOrganisationId: baselineOrg,
+        currentWorkspaceRevision: baselineRev,
+        event: existing,
+      })
     ) {
       setPending(existing);
+    } else {
+      setPending(null);
     }
+
     return subscribeOrgChanged((msg) => {
-      if (!msg.organisationId) return;
+      const latest = getImmutableWorkspaceContext(baselineOrg);
+      const org = latest.loadedOrganisationId || baselineOrg;
+      const rev = latest.workspaceRevision || baselineRev;
       if (
-        currentOrganisationId &&
-        msg.organisationId === currentOrganisationId &&
-        (!msg.workspaceRevision ||
-          !currentWorkspaceRevision ||
-          msg.workspaceRevision === currentWorkspaceRevision)
+        workspaceGateShouldBlock({
+          currentOrganisationId: org,
+          currentWorkspaceRevision: rev,
+          event: msg,
+        })
       ) {
-        return;
+        setPending(msg);
       }
-      setPending(msg);
     });
   }, [currentOrganisationId, currentWorkspaceRevision]);
 
@@ -58,7 +76,6 @@ export function WorkspaceChangedGate({
       e.preventDefault();
       e.stopPropagation();
     };
-    // Capture-phase: stop form submits and mutation-like clicks until reload.
     document.addEventListener("click", block, true);
     document.addEventListener("keydown", block, true);
     document.addEventListener("submit", block, true);

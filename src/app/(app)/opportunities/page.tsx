@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageLoading } from "@/components/ui/page-state";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 import { statusLabel } from "@/lib/customer-labels";
 
 type Opp = {
@@ -30,6 +31,7 @@ function impactWhy(impact: string, urgency: string): string {
 }
 
 export default function OpportunitiesPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [opportunities, setOpportunities] = useState<Opp[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -51,11 +53,16 @@ export default function OpportunitiesPage() {
   async function act(action: string, opportunityId: string) {
     setBusyId(opportunityId);
     try {
-      const res = await fetch("/api/opportunities", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/opportunities",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, opportunityId }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Action failed");
       return json;
@@ -77,11 +84,16 @@ export default function OpportunitiesPage() {
               setScanning(true);
               toast.message("Scanning…");
               try {
-                const res = await fetch("/api/opportunities", {
+                const res = await workspaceFetch(
+                  workspaceContext.loadedOrganisationId,
+                  workspaceContext.workspaceRevision,
+                  "/api/opportunities",
+                  {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ action: "run_detectors" }),
-                });
+                  },
+                );
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error || "Scan failed");
                 const created = json.result?.created ?? 0;
@@ -126,11 +138,16 @@ export default function OpportunitiesPage() {
               className="btn btn-primary mt-4"
               onClick={async () => {
                 try {
-                  const res = await fetch("/api/opportunities", {
+                  const res = await workspaceFetch(
+                    workspaceContext.loadedOrganisationId,
+                    workspaceContext.workspaceRevision,
+                    "/api/opportunities",
+                    {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "run_detectors" }),
-                  });
+                    },
+                  );
                   const json = await res.json();
                   if (!res.ok) throw new Error(json.error || "Scan failed");
                   toast.success("Scan complete");

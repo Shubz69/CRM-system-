@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageLoading } from "@/components/ui/page-state";
 import { statusLabel } from "@/lib/customer-labels";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Source = {
   id: string;
@@ -60,6 +61,7 @@ type ResearchJob = {
 };
 
 export default function ResearchPage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const router = useRouter();
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [topic, setTopic] = useState("");
@@ -149,14 +151,19 @@ export default function ResearchPage() {
               }
               setBusy(true);
               try {
-                const res = await fetch("/api/ask", {
+                const res = await workspaceFetch(
+                  workspaceContext.loadedOrganisationId,
+                  workspaceContext.workspaceRevision,
+                  "/api/ask",
+                  {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     request: `Research ${trimmed}`,
                     ...(answerMode ? { answerMode } : {}),
                   }),
-                });
+                  },
+                );
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error || "Ask failed");
                 toast.success(

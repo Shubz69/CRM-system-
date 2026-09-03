@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Lead = {
   id: string;
@@ -20,6 +21,7 @@ type Stage = {
 };
 
 export default function PipelinePage() {
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [stages, setStages] = useState<Stage[]>([]);
   const [view, setView] = useState<"kanban" | "table">("kanban");
   const [loading, setLoading] = useState(true);
@@ -41,11 +43,16 @@ export default function PipelinePage() {
   }, []);
 
   async function moveLead(leadId: string, stageId: string) {
-    const res = await fetch("/api/pipeline", {
+    const res = await workspaceFetch(
+      workspaceContext.loadedOrganisationId,
+      workspaceContext.workspaceRevision,
+      "/api/pipeline",
+      {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leadId, stageId }),
-    });
+      },
+    );
     const json = await res.json();
     if (!res.ok) {
       toast.error(json.error || "Move failed");

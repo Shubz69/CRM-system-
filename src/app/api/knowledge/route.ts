@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { KnowledgeDocStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { upsertKnowledgeDocument, chunkText, updateKnowledgeDocument, archiveKnowledgeDocument } from "@/services/knowledge";
 import { assertKnowledgePromotionPolicy } from "@/services/agent-memory";
 
@@ -33,8 +33,8 @@ const createSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("knowledge:manage");
     const contentType = req.headers.get("content-type") || "";
+    const session = await requirePermissionForMutation("knowledge:manage", req, null);
 
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
 
     return Response.json({ id, chunks: chunkText(body.content).length });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 500);
@@ -127,8 +128,9 @@ const patchSchema = z.object({
 
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await requirePermission("knowledge:manage");
-    const body = patchSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("knowledge:manage", req, raw);
+    const body = patchSchema.parse(raw);
     const existing = await prisma.knowledgeDocument.findFirst({
       where: { id: body.id, organisationId: session.organisationId },
     });
@@ -158,6 +160,7 @@ export async function PATCH(req: NextRequest) {
 
     return Response.json({ ok: true });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 500);
@@ -166,13 +169,14 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const session = await requirePermission("knowledge:manage");
+    const session = await requirePermissionForMutation("knowledge:manage", req, null);
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return jsonError("id is required", 400);
     await archiveKnowledgeDocument({ id, organisationId: session.organisationId });
     return Response.json({ ok: true });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message === "Document not found") return jsonError(message, 404);

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { MemberRole } from "@prisma/client";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePermission, requirePermissionForMutation, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import {
   INVITE_ROLES,
   inviteMember,
@@ -72,8 +72,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("members:manage");
-    const body = inviteSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("members:manage", req, raw);
+    const body = inviteSchema.parse(raw);
     if (!INVITE_ROLES.includes(body.role)) {
       return jsonError(
         `Invite role must be one of: ${INVITE_ROLES.join(", ")}`,
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
       emailError: result.emailError,
     });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     if (error instanceof z.ZodError) {
       return jsonError(error.errors[0]?.message || "Invalid request", 400);
     }

@@ -107,6 +107,65 @@ describe("pipeline Ask routing uses internal CRM", () => {
   });
 });
 
+describe("Ask routing matrix (deterministic)", () => {
+  const org = { organisationId: "qa", answerMode: "QUICK" as const };
+
+  it.each([
+    "Summarise my pipeline",
+    "Which of my deals are stuck?",
+    "Who should I follow up with?",
+    "What changed in my CRM?",
+    "Which goals are at risk?",
+    "What content is awaiting approval?",
+  ])("internal: %s → crm_desk", (q) => {
+    const plan = planAgentRunDeterministic(q, org);
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps[0]?.agentName).toBe("crm_desk");
+  });
+
+  it.each([
+    "Research UK GDPR requirements for storing CRM contacts",
+    "What does the ICO say about CRM retention?",
+    "Compare HubSpot and Salesforce",
+    "Research CRM trends in 2026",
+    "Research CRM automation trends",
+  ])("research/general: %s must not be crm_desk", (q) => {
+    const plan = planAgentRunDeterministic(q, org);
+    if (plan.kind === "plan") {
+      expect(plan.plan.steps[0]?.agentName).not.toBe("crm_desk");
+      expect(plan.plan.steps.some((s) => s.agentName === "crm_desk")).toBe(false);
+    }
+  });
+
+  it("exact GDPR prompt is research", () => {
+    const plan = planAgentRunDeterministic(
+      "Research the current UK GDPR requirements for storing customer contact details in a CRM. Prioritise authoritative UK sources.",
+      org,
+    );
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps[0]?.agentName).toBe("research");
+  });
+
+  it("exact pipeline prompt is crm_desk", () => {
+    const plan = planAgentRunDeterministic(
+      "Summarise my current sales pipeline and tell me which deals are stuck.",
+      org,
+    );
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps[0]?.agentName).toBe("crm_desk");
+  });
+
+  it("ambiguous prompts clarify instead of dumping a CRM digest", () => {
+    for (const q of ["Tell me about my data.", "What should I do with these contacts?"]) {
+      const plan = planAgentRunDeterministic(q, org);
+      expect(plan.kind).toBe("clarification");
+    }
+  });
+});
+
 describe("research quality variance and honesty", () => {
   const basePrompt = "Research UK SME AI adoption rates with sources";
 

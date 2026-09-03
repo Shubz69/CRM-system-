@@ -9,6 +9,7 @@ import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
 import { isModeShapedOutput } from "@/services/answer-modes/shape";
+import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Progress = {
   runId: string;
@@ -282,6 +283,7 @@ function WorkingPulse({ label }: { label: string }) {
 
 export default function AskPage() {
   const router = useRouter();
+  const workspaceContext = getImmutableWorkspaceContext(null);
   const [request, setRequest] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -454,14 +456,19 @@ export default function AskPage() {
     setProgress(null);
     stopPolling();
     try {
-      const res = await fetch("/api/ask", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/ask",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           request: text,
           ...(referenceAssetId ? { referenceAssetId } : {}),
         }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         await handleAskApiFailure(res, json, "Could not start");
@@ -493,11 +500,16 @@ export default function AskPage() {
     if (!runId) return;
     setSubmitting(true);
     try {
-      const res = await fetch("/api/ask", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/ask",
+        {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ runId, selectedOption: option }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         await handleAskApiFailure(res, json, "Could not continue");
@@ -522,11 +534,16 @@ export default function AskPage() {
     if (!runId || !editablePrompt.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch("/api/ask", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/ask",
+        {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ runId, confirmedPrompt: editablePrompt.trim() }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) {
         await handleAskApiFailure(res, json, "Could not start generation");
@@ -555,7 +572,11 @@ export default function AskPage() {
       return;
     }
     try {
-      const res = await fetch("/api/knowledge", {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/knowledge",
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -565,7 +586,8 @@ export default function AskPage() {
           tags: ["draft", "from-ask"],
           status: "INACTIVE",
         }),
-      });
+        },
+      );
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not save");
       toast.success("Saved to Knowledge as a draft.");
@@ -651,15 +673,20 @@ export default function AskPage() {
           : null;
       if (researchJobId && action !== "Prepare messages") {
         try {
-          const res = await fetch("/api/content", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "create_opportunity_from_research",
-              researchJobId,
-              agentRunId: progress?.runId,
-            }),
-          });
+          const res = await workspaceFetch(
+            workspaceContext.loadedOrganisationId,
+            workspaceContext.workspaceRevision,
+            "/api/content",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "create_opportunity_from_research",
+                researchJobId,
+                agentRunId: progress?.runId,
+              }),
+            },
+          );
           const json = await res.json();
           if (!res.ok) throw new Error(json.error || "Could not create content opportunity");
           toast.success("Content opportunity created from this research.");
@@ -691,15 +718,20 @@ export default function AskPage() {
         return;
       }
       try {
-        const res = await fetch("/api/content", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "create_opportunity_from_research",
-            researchJobId,
-            agentRunId: progress?.runId,
-          }),
-        });
+        const res = await workspaceFetch(
+          workspaceContext.loadedOrganisationId,
+          workspaceContext.workspaceRevision,
+          "/api/content",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_opportunity_from_research",
+              researchJobId,
+              agentRunId: progress?.runId,
+            }),
+          },
+        );
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Could not create opportunity");
         toast.success("Opportunity created from this research.");
@@ -717,15 +749,20 @@ export default function AskPage() {
       const summary = renderAnswerBody(source).slice(0, 120);
       const name = summary.split("\n").find((line) => line.trim())?.trim().slice(0, 80) || "Goal from Ask";
       try {
-        const res = await fetch("/api/goals", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "create_goal",
-            name,
-            description: renderAnswerBody(source).slice(0, 2000),
-          }),
-        });
+        const res = await workspaceFetch(
+          workspaceContext.loadedOrganisationId,
+          workspaceContext.workspaceRevision,
+          "/api/goals",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_goal",
+              name,
+              description: renderAnswerBody(source).slice(0, 2000),
+            }),
+          },
+        );
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Could not create goal");
         toast.success("Goal created");
@@ -738,16 +775,21 @@ export default function AskPage() {
       const source = progress?.finalOutput ?? progress?.outputSoFar;
       const summary = renderAnswerBody(source).slice(0, 800);
       try {
-        const res = await fetch("/api/automations", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "create_from_nl",
-            name: "Automation from Ask",
-            naturalLanguage: summary || "Follow up with qualified leads who have not replied",
-            description: "Drafted from an Ask result — review before activating.",
-          }),
-        });
+        const res = await workspaceFetch(
+          workspaceContext.loadedOrganisationId,
+          workspaceContext.workspaceRevision,
+          "/api/automations",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_from_nl",
+              name: "Automation from Ask",
+              naturalLanguage: summary || "Follow up with qualified leads who have not replied",
+              description: "Drafted from an Ask result — review before activating.",
+            }),
+          },
+        );
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Could not create automation");
         toast.success("Automation draft created — review before activating.");
@@ -916,6 +958,7 @@ export default function AskPage() {
                     <button
                       key={card.id}
                       type="button"
+                      data-testid={`ask-tile-${card.id}`}
                       onClick={() => applyOutcome(card)}
                       className="surface-interactive rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition"
                     >

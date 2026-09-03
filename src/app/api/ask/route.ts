@@ -1,6 +1,11 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { jsonError, requirePermission } from "@/lib/session";
+import {
+  jsonError,
+  requirePermissionForMutation,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import { logger } from "@/lib/logger";
 import {
   clarifyAndEnqueueAgentRun,
@@ -21,6 +26,9 @@ const createSchema = z.object({
 });
 
 function askErrorResponse(error: unknown, fallbackStatus = 503) {
+  if (error instanceof WorkspaceChangedError) {
+    return workspaceChangedJsonResponse();
+  }
   if (error instanceof OrgRateLimitError) {
     return Response.json({ error: error.message, code: error.code }, { status: 429 });
   }
@@ -49,13 +57,14 @@ function askErrorResponse(error: unknown, fallbackStatus = 503) {
 /** Submit a natural-language request. Returns a run ID immediately. */
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("ask:use");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("ask:use", req, raw);
     await assertActiveWorkspaceAccess({
       userId: session.userId,
       organisationId: session.organisationId,
     });
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
-    const body = createSchema.parse(await req.json());
+    const body = createSchema.parse(raw);
     const { runId, jobId } = await createAndEnqueueAgentRun({
       organisationId: session.organisationId,
       userId: session.userId,
@@ -89,12 +98,13 @@ const patchSchema = z.union([
 /** Answer clarification OR confirm an imaging prompt. */
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await requirePermission("ask:use");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("ask:use", req, raw);
     await assertActiveWorkspaceAccess({
       userId: session.userId,
       organisationId: session.organisationId,
     });
-    const body = patchSchema.parse(await req.json());
+    const body = patchSchema.parse(raw);
 
     if ("confirmedPrompt" in body) {
       const { runId, jobId } = await confirmImagingPromptAndEnqueue({
