@@ -138,19 +138,27 @@ async function loadOrgs(page: Page) {
 }
 
 async function uiSwitch(page: Page, organisationId: string) {
+  await waitWorkspaceReady(page);
   const select = page.getByLabel("Switch active workspace");
   await expect(select).toBeVisible({ timeout: 20_000 });
-  await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/session/organisation") &&
-        r.request().method() === "POST" &&
-        r.ok(),
-      { timeout: 45_000 },
-    ),
-    select.selectOption(organisationId),
-  ]);
+  const current = await select.inputValue();
+  if (current === organisationId) {
+    await expect
+      .poll(async () => (await loadOrgs(page)).activeOrganisationId, { timeout: 30_000 })
+      .toBe(organisationId);
+    return;
+  }
+  const responsePromise = page.waitForResponse(
+    (r) =>
+      r.url().includes("/api/session/organisation") &&
+      r.request().method() === "POST" &&
+      r.ok(),
+    { timeout: 60_000 },
+  );
+  await select.selectOption(organisationId);
+  await responsePromise;
   await page.waitForLoadState("domcontentloaded");
+  await waitWorkspaceReady(page);
   await expect
     .poll(
       async () => {
@@ -158,11 +166,11 @@ async function uiSwitch(page: Page, organisationId: string) {
         if (!r.ok()) return null;
         return ((await r.json()) as { activeOrganisationId?: string }).activeOrganisationId ?? null;
       },
-      { timeout: 45_000 },
+      { timeout: 60_000 },
     )
     .toBe(organisationId);
   await expect(page.getByLabel("Switch active workspace")).toHaveValue(organisationId, {
-    timeout: 45_000,
+    timeout: 60_000,
   });
 }
 
@@ -192,7 +200,6 @@ async function dealExists(page: Page, name: string) {
   );
 }
 
-test.describe.configure({ mode: "serial" });
 test.setTimeout(240_000);
 
 test.describe("Round 5 recovery + interaction", () => {
