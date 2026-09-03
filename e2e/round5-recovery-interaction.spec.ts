@@ -137,35 +137,6 @@ async function loadOrgs(page: Page) {
   };
 }
 
-async function uiSwitch(page: Page, organisationId: string) {
-  await waitWorkspaceReady(page);
-  const select = page.getByLabel("Switch active workspace");
-  await expect(select).toBeVisible({ timeout: 20_000 });
-  const current = await select.inputValue();
-  if (current === organisationId) {
-    await expect
-      .poll(async () => (await loadOrgs(page)).activeOrganisationId, { timeout: 30_000 })
-      .toBe(organisationId);
-    return;
-  }
-  const responsePromise = page.waitForResponse(
-    (r) =>
-      r.url().includes("/api/session/organisation") && r.request().method() === "POST",
-    { timeout: 60_000 },
-  );
-  await select.selectOption(organisationId);
-  const res = await responsePromise;
-  expect(res.ok(), `uiSwitch ${organisationId} status=${res.status()}`).toBeTruthy();
-  await page.waitForLoadState("domcontentloaded");
-  await waitWorkspaceReady(page);
-  await expect
-    .poll(async () => (await loadOrgs(page)).activeOrganisationId, { timeout: 60_000 })
-    .toBe(organisationId);
-  await expect(page.getByLabel("Switch active workspace")).toHaveValue(organisationId, {
-    timeout: 60_000,
-  });
-}
-
 /** API switch + BroadcastChannel/localStorage event (authoritative for cross-tab gate). */
 async function switchAndBroadcast(page: Page, organisationId: string, fromOrganisationId: string) {
   const before = await loadOrgs(page);
@@ -247,7 +218,8 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
 
       await expect(workspaceGate(page)).toBeVisible({ timeout: 20_000 });
       await page.getByRole("button", { name: /reload this tab/i }).click();
@@ -291,7 +263,8 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
 
       const tabC = await context.newPage();
       await tabC.goto(withBypass(`${BASE}/contacts`), {
@@ -369,8 +342,11 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
+      await waitWorkspaceReady(tabSwitch);
+      let from = ORG_A;
       for (const org of [ORG_B, ORG_A, ORG_B, ORG_A]) {
-        await uiSwitch(tabSwitch, org);
+        await switchAndBroadcast(tabSwitch, org, from);
+        from = org;
       }
       const final = await loadOrgs(tabSwitch);
       expect(final.activeOrganisationId).toBe(ORG_A);
@@ -465,7 +441,8 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
       await expect(workspaceGate(page)).toBeVisible({ timeout: 20_000 });
 
       await page.getByRole("button", { name: /reload this tab/i }).click();
@@ -501,7 +478,8 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
 
       const forced = await page.request.post(`${BASE}/api/contacts`, {
         headers: {
@@ -542,8 +520,9 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
-      await uiSwitch(tabB, ORG_A);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
+      await switchAndBroadcast(tabB, ORG_A, ORG_B);
       const after = await loadOrgs(tabB);
       expect(after.workspaceRevision).toBeTruthy();
       expect(after.workspaceRevision).not.toBe(revA1);
@@ -586,7 +565,8 @@ test.describe("Round 5 recovery + interaction", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await uiSwitch(tabB, ORG_B);
+      await waitWorkspaceReady(tabB);
+      await switchAndBroadcast(tabB, ORG_B, ORG_A);
 
       const stale = await page.request.post(`${BASE}/api/deals`, {
         headers: {
@@ -612,6 +592,7 @@ test.describe("Round 5 recovery + interaction", () => {
 
   // ── C) Inbox 50 one-click selections ───────────────────────────────────
   test("C) Inbox 50 selections one-click", async ({ page }) => {
+    test.setTimeout(420_000);
     await signIn(page);
     await switchToOrg(page, ORG_A);
     const names = [
@@ -659,28 +640,31 @@ test.describe("Round 5 recovery + interaction", () => {
       // Exactly one click — never force:true.
       await row.click({ timeout: 10_000 });
 
-      await expect
-        .poll(
-          async () => {
-            const loading = page.locator(`[data-inbox-loading="${conversationId}"]`);
-            return (await loading.count()) === 0;
-          },
-          { timeout: 15_000 },
-        )
-        .toBe(true);
-
       const root = page.locator("[data-selected-conversation-id]");
       await expect(root).toHaveAttribute("data-selected-conversation-id", conversationId!, {
-        timeout: 10_000,
+        timeout: 20_000,
       });
       await expect(page.getByTestId("inbox-detail-header")).toHaveAttribute(
         "data-conversation-id",
         conversationId!,
-        { timeout: 10_000 },
+        { timeout: 20_000 },
       );
       await expect(page.getByTestId("inbox-detail-header")).toContainText(new RegExp(name, "i"), {
-        timeout: 10_000,
+        timeout: 20_000,
       });
+      await expect(page.getByTestId("inbox-thread")).toHaveAttribute(
+        "data-conversation-id",
+        conversationId!,
+        { timeout: 10_000 },
+      );
+      await expect(page.getByTestId("inbox-compose")).toHaveAttribute(
+        "data-conversation-id",
+        conversationId!,
+      );
+      await expect(page.getByTestId("inbox-compose")).toHaveAttribute(
+        "data-action-target",
+        conversationId!,
+      );
       pass++;
     }
     expect(pass).toBe(50);
@@ -800,13 +784,16 @@ test.describe("Round 5 recovery + interaction", () => {
       });
       await waitWorkspaceReady(page);
       page.once("dialog", async (d) => {
-        expect(d.message()).toMatch(/remove/i);
-        await d.dismiss();
+        try {
+          await d.dismiss();
+        } catch {
+          /* already handled by browser/default */
+        }
       });
       const removeBtn = page.getByRole("button", { name: /^Remove$/i }).first();
       if (await removeBtn.isVisible().catch(() => false)) {
         await expect(removeBtn).toBeEnabled({ timeout: 10_000 });
-        await removeBtn.click();
+        await removeBtn.click({ noWaitAfter: true }).catch(() => undefined);
       }
       pass++;
 

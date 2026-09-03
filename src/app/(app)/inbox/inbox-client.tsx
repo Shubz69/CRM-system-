@@ -554,8 +554,20 @@ export default function InboxPage() {
                       Customer
                     </button>
                   </div>
-                  <h2 className="truncate font-semibold" data-testid="inbox-detail-header" data-conversation-id={detail.id}>{detail.contact.fullName}</h2>
-                  <p className="text-sm text-[var(--muted)]">
+                  <h2
+                    className="truncate font-semibold"
+                    data-testid="inbox-detail-header"
+                    data-conversation-id={detail.id}
+                  >
+                    {detail.contact.fullName}
+                  </h2>
+                  <p
+                    className="text-sm text-[var(--muted)]"
+                    data-testid="inbox-thread"
+                    data-conversation-id={detail.id}
+                    data-qualification-id={lead?.id || ""}
+                    data-qualification-status={lead?.qualificationStatus || ""}
+                  >
                     @{detail.contact.instagramUsername} · {detail.intent || "No intent"} · {detail.sentiment || "—"}
                   </p>
                 </div>
@@ -656,6 +668,7 @@ export default function InboxPage() {
                 onSubmit={onReply}
                 className="border-t border-[var(--border)] p-4"
                 data-testid="inbox-compose"
+                data-conversation-id={detail.id}
                 data-action-target={selectedId || ""}
               >
                 {!sendTargetMatches ? (
