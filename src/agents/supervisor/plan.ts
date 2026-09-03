@@ -36,6 +36,54 @@ function looksLikeSummarise(request: string): boolean {
   return /\b(summaris[e]|summarize|summary|tl;?dr|shorten|condense)\b/i.test(request);
 }
 
+function looksLikeCrmInternal(request: string): boolean {
+  const t = request.toLowerCase();
+  if (
+    /\b(summaris[e]|summarize|summary)\b/.test(t) &&
+    /\b(pipeline|deals?|crm|inbox|leads?|follow[- ]?ups?|goals? at risk|awaiting approval)\b/.test(t)
+  ) {
+    return true;
+  }
+  return (
+    /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
+    /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
+    /\b(goals? at risk|content awaiting approval)\b/.test(t) ||
+    /\b(crm|our (contacts|deals|leads)|internal (crm|data))\b/.test(t)
+  );
+}
+
+function crmDeskIntentFromRequest(
+  request: string,
+):
+  | "pipeline_summary"
+  | "follow_ups"
+  | "goals_at_risk"
+  | "conversations_needing_human"
+  | "content_awaiting_approval"
+  | "desk_overview" {
+  const t = request.toLowerCase();
+  if (/\bgoals? at risk\b/.test(t)) return "goals_at_risk";
+  if (/\bcontent awaiting approval|awaiting approval\b/.test(t)) return "content_awaiting_approval";
+  if (/\bneeding (a )?human|handoff|needs? human\b/.test(t)) return "conversations_needing_human";
+  if (/\bfollow[- ]?ups?|needing reply|needs? reply\b/.test(t)) return "follow_ups";
+  if (/\bpipeline|stalled deals?|open deals?\b/.test(t)) return "pipeline_summary";
+  return "desk_overview";
+}
+
+function planCrmDesk(request: string): PlanResult {
+  const intent = crmDeskIntentFromRequest(request);
+  return {
+    kind: "plan",
+    plan: {
+      steps: [{ agentName: "crm_desk", input: { intent, request: request.slice(0, 2000) } }],
+      plainEnglishPlan:
+        intent === "pipeline_summary"
+          ? "I'll read your open deals in this workspace and flag anything stalled — no web research."
+          : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
+    },
+  };
+}
+
 function looksLikeSocialListening(request: string): boolean {
   return /\b(social listening|what('?s| is) (trending|getting attention)|high[- ]engagement|hooks and formats|content themes|audience complaints)\b/i.test(
     request,
@@ -154,6 +202,8 @@ export type ResearchIntentKind =
 
 export function classifyResearchIntent(topic: string): ResearchIntentKind {
   const t = topic.toLowerCase();
+  // CRM/pipeline internal before summarisation — "Summarise my pipeline" must not echo the prompt.
+  if (looksLikeCrmInternal(topic)) return "crm_internal";
   if (/\b(summaris|summariz|tl;?dr|condense|shorten)\b/.test(t)) return "summarisation";
   if (/\b(prospect|find (leads|buyers|customers)|outreach list|icp)\b/.test(t)) return "prospecting";
   if (/\b(crm|pipeline|inbox|our (contacts|deals|leads)|internal)\b/.test(t)) return "crm_internal";
@@ -295,6 +345,11 @@ export function planAgentRunDeterministic(
     return clarificationForImagingUpload();
   }
 
+  // Internal CRM / pipeline — before summarise/research so "Summarise my pipeline" uses deals.
+  if (looksLikeCrmInternal(trimmed)) {
+    return planCrmDesk(trimmed);
+  }
+
   if (looksLikeSocialListening(trimmed)) {
     if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
       return formatClarification();
@@ -370,6 +425,7 @@ const llmPlanSchema = z.object({
           "critic",
           "imaging_analyze",
           "imaging_generate",
+          "crm_desk",
         ]),
         text: z.string().optional(),
         topic: z.string().optional(),
@@ -450,6 +506,12 @@ export async function planAgentRun(
             request: s.text || s.topic || request,
             referenceAssetId: s.referenceAssetId || org.referenceAssetId || "",
           },
+        };
+      }
+      if (s.agentName === "crm_desk") {
+        return {
+          agentName: s.agentName,
+          input: { intent: "desk_overview", request: s.text || s.topic || request },
         };
       }
       return { agentName: s.agentName, input: {} };

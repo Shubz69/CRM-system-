@@ -1,0 +1,183 @@
+{
+  "startedAt": "2026-09-02T22:34:15.355Z",
+  "base": "https://crm-system-eight-wine.vercel.app",
+  "activeOrganisation": {
+    "id": "cmsswt6gj0005ufy8jwbkvd47",
+    "name": "Shobhit Agency",
+    "membershipCount": 1,
+    "membershipNames": [
+      "Shobhit Agency"
+    ],
+    "createdAt": "2026-08-14T12:14:37.556Z"
+  },
+  "automatedQaOrgExists": false,
+  "platformAdmin": {
+    "attempted": true,
+    "workspacesStatus": 200,
+    "workspaceCount": 6,
+    "workspaceNames": [
+      "Agent Desk New Business QA 1788388042953",
+      "Ret Keep",
+      "Ret B",
+      "Ret A",
+      "Shobhit Agency",
+      "Agent Desk Platform"
+    ],
+    "qaNamedOrgs": [
+      {
+        "id": "cmtko2ihw0002lb04ie3frui6",
+        "name": "Agent Desk New Business QA 1788388042953",
+        "createdAt": "2026-09-02T22:27:29.445Z"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "recordType": "product",
+      "recordId": "cmtknv3wy0007jr041npd2ig6",
+      "recordName": "Aura Terminal UI 1788387686070",
+      "createdAt": "2026-09-02T22:21:43.954Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknuzx2000pie0a6ec37om5",
+      "recordName": "Aura Terminal",
+      "createdAt": "2026-09-02T22:21:38.774Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknuwhm0005jr044q71ljpc",
+      "recordName": "Aura Terminal",
+      "createdAt": "2026-09-02T22:21:34.331Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknuw04000nie0agbbscrfy",
+      "recordName": "Agent Desk",
+      "createdAt": "2026-09-02T22:21:33.623Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknrhxt000jie0arbtzo0br",
+      "recordName": "Batch Product 3 1788387450614",
+      "createdAt": "2026-09-02T22:18:55.506Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknrhjz0001jo0467jfdfeu",
+      "recordName": "Batch Product 2 1788387450614",
+      "createdAt": "2026-09-02T22:18:55.007Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknrh2f000hie0apb9i53cj",
+      "recordName": "Batch Product 1 1788387450614",
+      "createdAt": "2026-09-02T22:18:54.375Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknrb8d000die0aps4dmf89",
+      "recordName": "Third Product QA 1788387450614",
+      "createdAt": "2026-09-02T22:18:46.813Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknr0gw0005ie0aqfjbw2ez",
+      "recordName": "Aura Terminal QA 1788387450614",
+      "createdAt": "2026-09-02T22:18:32.785Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "product",
+      "recordId": "cmtknqsys0003ie0a8oed5b9n",
+      "recordName": "Agent Desk QA Product 1788387450614",
+      "createdAt": "2026-09-02T22:18:23.141Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "business-context profile.products + QA/acceptance-* evidence"
+    },
+    {
+      "recordType": "company",
+      "recordId": "cmtko3cge0001jg0ax18dblql",
+      "recordName": "Northstar Ops Ltd 1788388042953",
+      "createdAt": "2026-09-02T22:28:08.271Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/companies"
+    },
+    {
+      "recordType": "company",
+      "recordId": "cmtknqgqm0001ki0aylkrltwr",
+      "recordName": "E2E-tenant-probe-1788387485726",
+      "createdAt": "2026-09-02T22:18:07.294Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/companies"
+    },
+    {
+      "recordType": "company",
+      "recordId": "cmtkie0850005ji049djdqho1",
+      "recordName": "E2E-tenant-probe-1788378506561",
+      "createdAt": "2026-09-02T19:48:27.942Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/companies"
+    },
+    {
+      "recordType": "company",
+      "recordId": "cmtgefvui0001kz045jri1ovo",
+      "recordName": "E2E-tenant-probe-1788130011372",
+      "createdAt": "2026-08-30T22:46:52.410Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/companies"
+    },
+    {
+      "recordType": "deal",
+      "recordId": "cmtko3e1s0001gt0a79y361hu",
+      "recordName": "Northstar FDE Pilot 1788388042953",
+      "createdAt": "2026-09-02T22:28:10.336Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/deals"
+    },
+    {
+      "recordType": "content",
+      "recordId": "cmtkey66h0001jk0ak5mjwlx1",
+      "recordName": "QA Smoke Test Post - Agent Desk Production Acceptance",
+      "createdAt": "2026-09-02T18:12:10.313Z",
+      "organisationId": "cmsswt6gj0005ufy8jwbkvd47",
+      "evidence": "GET /api/content"
+    },
+    {
+      "recordType": "inventory_marker",
+      "recordId": "QA-mutation-target-probe-1830",
+      "recordName": "QA-mutation-target-probe-1830",
+      "createdAt": "2026-09-03T11:00:00.000Z",
+      "organisationId": "cmsrtrln1000aufyswjcwliz7",
+      "evidence": "Round 3 Platform + prior E2E/Northstar inventory — no deletes; Automated QA preferred for mutations"
+    },
+    {
+      "recordType": "organisation",
+      "recordId": "cmtkp47vk0000l504gvfzi1sj",
+      "recordName": "Agent Desk Automated QA",
+      "createdAt": null,
+      "organisationId": "cmtkp47vk0000l504gvfzi1sj",
+      "evidence": "Preferred Cursor QA mutation tenant (not Shobhit Agency)"
+    }
+  ],
+  "errors": [],
+  "finishedAt": "2026-09-02T22:34:42.094Z",
+  "round3UpdatedAt": "2026-09-03T12:00:00.000Z"
+}

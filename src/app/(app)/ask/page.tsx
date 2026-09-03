@@ -392,20 +392,21 @@ export default function AskPage() {
     }
     if (card.prefill) {
       setRequest(card.prefill);
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        const el = inputRef.current;
-        if (el) {
-          const end = el.value.length;
-          el.setSelectionRange(end, end);
-        }
-      });
       const needsTopic = /\s$/.test(card.prefill) || /:\s*$/.test(card.prefill);
       if (needsTopic) {
+        requestAnimationFrame(() => {
+          inputRef.current?.focus();
+          const el = inputRef.current;
+          if (el) {
+            const end = el.value.length;
+            el.setSelectionRange(end, end);
+          }
+        });
         toast.message("Add a topic in the box, then press Go");
-      } else {
-        toast.message("Prompt ready — press Go to run");
+        return;
       }
+      // Complete prompts (e.g. Summarise my pipeline) — one click starts the run.
+      void startRun(card.prefill);
     }
   }
 

@@ -40,6 +40,12 @@ KNOWN_QA_ARTIFACTS_IN_SHOBHIT_AGENCY=
 ## Orgs created by acceptance (not Shobhit Agency records, but QA residue)
 - organisation | cmtko2ihw0002lb04ie3frui6 | Agent Desk New Business QA 1788388042953 | createdAt=2026-09-02T22:27:29.445Z | reason=Platform Admin create_beta (NOT Automated QA) | relationships=beta workspace residue
 
+## Platform + prior E2E / Northstar candidates (inventory only — DO NOT DELETE)
+- label | QA-mutation-target-probe-1830 | org=cmsrtrln1000aufyswjcwliz7 (Agent Desk Platform) | note=Round 3 inventory marker for Platform mutation-target probe — preserve; no deletes
+- prior E2E company patterns already listed above (E2E-tenant-probe-*)
+- prior Northstar Ops Ltd + Northstar FDE Pilot deal (Shobhit Agency contamination — listed under Companies/Deals)
+- Automated QA org id=cmtkp47vk0000l504gvfzi1sj — preferred mutation target for Cursor QA
+
 ## CLEANUP CANDIDATES (for Shobhit approval — DO NOT DELETE YET)
 1. Timestamped Batch / Aura Terminal QA / Agent Desk QA Product rows under Products.
 2. E2E-tenant-probe-* companies.
@@ -47,6 +53,7 @@ KNOWN_QA_ARTIFACTS_IN_SHOBHIT_AGENCY=
 4. QA Smoke Test Post content piece.
 5. Agent Desk New Business QA org — confirm not in use.
 6. SUSPECT: Alison Calder - company — human confirm before cleanup.
+7. Platform probe residue tagged QA-mutation-target-probe-1830 — inventory only until approved.
 
 ## SOCIAL QUOTA NOTE (Agency — inventory only, no mutation)
 - REQUIRED_MAX_FOR_IG_LI_YT_TT=4

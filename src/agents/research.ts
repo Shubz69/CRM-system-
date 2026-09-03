@@ -120,10 +120,12 @@ async function expandResearchQueries(input: {
 
   const system = socialish
     ? 'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.'
-    : 'You expand one business or market research question into several targeted factual search queries. Prefer statistics, reports, official sources, and recent analysis — not viral social posts unless the question asks for them. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
+    : 'You expand one business or market research question into several targeted factual search queries. Prefer statistics, reports, official sources, and recent analysis — not viral social posts unless the question asks for them. For UK GDPR / data protection topics, prefer ICO (ico.org.uk), GOV.UK, and legislation.gov.uk over blogs. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
   const knowledgeBlock = input.knowledgeContext?.trim()
     ? `\nInternal company context (use only to focus queries — do not invent sources from it):\n${input.knowledgeContext.slice(0, 3000)}\n`
     : "";
+  const ukGdpr =
+    /\b(gdpr|data protection|privacy|ico|uk.*(compliance|regulation))\b/i.test(input.topic);
   const prompt = socialish
     ? `Topic: ${input.topic}
 Niche hint (optional): ${input.nicheHint || "(none)"}
@@ -132,7 +134,11 @@ Include query variants with words like: this week, trending, viral, algorithm, s
     : `Topic: ${input.topic}
 Intent hint (optional): ${input.nicheHint || "(none)"}
 ${knowledgeBlock}Produce 4-8 concrete search queries as JSON for grounded, reviewable sources (reports, news, official stats, analyst notes).
-Do NOT bias toward viral talk, social trends, reels, or shorts unless the topic explicitly asks for social content.`;
+${
+  ukGdpr
+    ? "Include at least two queries that target site:ico.org.uk, site:gov.uk, or site:legislation.gov.uk. If only weak blog sources are found, note the limitation rather than overstating confidence.\n"
+    : ""
+}Do NOT bias toward viral talk, social trends, reels, or shorts unless the topic explicitly asks for social content.`;
 
   try {
     const expand = await completeStructured(queryExpandSchema, {

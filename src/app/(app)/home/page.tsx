@@ -26,6 +26,7 @@ type Briefing = {
 
 type Snapshot = {
   needsReply: number | null;
+  needingHuman: number | null;
   activeLeads: number | null;
   openDeals: number | null;
   opportunities: number | null;
@@ -44,6 +45,7 @@ export default function HomePage() {
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>({
     needsReply: null,
+    needingHuman: null,
     activeLeads: null,
     openDeals: null,
     opportunities: null,
@@ -71,12 +73,18 @@ export default function HomePage() {
         if (!cancelled && briefJson) setBriefing(briefJson as Briefing);
 
         let needsReply: number | null = null;
+        let needingHuman: number | null = null;
         if (convRes.ok) {
           const cJson = await convRes.json();
           const items = (cJson.conversations ?? cJson.items ?? []) as Array<{
             unreadCount?: number;
             needsHumanReview?: boolean;
+            handlingMode?: string;
           }>;
+          needingHuman = items.filter(
+            (c) => c.needsHumanReview || c.handlingMode === "HUMAN",
+          ).length;
+          // Broader: unread OR handoff — intentionally can exceed "needing human".
           needsReply = items.filter(
             (c) => (c.unreadCount ?? 0) > 0 || c.needsHumanReview,
           ).length;
@@ -122,6 +130,7 @@ export default function HomePage() {
         if (!cancelled) {
           setSnapshot({
             needsReply,
+            needingHuman,
             activeLeads,
             openDeals,
             opportunities,
@@ -323,12 +332,29 @@ export default function HomePage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Business snapshot" description="Honest counts — never invented activity.">
+      <SectionCard
+        title="Business snapshot"
+        description="Honest counts — ‘needing human’ is handoffs only; ‘needing reply’ also includes unread threads."
+      >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SnapshotCard
-            title="Conversations needing reply"
+            title="Needing a human"
+            value={snapshot.needingHuman == null ? "—" : String(snapshot.needingHuman)}
+            body={
+              snapshot.needingHuman == null
+                ? "No data yet"
+                : "Handoff / human handling only"
+            }
+            href="/inbox?queue=human"
+          />
+          <SnapshotCard
+            title="Needing reply"
             value={snapshot.needsReply == null ? "—" : String(snapshot.needsReply)}
-            body={snapshot.needsReply == null ? "No data yet" : "Unread or needing human review"}
+            body={
+              snapshot.needsReply == null
+                ? "No data yet"
+                : "Unread or needing human review"
+            }
             href="/inbox"
           />
           <SnapshotCard
@@ -361,6 +387,8 @@ export default function HomePage() {
             }
             href="/opportunities"
           />
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SnapshotCard
             title="Goal progress"
             value={

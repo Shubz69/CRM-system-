@@ -1037,7 +1037,10 @@ function attachResearchQualityIfApplicable(input: {
     const withQuality: Record<string, unknown> = {
       ...obj,
       researchQuality: report,
-      researchQualitySummary: `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
+      researchQualitySummary:
+        report.overall === 0 && !report.accepted
+          ? "Quality gate failed — not enough verifiable evidence to score."
+          : `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
     };
 
     // Below threshold: keep best supported answer but surface limitations (never invent).

@@ -25,6 +25,7 @@ describe("agent registry", () => {
     expect(names).toEqual([
       "analyst",
       "critic",
+      "crm_desk",
       "echo",
       "imaging_analyze",
       "imaging_generate",
@@ -34,7 +35,7 @@ describe("agent registry", () => {
     ]);
     expect(getAgent("research").name).toBe("research");
     ensureAgentsRegistered();
-    expect(listAgents()).toHaveLength(8);
+    expect(listAgents()).toHaveLength(9);
   });
 
   it("rejects duplicate registration", () => {
@@ -63,6 +64,7 @@ describe("agent registry", () => {
         prompt: "A calm workspace with soft morning light",
         referenceAssetId: "asset_1",
       },
+      crm_desk: { intent: "pipeline_summary", request: "Summarise my pipeline" },
     };
 
     for (const agent of listAgents()) {

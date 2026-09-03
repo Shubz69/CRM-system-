@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { evaluateMessagingWindow, formatDurationRemaining } from "@/lib/messaging-window";
@@ -8,6 +8,8 @@ import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageLoading } from "@/components/ui/page-state";
 import { statusLabel } from "@/lib/customer-labels";
+import { useSession } from "next-auth/react";
+import { workspaceFetch } from "@/lib/workspace-client";
 
 type ConversationListItem = {
   id: string;
@@ -80,6 +82,8 @@ type Member = { id: string; name: string | null; email: string; role: string };
 
 export default function InboxPage() {
   const searchParams = useSearchParams();
+  const { data: session } = useSession();
+  const expectedOrgId = session?.user?.organisationId ?? null;
   const [items, setItems] = useState<ConversationListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(
     searchParams.get("c") || searchParams.get("conversationId"),
@@ -93,6 +97,13 @@ export default function InboxPage() {
   const [queue, setQueue] = useState<"all" | "needs_reply" | "hot" | "human" | "waiting">("all");
   const [mobilePanel, setMobilePanel] = useState<"list" | "thread">("list");
   const [showCustomerSheet, setShowCustomerSheet] = useState(false);
+  const detailSeq = useRef(0);
+  const detailAbort = useRef<AbortController | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -103,9 +114,15 @@ export default function InboxPage() {
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
-    const res = await fetch(`/api/conversations/${id}`);
+    detailAbort.current?.abort();
+    const ac = new AbortController();
+    detailAbort.current = ac;
+    const seq = ++detailSeq.current;
+    const res = await fetch(`/api/conversations/${id}`, { signal: ac.signal });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load conversation");
+    // Late response for A must not overwrite B.
+    if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
     setDetail(json.conversation);
   }, []);
 
@@ -135,8 +152,19 @@ export default function InboxPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    loadDetail(selectedId).catch((e) => toast.error(e.message));
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    // Clear stale thread immediately so we never show A while B is selected.
+    setDetail((prev) => (prev && prev.id === selectedId ? prev : null));
+    loadDetail(selectedId).catch((e) => {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      toast.error(e.message);
+    });
+    return () => {
+      detailAbort.current?.abort();
+    };
   }, [selectedId, loadDetail]);
 
   useEffect(() => {
@@ -149,6 +177,9 @@ export default function InboxPage() {
   }, [showCustomerSheet]);
 
   const lead = detail?.leads?.[0];
+  const sendTargetMatches =
+    Boolean(selectedId) && Boolean(detail) && detail?.id === selectedId;
+  const optedOut = Boolean(detail?.contact.optedOut);
 
   const messagingWindow = useMemo(() => {
     if (!detail) return null;
@@ -168,7 +199,15 @@ export default function InboxPage() {
 
   async function patch(body: Record<string, unknown>) {
     if (!selectedId) return;
-    const res = await fetch(`/api/conversations/${selectedId}`, {
+    if (!sendTargetMatches) {
+      toast.error("Conversation view is still loading — wait before sending.");
+      return;
+    }
+    if (body.reply && optedOut) {
+      toast.error("Do not contact — customer opted out.");
+      return;
+    }
+    const res = await workspaceFetch(expectedOrgId, `/api/conversations/${selectedId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -185,6 +224,14 @@ export default function InboxPage() {
   async function onReply(e: FormEvent) {
     e.preventDefault();
     if (!reply.trim()) return;
+    if (!sendTargetMatches) {
+      toast.error("Selected conversation does not match the open thread — send blocked.");
+      return;
+    }
+    if (optedOut) {
+      toast.error("Do not contact — customer opted out.");
+      return;
+    }
     await patch({ reply });
     setReply("");
   }
@@ -510,7 +557,16 @@ export default function InboxPage() {
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                {detail.needsHumanReview || detail.objections.length > 0 || (lead && lead.qualificationStatus !== "QUALIFIED") ? (
+                {optedOut ? (
+                  <div className="rounded-xl border border-[color-mix(in_oklab,var(--danger)_35%,var(--border))] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] p-3">
+                    <p className="caption">Do not contact</p>
+                    <p className="card-title mt-1">Do not contact — customer opted out.</p>
+                    <p className="meta mt-1">
+                      Why: Opt-out is recorded on this contact. No qualification, booking, or outreach
+                      drafts should be sent.
+                    </p>
+                  </div>
+                ) : detail.needsHumanReview || detail.objections.length > 0 || (lead && lead.qualificationStatus !== "QUALIFIED") ? (
                   <div className="rounded-xl border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-[var(--accent-soft)]/40 p-3">
                     <p className="caption">Agent Desk suggests</p>
                     <p className="card-title mt-1">
@@ -521,10 +577,27 @@ export default function InboxPage() {
                           : "Ask one more qualification question before offering a booking."}
                     </p>
                     {detail.objections[0] ? (
-                      <p className="meta mt-1">Why: {detail.objections[0].text}</p>
+                      <p className="meta mt-1">
+                        Why:{" "}
+                        {/price|cost|budget|expensive/i.test(detail.objections[0].category) ||
+                        /price|cost|budget|expensive/i.test(detail.objections[0].text)
+                          ? "Customer raised a pricing concern — clarify value before advancing."
+                          : `Objection category ${detail.objections[0].category} needs a clear answer before advancing.`}
+                      </p>
                     ) : lead?.scoreExplanation ? (
-                      <p className="meta mt-1">Why: {lead.scoreExplanation}</p>
-                    ) : null}
+                      <p className="meta mt-1">
+                        Why:{" "}
+                        {lead.scoreExplanation.trim() ===
+                        (detail.messages[detail.messages.length - 1]?.body || "").trim()
+                          ? "Lead score needs human review — the latest message alone is not a complete explanation."
+                          : lead.scoreExplanation}
+                      </p>
+                    ) : (
+                      <p className="meta mt-1">
+                        Why: This thread is flagged for review based on qualification status, not a
+                        full draft reply.
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
@@ -558,14 +631,33 @@ export default function InboxPage() {
               </div>
 
               <form onSubmit={onReply} className="border-t border-[var(--border)] p-4">
+                {!sendTargetMatches ? (
+                  <p className="mb-2 text-xs text-[var(--muted)]">
+                    Loading the selected conversation — send is blocked until the thread matches.
+                  </p>
+                ) : null}
+                {optedOut ? (
+                  <p className="mb-2 text-xs text-[var(--danger)]">
+                    Do not contact — customer opted out. Manual and AI replies are blocked.
+                  </p>
+                ) : null}
                 <textarea
                   className="input min-h-24"
-                  placeholder="Write a manual reply (pauses AI)"
+                  placeholder={
+                    optedOut
+                      ? "Contact opted out — replies disabled"
+                      : "Write a manual reply (pauses AI)"
+                  }
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
+                  disabled={optedOut || !sendTargetMatches}
                 />
                 <div className="mt-2 flex justify-end">
-                  <button className="btn btn-primary" type="submit">
+                  <button
+                    className="btn btn-primary"
+                    type="submit"
+                    disabled={optedOut || !sendTargetMatches || !reply.trim()}
+                  >
                     Send reply
                   </button>
                 </div>

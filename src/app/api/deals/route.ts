@@ -1,7 +1,13 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { DealStatus } from "@prisma/client";
-import { requirePermission, jsonError } from "@/lib/session";
+import {
+  requirePermission,
+  requirePermissionForMutation,
+  jsonError,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { createDeal } from "@/services/crm-v2";
 
@@ -40,14 +46,16 @@ const createSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("leads:write");
-    const body = createSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
+    const body = createSchema.parse(raw);
     const id = await createDeal({
       organisationId: session.organisationId,
       ...body,
     });
-    return Response.json({ id });
+    return Response.json({ id, organisationId: session.organisationId });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
@@ -66,8 +74,9 @@ const patchSchema = z.object({
 
 export async function PATCH(req: NextRequest) {
   try {
-    const session = await requirePermission("leads:write");
-    const body = patchSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
+    const body = patchSchema.parse(raw);
     const existing = await prisma.deal.findFirst({
       where: { id: body.id, organisationId: session.organisationId, deletedAt: null },
     });
@@ -130,8 +139,9 @@ export async function PATCH(req: NextRequest) {
         });
       }
     });
-    return Response.json({ ok: true });
+    return Response.json({ ok: true, organisationId: session.organisationId });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

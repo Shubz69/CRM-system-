@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/db";
-import { requirePermission, jsonError } from "@/lib/session";
+import {
+  requirePermission,
+  requirePermissionForMutation,
+  jsonError,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import {
@@ -40,8 +46,12 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("automations:manage");
     const body = await req.json();
+    const session = await requirePermissionForMutation(
+      "automations:manage",
+      req,
+      body && typeof body === "object" ? (body as Record<string, unknown>) : null,
+    );
 
     // NL compile + optional create
     if (body?.action === "compile") {
@@ -114,6 +124,7 @@ export async function POST(req: Request) {
     });
     return Response.json({ rule, organisationId: session.organisationId }, { status: 201 });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 400);
@@ -122,8 +133,13 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await requirePermission("automations:manage");
-    const body = ruleSchema.extend({ id: z.string() }).parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation(
+      "automations:manage",
+      req,
+      raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null,
+    );
+    const body = ruleSchema.extend({ id: z.string() }).parse(raw);
     const { id, conditions, actions, naturalLanguage: _nl, ...rest } = body;
     const data: Prisma.AutomationRuleUpdateManyMutationInput = { ...rest };
     if (conditions) data.conditions = conditions as Prisma.InputJsonValue;
@@ -159,8 +175,9 @@ export async function PATCH(req: Request) {
       data,
     });
     if (!result.count) return jsonError("Automation rule not found", 404);
-    return Response.json({ ok: true });
+    return Response.json({ ok: true, organisationId: session.organisationId });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 400);

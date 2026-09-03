@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { HandlingMode } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
@@ -83,9 +83,14 @@ const patchSchema = z.object({
 
 export async function PATCH(req: NextRequest, { params }: Params) {
   try {
-    const session = await requirePermission("inbox:write");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation(
+      "inbox:write",
+      req,
+      raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null,
+    );
     const { id } = await params;
-    const body = patchSchema.parse(await req.json());
+    const body = patchSchema.parse(raw);
 
     const conversation = await prisma.conversation.findFirst({
       where: { id, organisationId: session.organisationId, deletedAt: null },
@@ -196,7 +201,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       });
       if (!windowState.humanReplyAllowed) {
         return jsonError(
-          windowState.humanBlockedReason || "Human messaging window has closed",
+          windowState.humanBlockedReason?.includes("opted out")
+            ? "Do not contact — customer opted out."
+            : windowState.humanBlockedReason || "Human messaging window has closed",
           403,
         );
       }
@@ -247,7 +254,19 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           sendResult.code === "ZERNIO_NO_PRIOR_INBOUND" ||
           sendResult.code === "PROVIDER_POLICY_BLOCKED"
         ) {
-          return jsonError(sendResult.code, 403);
+          if (
+            sendResult.code === "CONTACT_OPTED_OUT" ||
+            sendResult.code === "DO_NOT_CONTACT" ||
+            sendResult.code === "CONTACT_SUPPRESSED"
+          ) {
+            return jsonError("Do not contact — customer opted out.", 403);
+          }
+          return jsonError(
+            sendResult.code === "MESSAGING_WINDOW_CLOSED"
+              ? "Messaging window has closed"
+              : "This reply could not be sent under current messaging rules.",
+            403,
+          );
         }
         if (sendResult.code === "STALE_CONTEXT") {
           return jsonError("Stale conversation context — refresh and retry", 409);
@@ -273,6 +292,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
     return Response.json({ ok: true });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     logger.error("Conversation patch failed", { message });
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

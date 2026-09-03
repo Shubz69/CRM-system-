@@ -20,6 +20,8 @@ import {
 } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { WorkspaceChangedGate } from "@/components/workspace-changed-gate";
+import { broadcastOrgChanged } from "@/lib/workspace-client";
 
 type OrgOption = {
   id: string;
@@ -115,6 +117,12 @@ export function AppShell({
   }, [session?.user?.organisationId, locked]);
 
   async function switchOrg(organisationId: string) {
+    const fromId = session?.user?.organisationId ?? null;
+    const fromName =
+      orgs.find((o) => o.id === fromId)?.name ||
+      session?.user?.organisationName ||
+      orgName ||
+      null;
     try {
       const res = await fetch("/api/session/organisation", {
         method: "POST",
@@ -122,51 +130,43 @@ export function AppShell({
         body: JSON.stringify({ organisationId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Switch failed");
-      // Other open tabs must refresh before mutating — displayed org must match target.
-      try {
-        const bc = new BroadcastChannel("agent-desk-workspace");
-        bc.postMessage({
-          type: "org-changed",
-          organisationId,
-          organisationName: json.organisationName,
-        });
-        bc.close();
-      } catch {
-        /* BroadcastChannel unavailable — this tab still reloads */
+      if (!res.ok) {
+        throw new Error(json.error || "Switch failed");
       }
+      if (!json.verified || json.organisationId !== organisationId) {
+        throw new Error(json.error || "Workspace switch could not be confirmed");
+      }
+
       await update({ organisationId });
+
+      // READ BACK — never toast success while GET still shows the old org.
+      const [orgsRes, authRes] = await Promise.all([
+        fetch("/api/organisations", { cache: "no-store" }),
+        fetch("/api/auth/session", { cache: "no-store" }),
+      ]);
+      const orgsJson = orgsRes.ok ? await orgsRes.json() : null;
+      const authJson = authRes.ok ? await authRes.json() : null;
+      const activeFromOrgs = orgsJson?.activeOrganisationId as string | undefined;
+      const activeFromAuth = authJson?.user?.organisationId as string | undefined;
+      if (activeFromOrgs !== organisationId || activeFromAuth !== organisationId) {
+        throw new Error(
+          "Workspace switch did not apply to this session. Please try again.",
+        );
+      }
+
+      broadcastOrgChanged({
+        type: "org-changed",
+        organisationId,
+        organisationName: json.organisationName,
+        fromOrganisationId: fromId,
+        fromOrganisationName: fromName,
+      });
       toast.success(`Switched to ${json.organisationName}`);
       window.location.reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not switch organisation");
     }
   }
-
-  useEffect(() => {
-    let bc: BroadcastChannel | null = null;
-    try {
-      bc = new BroadcastChannel("agent-desk-workspace");
-      bc.onmessage = (ev) => {
-        const data = ev.data as { type?: string; organisationId?: string; organisationName?: string };
-        if (data?.type !== "org-changed" || !data.organisationId) return;
-        if (data.organisationId === session?.user?.organisationId) return;
-        toast.message(
-          `Workspace changed to ${data.organisationName || "another organisation"} in another tab — refreshing so actions stay on the right account.`,
-        );
-        window.location.reload();
-      };
-    } catch {
-      bc = null;
-    }
-    return () => {
-      try {
-        bc?.close();
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [session?.user?.organisationId]);
 
   const activeName =
     orgs.find((o) => o.isActive)?.name ||
@@ -203,6 +203,14 @@ export function AppShell({
 
   return (
     <div className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]">
+      <WorkspaceChangedGate
+        currentOrganisationId={session?.user?.organisationId}
+        currentOrganisationName={
+          orgs.find((o) => o.isActive)?.name ||
+          session?.user?.organisationName ||
+          orgName
+        }
+      />
       <div className="pointer-events-none absolute inset-0 app-atmosphere" aria-hidden />
 
       <aside

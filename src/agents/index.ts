@@ -7,6 +7,7 @@ import { analystAgent } from "@/agents/analyst";
 import { criticAgent } from "@/agents/critic";
 import { imagingAnalyzeAgent } from "@/agents/imaging-analyze";
 import { imagingGenerateAgent } from "@/agents/imaging-generate";
+import { crmDeskAgent } from "@/agents/crm-desk";
 import type { AnyAgent } from "@/agents/types";
 import { ensureBuiltinToolsRegistered } from "@/kernel";
 
@@ -21,6 +22,7 @@ const BUILTIN: AnyAgent[] = [
   criticAgent,
   imagingAnalyzeAgent,
   imagingGenerateAgent,
+  crmDeskAgent,
 ];
 
 /** Register built-in agents once. */
@@ -49,6 +51,7 @@ export {
   criticAgent,
   imagingAnalyzeAgent,
   imagingGenerateAgent,
+  crmDeskAgent,
 };
 export {
   getAgent,

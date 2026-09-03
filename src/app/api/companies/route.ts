@@ -1,6 +1,12 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { requirePermission, jsonError } from "@/lib/session";
+import {
+  requirePermission,
+  requirePermissionForMutation,
+  jsonError,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { upsertCompany } from "@/services/crm-v2";
 
@@ -13,7 +19,7 @@ export async function GET() {
       take: 100,
       include: { _count: { select: { contacts: true, deals: true } } },
     });
-    return Response.json({ companies });
+    return Response.json({ companies, organisationId: session.organisationId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -32,14 +38,16 @@ const createSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("leads:write");
-    const body = createSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
+    const body = createSchema.parse(raw);
     const id = await upsertCompany({
       organisationId: session.organisationId,
       ...body,
     });
-    return Response.json({ id });
+    return Response.json({ id, organisationId: session.organisationId });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

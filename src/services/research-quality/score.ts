@@ -288,8 +288,15 @@ function tierForSource(s: ScoreResearchInput["sources"][number]): SourceTier {
       return "";
     }
   })();
-  if (/\.gov\b|europa\.eu|ons\.gov|worldbank|oecd|imf\.org/i.test(host)) return "A";
-  if (/\.edu\b|nature\.com|sciencedirect|ieee\.org|acm\.org/i.test(host)) return "A";
+  // UK primary / regulator preference (GDPR, consumer, official stats)
+  if (
+    /\bico\.org\.uk\b|legislation\.gov\.uk\b|\.gov\.uk\b|ons\.gov|europa\.eu|worldbank|oecd|imf\.org/i.test(
+      host,
+    )
+  ) {
+    return "A";
+  }
+  if (/\.gov\b|\.edu\b|nature\.com|sciencedirect|ieee\.org|acm\.org/i.test(host)) return "A";
   if (/reuters|bloomberg|ft\.com|wsj\.com|bbc\.|theguardian|nytimes/i.test(host)) return "B";
   if (/linkedin\.com|youtube\.com|youtu\.be|instagram\.com|tiktok\.com/i.test(host)) return "C";
   if (/medium\.com|substack\.com|blogspot|wordpress/i.test(host)) return "D";
@@ -392,8 +399,39 @@ function confidenceLabel(
 
 /**
  * Score a research answer. Deterministic heuristics — must NOT always return high scores.
+ * When evidence is missing, fail the quality gate honestly instead of inventing a mid % like 48.
  */
 export function scoreResearchQuality(input: ScoreResearchInput): ResearchQualityReport {
+  const hasEvidence = input.claims.length > 0 || input.sources.length > 0;
+  if (!hasEvidence) {
+    return {
+      version: 1,
+      overall: 0,
+      confidenceLabel: "Not accepted",
+      breakdown: {
+        promptFidelity: 0,
+        businessRelevance: 0,
+        factualAccuracy: 0,
+        sourceQuality: 0,
+        crossVerification: 0,
+        freshness: 0,
+        uncertainty: 0,
+      },
+      hardGateFailures: [
+        {
+          code: "UNSUPPORTED_DEFINITIVE_CLAIM",
+          message: "Quality gate failed — not enough verifiable claims or sources to score.",
+        },
+      ],
+      accepted: false,
+      claimConfidences: [],
+      limitations: ["Quality gate failed — not enough verifiable claims or sources to score."],
+      originalUserPrompt: stripClarificationMetadata(input.originalUserPrompt),
+      resolvedIntent: input.resolvedIntent ?? null,
+      answerMode: input.answerMode ?? null,
+    };
+  }
+
   const fidelity = scorePromptFidelity(input);
   const businessRelevance = scoreBusinessRelevance(input);
   const factual = scoreFactualAccuracy(input);
@@ -449,6 +487,20 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
     });
   }
 
+  // High-stakes (GDPR / legal / financial) + only weak sources → never high confidence.
+  const highStakes = /\b(gdpr|data protection|privacy|legal|compliance|ico|regulation)\b/i.test(
+    input.originalUserPrompt,
+  );
+  const tiers = input.sources.map(tierForSource);
+  const weakOnly = tiers.length > 0 && tiers.every((t) => t === "D" || t === "E" || t === "C");
+  if (highStakes && weakOnly) {
+    hardGateFailures.push({
+      code: "UNSUPPORTED_DEFINITIVE_CLAIM",
+      message:
+        "High-stakes topic lacks primary sources (prefer ICO, GOV.UK, or legislation.gov.uk).",
+    });
+  }
+
   // Deduplicate by code+message
   const seen = new Set<string>();
   const uniqueFailures = hardGateFailures.filter((f) => {
@@ -461,6 +513,11 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
   const accepted =
     uniqueFailures.length === 0 && weighted >= RESEARCH_ACCEPTANCE.overallTarget;
 
+  let confidence = confidenceLabel(weighted, accepted || uniqueFailures.length === 0);
+  if (highStakes && weakOnly) {
+    confidence = "Not accepted";
+  }
+
   const limitations = [
     ...(input.gaps || []).slice(0, 6),
     ...uniqueFailures.map((f) => f.message),
@@ -469,10 +526,10 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
   return {
     version: 1,
     overall: weighted,
-    confidenceLabel: confidenceLabel(weighted, accepted || uniqueFailures.length === 0),
+    confidenceLabel: confidence,
     breakdown,
     hardGateFailures: uniqueFailures,
-    accepted,
+    accepted: accepted && !(highStakes && weakOnly),
     claimConfidences: factual.claimConfidences,
     limitations,
     originalUserPrompt: stripClarificationMetadata(input.originalUserPrompt),
@@ -482,5 +539,8 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
 }
 
 export function customerQualitySummary(report: ResearchQualityReport): string {
+  if (!report.accepted && report.overall === 0 && report.hardGateFailures.length) {
+    return "Quality gate failed — not enough verifiable evidence to score.";
+  }
   return `Research quality: ${report.overall}% · ${report.confidenceLabel}`;
 }

@@ -45,8 +45,8 @@ export function evaluateMessagingWindow(input: {
   let humanBlockedReason: string | null = null;
 
   if (input.optedOut) {
-    automatedBlockedReason = "Contact opted out";
-    humanBlockedReason = "Contact opted out";
+    automatedBlockedReason = "Do not contact — customer opted out.";
+    humanBlockedReason = "Do not contact — customer opted out.";
   } else {
     if (input.aiPaused || input.handlingMode === "HUMAN") {
       automatedBlockedReason = input.aiPaused

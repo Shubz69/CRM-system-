@@ -199,6 +199,7 @@ export const authOptions: NextAuthOptions = {
       }
 
       // Periodically confirm the JWT org still exists and the user is still a member.
+      // Authoritative preference: User.activeOrganisationId (durable) over stale JWT.
       // Soft-fail on DB errors — never turn a pool timeout into JWT_SESSION_ERROR / 401 spam.
       const due =
         !token.workspaceCheckedAt ||
@@ -209,8 +210,10 @@ export const authOptions: NextAuthOptions = {
             where: { id: token.id },
             select: { activeOrganisationId: true },
           });
+          // Prefer DB active org so a successful switch in another tab cannot leave this
+          // JWT stranded on the previous workspace for minutes.
           const preferred =
-            token.organisationId || userRow?.activeOrganisationId || null;
+            userRow?.activeOrganisationId || token.organisationId || null;
           const orgChanged =
             Boolean(preferred) && preferred !== token.organisationId;
           const resolved = await resolveActiveWorkspaceForUser({

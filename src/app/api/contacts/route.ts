@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/db";
-import { requirePermission, jsonError } from "@/lib/session";
+import {
+  requirePermission,
+  requirePermissionForMutation,
+  jsonError,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/session";
 import { z } from "zod";
 
 export async function GET(req: Request) {
@@ -67,8 +73,9 @@ const createSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("leads:write");
-    const body = createSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("leads:write", req, raw);
+    const body = createSchema.parse(raw);
 
     const email = body.email?.trim() || null;
     const phone = body.phone?.trim() || null;
@@ -130,6 +137,7 @@ export async function POST(req: Request) {
 
     return Response.json({ id: contact.id, organisationId: session.organisationId }, { status: 201 });
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     if (error instanceof z.ZodError) {
       return jsonError(error.issues[0]?.message || "Check the contact form and try again.", 400);
     }

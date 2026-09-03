@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { GoalCategory, GoalStatus } from "@prisma/client";
-import { jsonError, requirePermission } from "@/lib/session";
+import { jsonError, requirePermission, requirePermissionForMutation, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import {
   attachKpiTarget,
   createGoal,
@@ -78,8 +78,9 @@ const createSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("agent:manage");
-    const body = createSchema.parse(await req.json());
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("agent:manage", req, raw);
+    const body = createSchema.parse(raw);
 
     if (body.action === "create_goal") {
       if (!body.name) return jsonError("name required", 400);
@@ -165,6 +166,7 @@ export async function POST(req: Request) {
     }
     return jsonError("Unknown action", 400);
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

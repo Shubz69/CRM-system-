@@ -6,6 +6,12 @@ import {
   assertActiveWorkspaceAccess,
   WorkspaceAccessError,
 } from "@/services/workspace-access";
+import {
+  assertExpectedOrganisation,
+  readExpectedOrganisationId,
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+} from "@/lib/workspace-mutation-guard";
 
 export async function requireSession() {
   const session = await getServerSession(authOptions);
@@ -35,9 +41,33 @@ export async function requireSession() {
   };
 }
 
+/**
+ * Session + optional expected-organisation guard for mutating routes.
+ * Pass the Request (and parsed body when available) so multi-tab form submits
+ * cannot write into a workspace the operator is no longer viewing.
+ */
+export async function requireSessionForMutation(
+  req: Request,
+  body?: Record<string, unknown> | null,
+) {
+  const session = await requireSession();
+  assertExpectedOrganisation(session.organisationId, readExpectedOrganisationId(req, body));
+  return session;
+}
+
 export async function requirePermission(permission: Permission) {
   const session = await requireSession();
   assertPermission(session.role, permission);
+  return session;
+}
+
+export async function requirePermissionForMutation(
+  permission: Permission,
+  req: Request,
+  body?: Record<string, unknown> | null,
+) {
+  const session = await requirePermission(permission);
+  assertExpectedOrganisation(session.organisationId, readExpectedOrganisationId(req, body));
   return session;
 }
 
@@ -57,3 +87,10 @@ export async function requirePlatformAccess() {
 export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
+
+export {
+  WorkspaceChangedError,
+  workspaceChangedJsonResponse,
+  readExpectedOrganisationId,
+  assertExpectedOrganisation,
+};

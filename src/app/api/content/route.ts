@@ -12,7 +12,7 @@ import {
 } from "@/services/content-os";
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { requirePermission, jsonError } from "@/lib/session";
+import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import { normalizeContentPlatform } from "@/lib/content-platform";
@@ -162,9 +162,10 @@ const postSchema = z.discriminatedUnion("action", [
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePermission("ask:use");
+    const raw = await req.json();
+    const session = await requirePermissionForMutation("ask:use", req, raw);
     assertOrgExpensiveRouteAllowed(session.organisationId, "content");
-    const body = postSchema.parse(await req.json());
+    const body = postSchema.parse(raw);
 
     switch (body.action) {
       case "create_opportunity_from_research": {
@@ -274,6 +275,7 @@ export async function POST(req: NextRequest) {
         return jsonError("Unknown action", 400);
     }
   } catch (error) {
+    if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     if (error instanceof OrgRateLimitError) {
       return Response.json({ error: error.message, code: error.code }, { status: 429 });
     }
