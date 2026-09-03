@@ -24,6 +24,7 @@ export type VisibleWorkflow = {
   steps: WorkflowStep[];
   requiresApproval: boolean;
   compiledFrom?: string;
+  unsupportedNotes?: string[];
 };
 
 const OUTBOUND_ACTIONS = new Set([
@@ -53,15 +54,24 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
     triggerType = "conversation_inactive";
   } else if (lower.includes("booking") || lower.includes("booked")) {
     triggerType = "booking_created";
-  } else if (lower.includes("message") || lower.includes("inbound") || lower.includes("dm")) {
+  } else if (
+    lower.includes("message") ||
+    lower.includes("inbound") ||
+    lower.includes("asks about") ||
+    lower.includes("dm")
+  ) {
     triggerType = "message_received";
   } else if (lower.includes("disqualified")) {
     triggerType = "lead_disqualified";
   }
 
   const conditions: Record<string, unknown> = {};
-  const scoreMatch = lower.match(/score\s*(>=|>|above)\s*(\d+)/);
-  if (scoreMatch) conditions.minScore = Number(scoreMatch[2]);
+  const unsupported: string[] = [];
+  const scoreMatch = lower.match(/scores?\s*(?:>=|>|above)\s*(\d+)/);
+  if (scoreMatch) conditions.minScore = Number(scoreMatch[1]);
+  if (/\bpricing\b|\bprice\b/.test(lower)) {
+    conditions.topicIncludes = ["pricing", "price"];
+  }
   const minutesMatch = lower.match(/(\d+)\s*min/);
   if (minutesMatch && triggerType === "conversation_inactive") {
     conditions.minutes = Number(minutesMatch[1]);
@@ -73,6 +83,15 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
   }
   if (lower.includes("notify") || lower.includes("alert")) {
     actions.push({ type: "notify_team", message: "Automation alert from NL rule" });
+  }
+  if (
+    lower.includes("draft") &&
+    (lower.includes("reply") || lower.includes("response") || lower.includes("suggested"))
+  ) {
+    actions.push({ type: "draft_reply_for_review", neverSendAutomatically: true });
+  }
+  if (lower.includes("never send") || lower.includes("for my review") || lower.includes("for review")) {
+    conditions.requireHumanReview = true;
   }
   if (lower.includes("follow-up") || lower.includes("follow up") || lower.includes("nudge")) {
     actions.push({
@@ -92,15 +111,29 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
   }
   if (actions.length === 0) {
     actions.push({ type: "notify_team", message: "Rule matched (no specific action parsed)" });
+    unsupported.push(
+      "No specific supported action was recognised — saved as team notify only. Messages are never sent automatically.",
+    );
   }
 
-  const requiresApproval = actions.some((a) => isOutboundAction(String(a.type)));
+  const requiresApproval =
+    actions.some((a) => isOutboundAction(String(a.type))) ||
+    actions.some((a) => a.type === "draft_reply_for_review") ||
+    Boolean(conditions.requireHumanReview);
   const steps = buildWorkflowSteps({
     triggerType,
     conditions,
     actions,
     requiresApproval,
   });
+  if (unsupported.length) {
+    steps.push({
+      id: "capability_note",
+      kind: "outcome",
+      label: "What this rule can do",
+      detail: unsupported.join(" "),
+    });
+  }
 
   return {
     version: 1,
@@ -110,6 +143,7 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
     steps,
     requiresApproval,
     compiledFrom: text.slice(0, 2000),
+    unsupportedNotes: unsupported,
   };
 }
 

@@ -27,12 +27,14 @@ export type WhyEvidence = {
   trendClusterId?: string | null;
   agentRunId?: string | null;
   claimSummaries?: string[];
+  /** Operator-created draft without research linkage. */
+  operatorDraft?: boolean;
 };
 
 export function assertWhyEvidence(evidence: WhyEvidence | null | undefined): WhyEvidence {
   const rationale = evidence?.rationale?.trim();
   if (!rationale) {
-    throw new Error("Content recommendations require whyEvidence.rationale");
+    throw new Error("Content recommendations require a short rationale.");
   }
   const urls = (evidence?.sourceUrls ?? []).filter((u) => typeof u === "string" && u.startsWith("http"));
   const hasLink =
@@ -40,9 +42,9 @@ export function assertWhyEvidence(evidence: WhyEvidence | null | undefined): Why
     Boolean(evidence?.researchJobId) ||
     Boolean(evidence?.trendClusterId) ||
     Boolean(evidence?.agentRunId);
-  if (!hasLink) {
+  if (!hasLink && !evidence?.operatorDraft) {
     throw new Error(
-      "whyEvidence must link to researchJobId, trendClusterId, agentRunId, or at least one sourceUrl",
+      "Add a source URL, or mark this as a manual draft with a rationale.",
     );
   }
   return {
@@ -52,6 +54,7 @@ export function assertWhyEvidence(evidence: WhyEvidence | null | undefined): Why
     trendClusterId: evidence?.trendClusterId ?? null,
     agentRunId: evidence?.agentRunId ?? null,
     claimSummaries: evidence?.claimSummaries ?? [],
+    operatorDraft: evidence?.operatorDraft ?? false,
   };
 }
 
@@ -205,14 +208,23 @@ export async function createDraftPiece(input: {
   title: string;
   body: string;
   platform?: string | null;
-  rationale: string;
-  sourceUrl: string;
+  rationale?: string | null;
+  sourceUrl?: string | null;
   agentRunId?: string | null;
 }): Promise<{ pieceId: string }> {
+  const sourceUrl = input.sourceUrl?.trim() || "";
+  const rationale =
+    input.rationale?.trim() ||
+    (sourceUrl ? "Draft created in Content OS" : "Manual draft created in Content OS");
   const why = assertWhyEvidence({
-    rationale: input.rationale,
-    sourceUrls: [input.sourceUrl],
+    rationale,
+    sourceUrls: sourceUrl ? [sourceUrl] : [],
     agentRunId: input.agentRunId ?? null,
+    operatorDraft: !sourceUrl && !input.agentRunId,
+    claimSummaries:
+      !sourceUrl && !input.agentRunId
+        ? ["Operator-created draft without an external source URL."]
+        : [],
   });
 
   const piece = await prisma.contentPiece.create({

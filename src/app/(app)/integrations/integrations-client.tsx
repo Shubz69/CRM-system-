@@ -765,9 +765,18 @@ export default function IntegrationsClient() {
                   </div>
                 );
               })}
-              {!socialAccounts?.serverConfigured ? (
+              {!socialAccounts?.serverConfigured &&
+              !["instagram", "linkedin", "youtube"].some((p) => {
+                const net =
+                  p === "instagram"
+                    ? socialAccounts?.networks?.instagram
+                    : p === "linkedin"
+                      ? socialAccounts?.networks?.linkedin
+                      : socialAccounts?.networks?.youtube;
+                return net?.status === "CONNECTED" || net?.connected;
+              }) ? (
                 <p className="text-xs text-[var(--muted)]">
-                  Social account linking is not configured on this server.
+                  Connecting new accounts is temporarily unavailable.
                 </p>
               ) : null}
               {socialAccounts?.connectionPolicy?.maxConnectedSocialAccounts != null ? (

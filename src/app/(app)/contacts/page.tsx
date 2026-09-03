@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatLeadSource } from "@/lib/lead-source";
+import { SlideOver } from "@/components/ui/slide-over";
 
 type Contact = {
   id: string;
@@ -24,24 +25,67 @@ type Contact = {
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [q, setQ] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function load(query = q) {
     const res = await fetch(`/api/contacts?q=${encodeURIComponent(query)}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed");
-    setContacts(json.contacts);
+    setContacts(json.contacts ?? []);
   }
 
   useEffect(() => {
-    void load("");
+    void load("").catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load contacts"));
     // initial load only
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function onCreate(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const res = await fetch("/api/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          email: email || undefined,
+          phone: phone || undefined,
+          jobTitle: jobTitle || undefined,
+          companyName: companyName || undefined,
+          notes: notes || undefined,
+          leadSource: "manual",
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not save contact");
+      toast.success("Contact saved");
+      setFullName("");
+      setEmail("");
+      setPhone("");
+      setJobTitle("");
+      setCompanyName("");
+      setNotes("");
+      setDrawerOpen(false);
+      await load("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
-        description="People who messaged your Instagram account."
+        description="People in this workspace — from Instagram, prospecting, or added by your team."
         actions={
           <>
             <form
@@ -61,6 +105,9 @@ export default function ContactsPage() {
                 Search
               </button>
             </form>
+            <button className="btn btn-primary" type="button" onClick={() => setDrawerOpen(true)}>
+              + Add contact
+            </button>
             <a className="btn btn-secondary" href={`/api/contacts/export?q=${encodeURIComponent(q)}`}>
               Export CSV
             </a>
@@ -87,10 +134,10 @@ export default function ContactsPage() {
                   <div className="p-4">
                     <EmptyState
                       title="No contacts yet"
-                      body="People appear here after they message you on Instagram. Connect your account to start collecting leads."
+                      body="Add a person you met, or connect social accounts so inbound conversations appear here."
                       actions={[
-                        { href: "/integrations", label: "Connect Instagram", primary: true },
-                        { href: "/settings/go-live", label: "Setup progress" },
+                        { href: "/integrations", label: "Connect social accounts" },
+                        { href: "/growth/prospecting", label: "Find prospects" },
                       ]}
                     />
                   </div>
@@ -129,6 +176,59 @@ export default function ContactsPage() {
           </tbody>
         </table>
       </div>
+
+      <SlideOver
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="Add contact"
+        description="Name is required. Email and phone are optional — do not invent them."
+      >
+        <form className="space-y-4" onSubmit={onCreate}>
+          <label className="block text-sm font-medium">
+            Full name
+            <input
+              className="input mt-1 w-full"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+              autoFocus
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Job title
+            <input className="input mt-1 w-full" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+          </label>
+          <label className="block text-sm font-medium">
+            Company
+            <input
+              className="input mt-1 w-full"
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="Optional — creates or matches an account"
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Email
+            <input
+              className="input mt-1 w-full"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Phone
+            <input className="input mt-1 w-full" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          </label>
+          <label className="block text-sm font-medium">
+            Notes
+            <textarea className="input mt-1 w-full" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </label>
+          <button className="btn btn-primary" type="submit" disabled={saving}>
+            {saving ? "Saving…" : "Save contact"}
+          </button>
+        </form>
+      </SlideOver>
     </div>
   );
 }

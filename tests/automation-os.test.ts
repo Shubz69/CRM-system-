@@ -21,4 +21,18 @@ describe("NL → visible workflow", () => {
     expect(isOutboundAction("send_follow_up")).toBe(true);
     expect(isOutboundAction("notify_team")).toBe(false);
   });
+
+  it("preserves score, pricing topic, and review-only reply for the customer example", () => {
+    const wf = compileNaturalLanguageToWorkflow(
+      "When a lead scores above 60 and asks about pricing, notify me and draft a suggested reply for my review. Never send automatically.",
+    );
+    expect(wf.triggerType).toBe("message_received");
+    expect(wf.conditions.minScore).toBe(60);
+    expect(wf.conditions.topicIncludes).toEqual(["pricing", "price"]);
+    expect(wf.conditions.requireHumanReview).toBe(true);
+    expect(wf.actions.some((a) => a.type === "notify_team")).toBe(true);
+    expect(wf.actions.some((a) => a.type === "draft_reply_for_review")).toBe(true);
+    expect(wf.actions.some((a) => a.type === "send_message")).toBe(false);
+    expect(wf.requiresApproval).toBe(true);
+  });
 });

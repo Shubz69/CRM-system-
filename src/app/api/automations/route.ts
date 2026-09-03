@@ -30,7 +30,7 @@ export async function GET() {
       },
       orderBy: { updatedAt: "desc" },
     });
-    return Response.json({ rules });
+    return Response.json({ organisationId: session.organisationId, rules });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -61,7 +61,15 @@ export async function POST(req: Request) {
         description: body.description,
         isActive: false,
       });
-      return Response.json({ id, workflow }, { status: 201 });
+      return Response.json(
+        {
+          id,
+          organisationId: session.organisationId,
+          workflow,
+          isActive: false,
+        },
+        { status: 201 },
+      );
     }
 
     const parsed = ruleSchema
@@ -104,7 +112,7 @@ export async function POST(req: Request) {
         isActive: parsed.isActive ?? true,
       },
     });
-    return Response.json({ rule }, { status: 201 });
+    return Response.json({ rule, organisationId: session.organisationId }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

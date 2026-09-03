@@ -26,6 +26,15 @@ export default function CompaniesPage() {
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [detail, setDetail] = useState<{
+    id: string;
+    name: string;
+    domain: string | null;
+    industry: string | null;
+    contacts: Array<{ id: string; fullName: string | null; email: string | null }>;
+    deals: Array<{ id: string; name: string; status: string; amountCents: number | null }>;
+    _count: { contacts: number; deals: number };
+  } | null>(null);
 
   async function load() {
     const res = await fetch("/api/companies");
@@ -121,6 +130,24 @@ export default function CompaniesPage() {
           <article
             key={c.id}
             className="surface-interactive flex flex-wrap items-center gap-3 px-4 py-3"
+            role="button"
+            tabIndex={0}
+            onClick={async () => {
+              try {
+                const res = await fetch(`/api/companies/${c.id}`);
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.error || "Could not load company");
+                setDetail(json.company);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed");
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                (e.currentTarget as HTMLElement).click();
+              }
+            }}
           >
             <div className="min-w-0 flex-1">
               <p className="font-medium">{c.name}</p>
@@ -172,6 +199,58 @@ export default function CompaniesPage() {
             Save company
           </button>
         </form>
+      </SlideOver>
+
+      <SlideOver
+        open={Boolean(detail)}
+        onClose={() => setDetail(null)}
+        title={detail?.name || "Company"}
+        description="Contacts and deals linked to this account."
+      >
+        {detail ? (
+          <div className="space-y-4 text-sm">
+            <p className="text-[var(--muted)]">
+              {[detail.domain, detail.industry].filter(Boolean).join(" · ") || "No extra company details"}
+            </p>
+            <div>
+              <p className="font-medium">Contacts ({detail._count.contacts})</p>
+              {detail.contacts.length === 0 ? (
+                <p className="mt-1 text-[var(--muted)]">None yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1">
+                  {detail.contacts.map((p) => (
+                    <li key={p.id}>
+                      <Link className="underline" href={`/contacts/${p.id}`}>
+                        {p.fullName || "Unnamed"}
+                      </Link>
+                      {p.email ? ` · ${p.email}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <p className="font-medium">Deals ({detail._count.deals})</p>
+              {detail.deals.length === 0 ? (
+                <p className="mt-1 text-[var(--muted)]">None yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1">
+                  {detail.deals.map((d) => (
+                    <li key={d.id}>
+                      <Link className="underline" href="/deals">
+                        {d.name}
+                      </Link>{" "}
+                      · {d.status}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <Link className="btn btn-secondary" href="/contacts">
+              Add a contact
+            </Link>
+          </div>
+        ) : null}
       </SlideOver>
     </div>
   );

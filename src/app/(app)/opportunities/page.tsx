@@ -33,6 +33,7 @@ export default function OpportunitiesPage() {
   const [opportunities, setOpportunities] = useState<Opp[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/opportunities");
@@ -71,7 +72,10 @@ export default function OpportunitiesPage() {
           <button
             className="btn btn-secondary"
             type="button"
+            disabled={scanning}
             onClick={async () => {
+              setScanning(true);
+              toast.message("Scanning…");
               try {
                 const res = await fetch("/api/opportunities", {
                   method: "POST",
@@ -89,11 +93,13 @@ export default function OpportunitiesPage() {
                 );
                 await load();
               } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Failed");
+                toast.error(e instanceof Error ? e.message : "Scan failed");
+              } finally {
+                setScanning(false);
               }
             }}
           >
-            Scan for opportunities
+            {scanning ? "Scanning…" : "Scan for opportunities"}
           </button>
         }
       />

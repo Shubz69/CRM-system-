@@ -8,11 +8,19 @@ import {
 } from "@/kernel";
 
 describe("assertWhyEvidence", () => {
-  it("requires rationale and a link", () => {
+  it("requires rationale and a link unless operator draft", () => {
     expect(() => assertWhyEvidence({ rationale: "" })).toThrow(/rationale/i);
     expect(() =>
       assertWhyEvidence({ rationale: "Because trends say so" }),
-    ).toThrow(/link/i);
+    ).toThrow(/source URL|manual draft/i);
+  });
+
+  it("accepts operator-created drafts without an external URL", () => {
+    const why = assertWhyEvidence({
+      rationale: "Manual draft created in Content OS",
+      operatorDraft: true,
+    });
+    expect(why.operatorDraft).toBe(true);
   });
 
   it("accepts research-backed evidence", () => {

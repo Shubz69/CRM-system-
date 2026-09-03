@@ -57,6 +57,7 @@ export async function GET() {
       eligible: t.eligible,
     }));
     return Response.json({
+      organisationId: session.organisationId,
       opportunities,
       pieces,
       publishingJobs: jobs,
@@ -107,8 +108,14 @@ const postSchema = z.discriminatedUnion("action", [
     action: z.literal("create_draft_piece"),
     title: z.string().min(1).max(200),
     body: z.string().min(1).max(50_000),
-    rationale: z.string().min(1).max(4000),
-    sourceUrl: z.string().url(),
+    rationale: z.string().max(4000).optional(),
+    sourceUrl: z
+      .string()
+      .max(2000)
+      .optional()
+      .refine((v) => !v || /^https?:\/\//i.test(v), {
+        message: "Source URL must start with http:// or https://",
+      }),
     platform: z.string().max(40).optional(),
     agentRunId: z.string().optional(),
   }),
@@ -187,8 +194,8 @@ export async function POST(req: NextRequest) {
         return Response.json(ids);
       }
       case "create_draft_piece": {
-        if (!body.sourceUrl.startsWith("http")) {
-          return jsonError("sourceUrl must be an http(s) URL", 400);
+        if (body.sourceUrl && !/^https?:\/\//i.test(body.sourceUrl)) {
+          return jsonError("Source URL must start with http:// or https://", 400);
         }
         const result = await createDraftPiece({
           organisationId: session.organisationId,
@@ -199,7 +206,7 @@ export async function POST(req: NextRequest) {
           platform: body.platform,
           agentRunId: body.agentRunId,
         });
-        return Response.json(result);
+        return Response.json({ ...result, organisationId: session.organisationId });
       }
       case "update_piece": {
         await updatePiece({
@@ -259,6 +266,17 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (error instanceof OrgRateLimitError) {
       return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
+    if (error instanceof z.ZodError) {
+      const first = error.issues[0];
+      const field = first?.path?.join(".") || "input";
+      const hint =
+        field.includes("sourceUrl")
+          ? "Source URL must be a full http(s) link, or leave it blank for a manual draft."
+          : field.includes("rationale")
+            ? "Add a short rationale, or leave advanced fields blank for a manual draft."
+            : first?.message || "Please check the form and try again.";
+      return jsonError(hint, 400);
     }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
