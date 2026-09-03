@@ -9,6 +9,7 @@ import {
   publishStatusMessage,
   statusLabel,
 } from "@/lib/customer-labels";
+import { normalizeContentPlatform } from "@/lib/content-platform";
 
 type PubJob = {
   id: string;
@@ -43,20 +44,37 @@ type Connection = {
   eligible?: boolean;
 };
 
-const PUBLISHABLE_PLATFORMS = ["instagram", "linkedin", "youtube"] as const;
+const PUBLISHABLE_PLATFORMS = [
+  "instagram",
+  "linkedin",
+  "youtube",
+  "youtube_short",
+  "tiktok",
+] as const;
 
 function platformLabel(platform: string): string {
   const p = platform.toLowerCase();
   if (p === "instagram") return "Instagram";
   if (p === "linkedin") return "LinkedIn";
   if (p === "youtube") return "YouTube";
+  if (p === "youtube_short") return "YouTube Short";
+  if (p === "tiktok") return "TikTok";
   return platform;
 }
 
 function connectionOptionLabel(c: Connection): string {
-  const name = c.displayName?.trim();
-  if (name) return `${platformLabel(c.platform)} · ${name}`;
-  return platformLabel(c.platform);
+  const name = c.displayName?.trim().replace(/^@/, "") || null;
+  const plat = platformLabel(c.platform);
+  if (name) {
+    if (c.platform.toUpperCase() === "INSTAGRAM" || c.platform.toUpperCase() === "TIKTOK") {
+      return `${plat} · @${name}`;
+    }
+    if (c.platform.toUpperCase() === "YOUTUBE") {
+      return `${plat} · ${name}`;
+    }
+    return `${plat} · ${name}`;
+  }
+  return plat;
 }
 
 const BUCKETS = [
@@ -97,7 +115,7 @@ export default function ContentPage() {
   const [body, setBody] = useState("");
   const [rationale, setRationale] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [platform, setPlatform] = useState("instagram");
+  const [platform, setPlatform] = useState("");
   const [editId, setEditId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editBody, setEditBody] = useState("");
@@ -107,6 +125,7 @@ export default function ContentPage() {
   const [scheduledAt, setScheduledAt] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/content");
@@ -125,7 +144,10 @@ export default function ContentPage() {
   }, []);
 
   useEffect(() => {
-    load().catch((e) => toast.error(e.message));
+    setLoading(true);
+    load()
+      .catch((e) => toast.error(e.message))
+      .finally(() => setLoading(false));
   }, [load]);
 
   async function postAction(payload: Record<string, unknown>) {
@@ -179,7 +201,11 @@ export default function ContentPage() {
           ))}
         </div>
 
-        {pieces.length === 0 ? (
+        {loading ? (
+          <div className="surface-muted p-6" role="status" aria-live="polite">
+            <p className="text-sm text-[var(--muted)]">Loading content…</p>
+          </div>
+        ) : pieces.length === 0 ? (
           <div className="surface-muted p-6">
             <p className="font-[family-name:var(--font-fraunces)] text-xl">No content yet</p>
             <p className="mt-1 text-sm text-[var(--muted)]">
@@ -215,12 +241,19 @@ export default function ContentPage() {
           </label>
           <label className="block text-sm font-medium">
             Platform
-            <input
+            <select
               className="input mt-1 w-full"
-              placeholder="e.g. Instagram"
               value={platform}
               onChange={(e) => setPlatform(e.target.value)}
-            />
+              aria-label="Content platform"
+            >
+              <option value="">Select platform…</option>
+              <option value="instagram">Instagram</option>
+              <option value="linkedin">LinkedIn</option>
+              <option value="youtube">YouTube</option>
+              <option value="youtube_short">YouTube Short</option>
+              <option value="tiktok">TikTok</option>
+            </select>
           </label>
           <label className="block text-sm font-medium">
             Brief / content
@@ -258,19 +291,25 @@ export default function ContentPage() {
             type="button"
             onClick={async () => {
               try {
+                const normalized = platform ? normalizeContentPlatform(platform) : null;
+                if (platform && !normalized) {
+                  toast.error("Choose a supported platform: Instagram, LinkedIn, YouTube, YouTube Short, or TikTok.");
+                  return;
+                }
                 await postAction({
                   action: "create_draft_piece",
                   title,
                   body,
                   rationale: rationale || undefined,
                   sourceUrl: sourceUrl || undefined,
-                  platform: platform || undefined,
+                  platform: normalized || undefined,
                 });
                 toast.success("Draft created");
                 setTitle("");
                 setBody("");
                 setRationale("");
                 setSourceUrl("");
+                setPlatform("");
                 setActiveBucket("drafts");
                 setComposerOpen(false);
                 await load();

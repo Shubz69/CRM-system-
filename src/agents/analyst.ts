@@ -74,6 +74,16 @@ export const analystOutputSchema = z.object({
     }),
   ),
   gaps: z.array(z.string()),
+  /** Reviewable source cards (title + URL + platform) for Ask rendering. */
+  sources: z
+    .array(
+      z.object({
+        title: z.string(),
+        url: z.string().url(),
+        platform: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export type AnalystInput = z.infer<typeof analystInputSchema>;
@@ -238,27 +248,52 @@ ${catalog.slice(0, 70_000)}`,
             })
             .filter((c): c is NonNullable<typeof c> => c != null)
             .slice(0, 20);
-          const sourceTitles = job.sources
-            .slice(0, 5)
-            .map((s) => s.title || s.url)
-            .filter(Boolean);
+          // When structured findings are empty but sources exist, ground a usable answer
+          // from source titles/excerpts so customers are not left with a dead-end brief.
+          const sourceGrounded =
+            fallbackClaims.length === 0
+              ? job.sources
+                  .filter((s) => s.url && allowedUrls.has(s.url))
+                  .slice(0, 8)
+                  .map((s) => {
+                    const excerpt = (s.content || "").replace(/\s+/g, " ").trim().slice(0, 220);
+                    return {
+                      claim: excerpt
+                        ? `${s.title || s.url}: ${excerpt}`
+                        : s.title || `Source: ${s.url}`,
+                      sourceUrl: s.url,
+                      evidenceExcerpt: excerpt || undefined,
+                      claimKind: undefined as undefined,
+                      confidence: undefined as undefined,
+                    };
+                  })
+              : [];
+          const groundedClaims = fallbackClaims.length > 0 ? fallbackClaims : sourceGrounded;
+          const sourceCards = job.sources
+            .filter((s) => s.url && allowedUrls.has(s.url))
+            .slice(0, 12)
+            .map((s) => ({
+              title: s.title || s.url,
+              url: s.url,
+              platform: s.platform || "web",
+            }));
           return {
             shortAnswer:
-              fallbackClaims.length > 0
-                ? fallbackClaims
+              groundedClaims.length > 0
+                ? groundedClaims
                     .slice(0, 6)
                     .map((c) => `- ${c.claim}`)
                     .join("\n")
-                : `- Collected ${job.sources.length} sources on “${parsed.topic || job.topic}”.\n- Structured synthesis was unavailable; review sources below.`,
+                : `- Collected ${job.sources.length} sources on “${parsed.topic || job.topic}”.\n- I could not finish a structured answer from these sources. Please try again.`,
             summary:
-              fallbackClaims.length > 0
+              groundedClaims.length > 0
                 ? `Sourced overview of “${parsed.topic || job.topic}” from ${job.sources.length} collected sources.`
                 : `Gathered ${job.sources.length} sources on “${parsed.topic || job.topic}” but could not complete a full structured brief.`,
             brief:
-              fallbackClaims.length > 0
-                ? `## Findings\n${fallbackClaims.map((c) => `- ${c.claim} (${c.sourceUrl})`).join("\n")}\n\n## Sources\n${sourceTitles.map((t) => `- ${t}`).join("\n")}`
-                : `## Sources collected\n${sourceTitles.map((t) => `- ${t}`).join("\n") || "(none)"}`,
-            claims: fallbackClaims,
+              groundedClaims.length > 0
+                ? `## Findings\n${groundedClaims.map((c) => `- ${c.claim} (${c.sourceUrl})`).join("\n")}\n\n## Sources\n${sourceCards.map((s) => `- [${s.title}](${s.url})`).join("\n")}`
+                : `## Sources\n${sourceCards.map((s) => `- [${s.title}](${s.url})`).join("\n") || "(none)"}`,
+            claims: groundedClaims,
             viralExamples: [] as z.infer<typeof viralExampleSchema>[],
             nextBigThings: [] as z.infer<typeof nextBigThingSchema>[],
             contentHooks: [] as string[],
@@ -268,6 +303,7 @@ ${catalog.slice(0, 70_000)}`,
               "Structured analyst synthesis failed validation; showing grounded findings/sources only.",
               ...(briefResult.ok ? [] : ["Retry the Ask for a fuller brief if needed."]),
             ],
+            sources: sourceCards,
           };
         })();
 
@@ -279,6 +315,20 @@ ${catalog.slice(0, 70_000)}`,
         sourceUrls: c.sourceUrls.filter((u) => allowedUrls.has(u)),
       }))
       .filter((c) => c.sourceUrls.length > 0);
+
+    const sourceCards =
+      "sources" in brief && Array.isArray((brief as { sources?: unknown }).sources)
+        ? ((brief as { sources: Array<{ title: string; url: string; platform?: string }> }).sources ||
+            []
+          ).filter((s) => allowedUrls.has(s.url))
+        : job.sources
+            .filter((s) => s.url && allowedUrls.has(s.url))
+            .slice(0, 12)
+            .map((s) => ({
+              title: s.title || s.url,
+              url: s.url,
+              platform: s.platform || "web",
+            }));
 
     const output: AnalystOutput = {
       researchJobId: job.id,
@@ -292,6 +342,7 @@ ${catalog.slice(0, 70_000)}`,
       algorithmNotes: brief.algorithmNotes || [],
       contradictions,
       gaps: brief.gaps || [],
+      sources: sourceCards,
     };
 
     await prisma.researchJob.updateMany({

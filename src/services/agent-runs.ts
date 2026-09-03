@@ -19,6 +19,7 @@ import {
   isModeShapedOutput,
   parseAnswerMode,
 } from "@/services/answer-modes";
+import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 
 export type AgentRunProgress = {
   runId: string;
@@ -287,6 +288,14 @@ export async function createAndEnqueueAgentRun(input: {
       maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
       maxSpendCents: limits?.maxSpendCentsPerRun ?? null,
       referenceAssetId: input.referenceAssetId ?? null,
+      // Immutable provenance — never overwritten with clarification chrome.
+      pendingBrief: {
+        originalUserPrompt: request,
+        clarifications: [] as string[],
+        answerMode: answerMode ?? null,
+        resolvedIntent: null,
+        businessContextUsed: [] as string[],
+      } as Prisma.InputJsonValue,
     },
   });
 
@@ -345,13 +354,48 @@ export async function clarifyAndEnqueueAgentRun(input: {
   }
 
   const formatMode = answerModeFromFormatOption(input.selectedOption);
-  const combined = `${run.request}\n\n[User chose: ${input.selectedOption}]`;
+  // Keep the immutable customer question — never append `[User chose: …]` into
+  // request/topic/prompt content. Format options only update answerMode.
+  // Intent options (Research / Social listening / …) rewrite the verb prefix only.
+  let immutableRequest = stripClarificationMetadata(run.request);
+  const option = input.selectedOption.trim();
+  if (!formatMode) {
+    if (/^research this topic with sources$/i.test(option)) {
+      if (!/\b(research|look up|find out|investigate)\b/i.test(immutableRequest)) {
+        immutableRequest = `Research ${immutableRequest}`.trim();
+      }
+    } else if (/^social listening on (this topic|a niche)$/i.test(option)) {
+      if (!/\bsocial listening\b/i.test(immutableRequest)) {
+        immutableRequest = `Social listening on ${immutableRequest}`.trim();
+      }
+    } else if (/^summarise it into a short brief$/i.test(option)) {
+      if (!/\b(summaris|summariz)\b/i.test(immutableRequest)) {
+        immutableRequest = `Summarise: ${immutableRequest}`.trim();
+      }
+    } else if (/^repeat it back to me$/i.test(option)) {
+      if (!/\b(echo|repeat|say back)\b/i.test(immutableRequest)) {
+        immutableRequest = `Echo: ${immutableRequest}`.trim();
+      }
+    }
+  }
   const preservedMode = formatMode ?? run.answerMode ?? null;
+
+  const priorBrief =
+    run.pendingBrief && typeof run.pendingBrief === "object" && !Array.isArray(run.pendingBrief)
+      ? (run.pendingBrief as Record<string, unknown>)
+      : {};
+  const originalUserPrompt =
+    typeof priorBrief.originalUserPrompt === "string" && priorBrief.originalUserPrompt.trim()
+      ? priorBrief.originalUserPrompt
+      : stripClarificationMetadata(run.request);
+  const priorClarifications = Array.isArray(priorBrief.clarifications)
+    ? priorBrief.clarifications.filter((c): c is string => typeof c === "string")
+    : [];
 
   await prisma.agentRun.updateMany({
     where: { id: run.id, organisationId: input.organisationId },
     data: {
-      request: combined,
+      request: immutableRequest,
       status: "PENDING",
       answerMode: preservedMode,
       clarificationQuestion: null,
@@ -361,6 +405,12 @@ export async function clarifyAndEnqueueAgentRun(input: {
       error: null,
       userFacingError: null,
       finishedAt: null,
+      pendingBrief: {
+        ...priorBrief,
+        originalUserPrompt,
+        clarifications: [...priorClarifications, input.selectedOption].slice(0, 20),
+        answerMode: preservedMode,
+      } as Prisma.InputJsonValue,
     },
   });
 

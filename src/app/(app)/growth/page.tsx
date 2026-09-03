@@ -56,7 +56,7 @@ export default function GrowthHubPage() {
           <Link href="/goals" className="surface surface-interactive p-4">
             <p className="caption">Goals</p>
             <p className="metric-value mt-1 text-3xl">{snap.goals}</p>
-            <p className="meta mt-1">Targets tracked</p>
+            <p className="meta mt-1">Goals tracked</p>
           </Link>
           <Link href="/growth/prospecting" className="surface surface-interactive p-4 sm:col-span-3">
             <p className="caption">Social prospecting</p>

@@ -18,6 +18,17 @@ import {
   type ValidationDecision,
 } from "@/services/social-prospecting/entity-validation";
 
+export type ProspectFitDimensions = {
+  identityConfidence: number;
+  roleMatch: number;
+  companyMatch: number;
+  geographyMatch: number;
+  industryMatch: number;
+  sizeMatch: number;
+  intentSignal: number;
+  overallFit: number;
+};
+
 export type QualityResult = {
   ok: boolean;
   candidate: SocialProspectCandidateInput;
@@ -27,9 +38,57 @@ export type QualityResult = {
   /** Commercial fit — must not override identity gates */
   fitScore: number;
   identityConfidence: number;
+  /** Explicit dimension scores — missing evidence never scores 100%. */
+  fitDimensions: ProspectFitDimensions;
   validation: ValidationDecision;
   rejectionCode?: RejectionCode;
 };
+
+/** Build transparent fit dimensions — missing evidence stays low, never 100%. */
+export function buildProspectFitDimensions(input: {
+  identityConfidence: number;
+  roleConfidence: number;
+  locationConfidence: number;
+  companyAssociationConfidence: number;
+  industryMatch?: number | null;
+  sizeMatch?: number | null;
+  intentSignal?: number | null;
+  fitScore: number;
+}): ProspectFitDimensions {
+  const pct = (n: number) => Math.max(0, Math.min(95, Math.round(n * 100)));
+  const identity = pct(input.identityConfidence);
+  const role = pct(input.roleConfidence);
+  const company = pct(input.companyAssociationConfidence);
+  const geography = pct(input.locationConfidence);
+  const industry =
+    input.industryMatch == null ? 0 : pct(input.industryMatch);
+  const size = input.sizeMatch == null ? 0 : pct(input.sizeMatch);
+  const intent = input.intentSignal == null ? 0 : pct(input.intentSignal);
+  const overall = Math.min(
+    95,
+    Math.round(
+      identity * 0.25 +
+        role * 0.2 +
+        company * 0.15 +
+        geography * 0.15 +
+        industry * 0.1 +
+        size * 0.05 +
+        intent * 0.1,
+    ),
+  );
+  // Cap overall by identity — never treat missing identity as high fit
+  const cappedOverall = Math.min(overall, identity + 15, pct(input.fitScore));
+  return {
+    identityConfidence: identity,
+    roleMatch: role,
+    companyMatch: company,
+    geographyMatch: geography,
+    industryMatch: industry,
+    sizeMatch: size,
+    intentSignal: intent,
+    overallFit: cappedOverall,
+  };
+}
 
 function evidenceStrength(evidence: ProspectEvidence[]): number {
   if (!evidence.length) return 0;
@@ -125,6 +184,13 @@ export function qualityCheckProspect(
       confidence: validation.identityConfidence,
       fitScore: 0,
       identityConfidence: validation.identityConfidence,
+      fitDimensions: buildProspectFitDimensions({
+        identityConfidence: validation.identityConfidence,
+        roleConfidence: validation.roleConfidence,
+        locationConfidence: validation.locationConfidence,
+        companyAssociationConfidence: validation.companyAssociationConfidence,
+        fitScore: 0,
+      }),
       validation,
       rejectionCode: validation.rejectionCode,
     };
@@ -203,6 +269,13 @@ export function qualityCheckProspect(
     confidence,
     fitScore: presentationFit,
     identityConfidence: validation.identityConfidence,
+    fitDimensions: buildProspectFitDimensions({
+      identityConfidence: validation.identityConfidence,
+      roleConfidence: validation.roleConfidence,
+      locationConfidence: validation.locationConfidence,
+      companyAssociationConfidence: validation.companyAssociationConfidence,
+      fitScore: presentationFit,
+    }),
     validation,
   };
 }

@@ -133,8 +133,9 @@ describe("publish-targets resolution", () => {
 
     const targets = await listPublishTargets("org_a");
     expect(targets.every((t) => t.eligible)).toBe(true);
-    expect(targets.find((t) => t.platform === "INSTAGRAM")?.label).toBe("@acme");
+    expect(targets.find((t) => t.platform === "INSTAGRAM")?.label).toBe("Instagram · @acme");
     expect(targets.find((t) => t.platform === "YOUTUBE")?.platform).toBe("YOUTUBE");
+    expect(targets.find((t) => t.platform === "YOUTUBE")?.label).toMatch(/^YouTube ·/);
     expect(targets.every((t) => t.provider === "ZERNIO")).toBe(true);
   });
 

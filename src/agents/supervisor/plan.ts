@@ -7,6 +7,10 @@ import {
   detectAnswerModeFromLanguage,
   formatClarification,
 } from "@/services/answer-modes";
+import {
+  sanitizeResearchTopic,
+  stripClarificationMetadata,
+} from "@/lib/agent-request-sanitize";
 
 const AMBIGUOUS_MARKERS = [
   /what (can|should) (you|i)/i,
@@ -137,23 +141,67 @@ function planSummariseThenEcho(text: string): PlanResult {
   };
 }
 
+/** Classify research intent so business-factual questions do not get a viral/social plan. */
+export type ResearchIntentKind =
+  | "business_factual"
+  | "market"
+  | "social_content"
+  | "crm_internal"
+  | "prospecting"
+  | "summarisation"
+  | "strategy"
+  | "content_gen";
+
+export function classifyResearchIntent(topic: string): ResearchIntentKind {
+  const t = topic.toLowerCase();
+  if (/\b(summaris|summariz|tl;?dr|condense|shorten)\b/.test(t)) return "summarisation";
+  if (/\b(prospect|find (leads|buyers|customers)|outreach list|icp)\b/.test(t)) return "prospecting";
+  if (/\b(crm|pipeline|inbox|our (contacts|deals|leads)|internal)\b/.test(t)) return "crm_internal";
+  if (
+    /\b(viral|trending|hooks?|reels?|shorts?|algorithm|social listening|what('?s| is) getting attention|content themes)\b/.test(
+      t,
+    )
+  ) {
+    return "social_content";
+  }
+  if (/\b(write|draft|create|generate)\b.+\b(post|content|caption|script)\b/.test(t)) {
+    return "content_gen";
+  }
+  if (/\b(strateg(y|ic)|roadmap|go[- ]to[- ]market|gtm|positioning)\b/.test(t)) return "strategy";
+  // Prefer explicit factual question shapes before broad "market" keywords (adoption/pricing).
+  if (
+    /\b(what is|how (many|much)|statistics?|data on|rate of|adoption of|facts? about)\b/.test(t) ||
+    (/\b(sme|uk)\b/.test(t) && /\b(adoption|statistic|rate)\b/.test(t) && !/\b(competitor|tam|sam)\b/.test(t))
+  ) {
+    return "business_factual";
+  }
+  if (/\b(market|tam|sam|competitors?|competitive|industry|adoption|pricing|benchmark)\b/.test(t)) {
+    return "market";
+  }
+  return "business_factual";
+}
+
 function planResearchPipeline(topic: string): PlanResult {
-  const clean = topic.trim().slice(0, 2000);
+  const clean = sanitizeResearchTopic(topic) || stripClarificationMetadata(topic).slice(0, 2000);
+  const intent = classifyResearchIntent(clean);
+  const socialish = intent === "social_content" || intent === "content_gen";
   return {
     kind: "plan",
     plan: {
       steps: [
-        { agentName: "research", input: { topic: clean } },
+        { agentName: "research", input: { topic: clean, nicheHint: intent } },
         { agentName: "analyst", input: { topic: clean } },
         { agentName: "critic", input: {} },
       ],
-      plainEnglishPlan: `I'll research recent viral talk about “${clean.slice(0, 80)}”, pull example video/post links, write a short take + full brief, then flag what looks next on the algorithm.`,
+      plainEnglishPlan: socialish
+        ? `I'll research recent high-signal posts and videos about “${clean.slice(0, 80)}”, pull example links, write a short take + full brief, then note what formats appear to be working.`
+        : `I'll research sourced facts and evidence about “${clean.slice(0, 80)}”, pull reviewable source links, write a grounded answer, then flag gaps or contradictions.`,
     },
   };
 }
 
 function planSocialListeningPipeline(topic: string): PlanResult {
-  const clean = topic.trim().slice(0, 2000);
+  const clean = sanitizeResearchTopic(topic) || stripClarificationMetadata(topic).slice(0, 2000);
   return {
     kind: "plan",
     plan: {

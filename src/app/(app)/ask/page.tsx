@@ -78,35 +78,60 @@ function imageUrlFromOutput(value: unknown): string | null {
   return null;
 }
 
-type SourceItem = { label: string; url?: string };
+type SourceItem = {
+  label: string;
+  url?: string;
+  domain?: string;
+  claim?: string;
+  platform?: string;
+};
+
+function domainFromUrl(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+}
 
 function extractSources(value: unknown): SourceItem[] {
   if (!value || typeof value !== "object") return [];
   const obj = value as Record<string, unknown>;
   const out: SourceItem[] = [];
-  if (Array.isArray(obj.claims)) {
-    for (const c of obj.claims) {
-      if (!c || typeof c !== "object") continue;
-      const claim = (c as { claim?: unknown }).claim;
-      const url = (c as { sourceUrl?: unknown }).sourceUrl;
-      if (typeof claim === "string") {
-        out.push({
-          label: claim,
-          url: typeof url === "string" ? url : undefined,
-        });
-      }
-    }
-  }
+  const seen = new Set<string>();
   if (Array.isArray(obj.sources)) {
     for (const s of obj.sources) {
       if (!s || typeof s !== "object") continue;
       const title = (s as { title?: unknown }).title;
       const url = (s as { url?: unknown }).url;
-      if (typeof url === "string") {
+      const platform = (s as { platform?: unknown }).platform;
+      if (typeof url === "string" && !seen.has(url)) {
+        seen.add(url);
         out.push({
-          label: typeof title === "string" ? title : url,
+          label: typeof title === "string" && title.trim() ? title : url,
           url,
+          domain: domainFromUrl(url),
+          platform: typeof platform === "string" ? platform : undefined,
         });
+      }
+    }
+  }
+  if (Array.isArray(obj.claims)) {
+    for (const c of obj.claims) {
+      if (!c || typeof c !== "object") continue;
+      const claim = (c as { claim?: unknown }).claim;
+      const url = (c as { sourceUrl?: unknown }).sourceUrl;
+      if (typeof url === "string" && !seen.has(url)) {
+        seen.add(url);
+        out.push({
+          label: typeof claim === "string" ? claim.slice(0, 120) : url,
+          url,
+          domain: domainFromUrl(url),
+          claim: typeof claim === "string" ? claim : undefined,
+        });
+      } else if (typeof claim === "string" && typeof url === "string") {
+        const existing = out.find((x) => x.url === url);
+        if (existing && !existing.claim) existing.claim = claim;
       }
     }
   }
@@ -135,7 +160,7 @@ function extractFindings(value: unknown): Array<{
   return out;
 }
 
-function renderAnswerBody(value: unknown): string {
+function renderAnswerBody(value: unknown, preferredMode?: string | null): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof value === "object") {
@@ -155,7 +180,15 @@ function renderAnswerBody(value: unknown): string {
     if (obj.mode === "deep" && typeof obj.executiveSummary === "string") {
       return obj.executiveSummary.trim();
     }
-    // Prefer shortAnswer for the lead block; full brief is rendered separately in the UI.
+    // Deep Report / Executive: prefer full brief over shortAnswer lead.
+    const mode = preferredMode || (typeof obj.mode === "string" ? obj.mode : null);
+    if (
+      (mode === "DEEP" || mode === "deep" || mode === "EXECUTIVE" || mode === "executive") &&
+      typeof obj.brief === "string" &&
+      obj.brief.trim()
+    ) {
+      return obj.brief.trim();
+    }
     if (typeof obj.shortAnswer === "string" && obj.shortAnswer.trim()) {
       return obj.shortAnswer.trim();
     }
@@ -734,7 +767,8 @@ export default function AskPage() {
 
   const answerSource =
     progress?.finalOutput != null ? progress.finalOutput : progress?.outputSoFar;
-  const answerBody = answerSource != null ? renderAnswerBody(answerSource) : "";
+  const answerBody =
+    answerSource != null ? renderAnswerBody(answerSource, progress?.answerMode) : "";
   const fullBrief =
     answerSource &&
     typeof answerSource === "object" &&
@@ -1130,26 +1164,64 @@ export default function AskPage() {
       {sources.length > 0 && (
         <details className="rounded-xl border border-[var(--border)] px-4 py-3">
           <summary className="cursor-pointer text-sm font-medium">Where this came from</summary>
-          <ul className="mt-3 space-y-2 text-sm">
+          <ul className="mt-3 space-y-3 text-sm">
             {sources.map((s, i) => (
-              <li key={`${s.label}-${i}`}>
-                {s.url ? (
-                  <a
-                    href={s.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[var(--accent)] hover:underline"
-                  >
-                    {s.label}
-                  </a>
-                ) : (
-                  s.label
-                )}
+              <li key={`${s.url || s.label}-${i}`} className="space-y-0.5">
+                <div className="font-medium text-[var(--foreground)]">{s.label}</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {[s.platform, s.domain].filter((x): x is string => Boolean(x)).join(" · ")}
+                  {s.url ? (
+                    <>
+                      {s.platform || s.domain ? " · " : ""}
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[var(--accent)] hover:underline break-all"
+                      >
+                        {s.url}
+                      </a>
+                    </>
+                  ) : null}
+                </div>
+                {s.claim && s.claim !== s.label ? (
+                  <p className="text-xs text-[var(--muted)]">{s.claim}</p>
+                ) : null}
               </li>
             ))}
           </ul>
         </details>
       )}
+
+      {(() => {
+        const qualitySummary =
+          answerSource &&
+          typeof answerSource === "object" &&
+          typeof (answerSource as { researchQualitySummary?: unknown }).researchQualitySummary ===
+            "string"
+            ? (answerSource as { researchQualitySummary: string }).researchQualitySummary
+            : null;
+        const breakdown =
+          answerSource &&
+          typeof answerSource === "object" &&
+          (answerSource as { researchQuality?: { breakdown?: Record<string, number> } })
+            .researchQuality?.breakdown;
+        if (!qualitySummary) return null;
+        return (
+          <details className="rounded-xl border border-[var(--border)] px-4 py-3">
+            <summary className="cursor-pointer text-sm font-medium">{qualitySummary}</summary>
+            {breakdown && typeof breakdown === "object" ? (
+              <ul className="mt-3 space-y-1 text-xs text-[var(--muted)]">
+                {Object.entries(breakdown).map(([k, v]) => (
+                  <li key={k}>
+                    {k}: {v}%
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </details>
+        );
+      })()}
 
       {progress && progress.stepsDetailCleared && (
         <p className="text-sm text-[var(--muted)]">

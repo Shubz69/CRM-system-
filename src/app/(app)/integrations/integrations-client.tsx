@@ -106,7 +106,7 @@ type MetaInstagramStatus = {
  */
 function messagingNote(slug: string): string {
   if (slug === "instagram") return "via Connect above or messaging setup below";
-  return "not available â€” no third-party API exists";
+  return "not available — no third-party API exists";
 }
 
 function statusBadgeClass(status: ReadinessStatus): string {
@@ -130,7 +130,7 @@ function formatTestedAt(iso: string | undefined | null): string {
   try {
     return `Last tested ${new Date(iso).toLocaleString()}`;
   } catch {
-    return "Last tested â€”";
+    return "Last tested —";
   }
 }
 
@@ -338,7 +338,7 @@ export default function IntegrationsClient() {
     }
   }, [loading, searchParams, focusMessagingSetup]);
 
-  // /api/social/[platform]/callback, Social OAuth, and Instagram OAuth redirect here â€”
+  // /api/social/[platform]/callback, Social OAuth, and Instagram OAuth redirect here —
   // surface once, force social revalidation, then strip from the URL so a refresh doesn't repeat it.
   useEffect(() => {
     const connected = searchParams.get("social_connected");
@@ -378,9 +378,9 @@ export default function IntegrationsClient() {
         toast.success(`${label} connected`);
       } else if (socialSync === "needed") {
         if (socialStatus === "DEGRADED") {
-          toast.error(error || "Account linked but sync needs attention â€” status refreshed");
+          toast.error(error || "Account linked but sync needs attention — status refreshed");
         } else {
-          toast.message("Finishing account syncâ€¦");
+          toast.message("Finishing account sync…");
         }
       } else if (error) {
         toast.error(error);
@@ -509,7 +509,7 @@ export default function IntegrationsClient() {
     setBusy(true);
     try {
       const json = await messagingAction("validate_configuration");
-      if (json.ok) toast.success(json.message || "Configuration valid â€” no message sent");
+      if (json.ok) toast.success(json.message || "Configuration valid — no message sent");
       else toast.error(json.message || "Configuration incomplete");
       await loadMessaging();
     } catch (err) {
@@ -546,7 +546,7 @@ export default function IntegrationsClient() {
       const json = await messagingAction("regenerate_secret");
       if (json.secret) {
         setOneTimeSecret(json.secret);
-        toast.success("Secret regenerated â€” copy it now");
+        toast.success("Secret regenerated — copy it now");
       }
       await load();
     } catch (e) {
@@ -629,7 +629,7 @@ export default function IntegrationsClient() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Connect channels, finish setup, and go live â€” advanced detail stays out of the way." />
+      <PageHeader description="Connect channels, finish setup, and go live — advanced detail stays out of the way." />
 
       <section className="surface space-y-4 p-5">
         <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Social Accounts</h2>
@@ -692,17 +692,17 @@ export default function IntegrationsClient() {
                       {identity ? (
                         <p className="mt-1 text-xs text-[var(--muted)]">
                           {identity}
-                          {typeHint ? ` Â· ${typeHint}` : ""}
+                          {typeHint ? ` · ${typeHint}` : ""}
                         </p>
                       ) : null}
                       {connected ? (
                         <ul className="mt-2 space-y-0.5 text-xs text-[var(--muted)]">
-                          <li>Publishing Â· Available</li>
-                          <li>Analytics Â· Available</li>
+                          <li>Publishing · Available</li>
+                          <li>Analytics · Available</li>
                           <li>
                             {platform === "instagram"
-                              ? "Messaging Â· Available"
-                              : "Outreach Â· Open + Copy"}
+                              ? "Messaging · Available"
+                              : "Outreach · Open + Copy"}
                           </li>
                         </ul>
                       ) : null}
@@ -834,7 +834,7 @@ export default function IntegrationsClient() {
                             if (json.code === "RECONCILIATION_REQUIRED") {
                               toast.error(
                                 json.error ||
-                                  "Disconnect could not be confirmed â€” status not changed to disconnected",
+                                  "Disconnect could not be confirmed — status not changed to disconnected",
                               );
                               await loadSocialAccounts();
                               setDisconnectConfirm(null);

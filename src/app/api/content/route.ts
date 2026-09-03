@@ -15,6 +15,7 @@ import { z } from "zod";
 import { requirePermission, jsonError } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
+import { normalizeContentPlatform } from "@/lib/content-platform";
 
 export async function GET() {
   try {
@@ -197,13 +198,22 @@ export async function POST(req: NextRequest) {
         if (body.sourceUrl && !/^https?:\/\//i.test(body.sourceUrl)) {
           return jsonError("Source URL must start with http:// or https://", 400);
         }
+        const platform = body.platform
+          ? normalizeContentPlatform(body.platform)
+          : null;
+        if (body.platform && !platform) {
+          return jsonError(
+            "Choose a supported platform: Instagram, LinkedIn, YouTube, YouTube Short, or TikTok.",
+            400,
+          );
+        }
         const result = await createDraftPiece({
           organisationId: session.organisationId,
           title: body.title,
           body: body.body,
           rationale: body.rationale,
           sourceUrl: body.sourceUrl,
-          platform: body.platform,
+          platform,
           agentRunId: body.agentRunId,
         });
         return Response.json({ ...result, organisationId: session.organisationId });

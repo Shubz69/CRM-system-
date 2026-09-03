@@ -88,15 +88,21 @@ function toSocialPlatformEnum(
 
 function customerLabel(account: ZernioConnectedAccount, network: string): string {
   const username = account.username?.replace(/^@/, "").trim();
-  if (username) {
-    if (network === "INSTAGRAM" || network === "YOUTUBE") return `@${username}`;
-    return username;
-  }
   const name = account.displayName?.trim();
-  if (name) return name;
-  if (network === "YOUTUBE") return "YouTube channel";
-  if (network === "LINKEDIN") return "LinkedIn account";
-  return "Instagram account";
+  if (network === "YOUTUBE") {
+    const channel = name || (username ? `@${username}` : null);
+    return channel ? `YouTube · ${channel}` : "YouTube channel";
+  }
+  if (network === "INSTAGRAM") {
+    return username ? `Instagram · @${username}` : name ? `Instagram · ${name}` : "Instagram account";
+  }
+  if (network === "LINKEDIN") {
+    return name || username ? `LinkedIn · ${name || username}` : "LinkedIn account";
+  }
+  if (network === "TIKTOK") {
+    return username ? `TikTok · @${username}` : name ? `TikTok · ${name}` : "TikTok account";
+  }
+  return name || username || "Social account";
 }
 
 /**
@@ -220,7 +226,7 @@ export async function listPublishTargets(organisationId: string): Promise<Publis
           ? "ZERNIO"
           : "NATIVE";
       const platform = publishPlatformForConnection(conn);
-      const label =
+      let label =
         conn.displayName?.trim() ||
         (platform === "INSTAGRAM"
           ? "Instagram account"
@@ -228,7 +234,21 @@ export async function listPublishTargets(organisationId: string): Promise<Publis
             ? "LinkedIn account"
             : platform === "YOUTUBE"
               ? "YouTube channel"
-              : "Social account");
+              : platform === "TIKTOK"
+                ? "TikTok account"
+                : "Social account");
+      // Canonical customer labels — never expose provider / connection ids.
+      if (platform === "YOUTUBE" && label && !/^YouTube\s*·/.test(label)) {
+        label = `YouTube · ${label.replace(/^@/, "")}`;
+      }
+      if (platform === "TIKTOK" && label && !/^TikTok\s*·/.test(label)) {
+        const handle = label.replace(/^@/, "");
+        label = `TikTok · @${handle}`;
+      }
+      if (platform === "INSTAGRAM" && label && !/^Instagram\s*·/.test(label)) {
+        const handle = label.replace(/^@/, "");
+        label = handle ? `Instagram · @${handle}` : "Instagram account";
+      }
       return {
         id: conn.id,
         platform,

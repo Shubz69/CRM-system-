@@ -123,6 +123,18 @@ export function AppShell({
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Switch failed");
+      // Other open tabs must refresh before mutating — displayed org must match target.
+      try {
+        const bc = new BroadcastChannel("agent-desk-workspace");
+        bc.postMessage({
+          type: "org-changed",
+          organisationId,
+          organisationName: json.organisationName,
+        });
+        bc.close();
+      } catch {
+        /* BroadcastChannel unavailable — this tab still reloads */
+      }
       await update({ organisationId });
       toast.success(`Switched to ${json.organisationName}`);
       window.location.reload();
@@ -130,6 +142,31 @@ export function AppShell({
       toast.error(e instanceof Error ? e.message : "Could not switch organisation");
     }
   }
+
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("agent-desk-workspace");
+      bc.onmessage = (ev) => {
+        const data = ev.data as { type?: string; organisationId?: string; organisationName?: string };
+        if (data?.type !== "org-changed" || !data.organisationId) return;
+        if (data.organisationId === session?.user?.organisationId) return;
+        toast.message(
+          `Workspace changed to ${data.organisationName || "another organisation"} in another tab — refreshing so actions stay on the right account.`,
+        );
+        window.location.reload();
+      };
+    } catch {
+      bc = null;
+    }
+    return () => {
+      try {
+        bc?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [session?.user?.organisationId]);
 
   const activeName =
     orgs.find((o) => o.isActive)?.name ||

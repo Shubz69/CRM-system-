@@ -199,6 +199,10 @@ export async function createKpiDefinition(input: {
   const calc = getKpiCalculator(input.calculatorKey);
   if (!calc) throw new Error(`Unknown KPI calculator: ${input.calculatorKey}`);
   assertSameUnit(input.unit, calc.unit);
+  const existing = await prisma.kpiDefinition.findFirst({
+    where: { organisationId: input.organisationId, key: input.key },
+  });
+  if (existing) return existing;
   return prisma.kpiDefinition.create({
     data: {
       organisationId: input.organisationId,

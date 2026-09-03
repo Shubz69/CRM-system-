@@ -112,15 +112,27 @@ async function expandResearchQueries(input: {
   model: string;
   knowledgeContext?: string | null;
 }): Promise<string[]> {
-  const system =
-    'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
+  const intent = (input.nicheHint || "").toLowerCase();
+  const socialish =
+    intent === "social_content" ||
+    intent === "content_gen" ||
+    /\b(viral|trending|hooks?|reels?|shorts?|algorithm)\b/i.test(input.topic);
+
+  const system = socialish
+    ? 'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.'
+    : 'You expand one business or market research question into several targeted factual search queries. Prefer statistics, reports, official sources, and recent analysis — not viral social posts unless the question asks for them. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
   const knowledgeBlock = input.knowledgeContext?.trim()
     ? `\nInternal company context (use only to focus queries — do not invent sources from it):\n${input.knowledgeContext.slice(0, 3000)}\n`
     : "";
-  const prompt = `Topic: ${input.topic}
+  const prompt = socialish
+    ? `Topic: ${input.topic}
 Niche hint (optional): ${input.nicheHint || "(none)"}
 ${knowledgeBlock}Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
-Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`;
+Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`
+    : `Topic: ${input.topic}
+Intent hint (optional): ${input.nicheHint || "(none)"}
+${knowledgeBlock}Produce 4-8 concrete search queries as JSON for grounded, reviewable sources (reports, news, official stats, analyst notes).
+Do NOT bias toward viral talk, social trends, reels, or shorts unless the topic explicitly asks for social content.`;
 
   try {
     const expand = await completeStructured(queryExpandSchema, {
@@ -202,6 +214,15 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   },
   async execute(input, ctx) {
     const parsed = researchInputSchema.parse(input);
+    const { sanitizeResearchTopic, stripClarificationMetadata } = await import(
+      "@/lib/agent-request-sanitize"
+    );
+    const topic =
+      sanitizeResearchTopic(parsed.topic) ||
+      stripClarificationMetadata(parsed.topic).slice(0, 2000);
+    if (topic.length < 3) {
+      throw new Error("I need a clearer research topic before I can search sources.");
+    }
     const maxSources = parsed.maxSources ?? 28;
     await assertEntitlement(ctx.organisationId, "research");
     await assertWithinSpendCap(ctx.organisationId, researchAgent.estimateCostCents(parsed));
@@ -211,21 +232,21 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const expanded = await expandResearchQueries({
       organisationId: ctx.organisationId,
-      topic: parsed.topic,
+      topic,
       nicheHint: parsed.nicheHint,
       model,
       knowledgeContext: ctx.knowledgeContext,
     });
     costCents += 2;
 
-    const queries = [...new Set([parsed.topic, ...expanded])].slice(0, 8);
+    const queries = [...new Set([topic, ...expanded])].slice(0, 8);
 
     const job = await prisma.researchJob.create({
       data: {
         organisationId: ctx.organisationId,
         agentRunId: ctx.agentRunId,
         kind: "RESEARCH",
-        topic: parsed.topic,
+        topic,
         status: "RUNNING",
         queries,
         startedAt: new Date(),
@@ -328,7 +349,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         model,
         system:
           'Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION (what happened), INFERENCE (your reasoned take), or SECONDARY (repost/summary). Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit.',
-        prompt: `Topic: ${parsed.topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
+        prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
         temperature: 0.1,
       });
       costCents += 2;
@@ -379,7 +400,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const output: ResearchOutput = {
       researchJobId: job.id,
-      topic: parsed.topic,
+      topic,
       queries,
       sourceCount: ranked.length,
       findings,

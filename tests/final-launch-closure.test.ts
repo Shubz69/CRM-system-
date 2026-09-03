@@ -196,7 +196,7 @@ describe("Final launch closure — publish targets + beta + spend + governor", (
 
     const targets = await listPublishTargets("org_1");
     expect(targets).toHaveLength(2);
-    expect(targets[0]!.label).toBe("@acme");
+    expect(targets[0]!.label).toBe("Instagram · @acme");
     expect(targets[0]!.platform).toBe("INSTAGRAM");
     expect(targets.every((t) => t.provider === "ZERNIO")).toBe(true);
     expect(prismaMocks.socialConnection.upsert).toHaveBeenCalled();

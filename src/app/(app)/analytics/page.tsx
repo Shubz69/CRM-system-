@@ -97,7 +97,7 @@ export default function AnalyticsHubPage() {
                     ? "No data"
                     : snap.goals === 0
                       ? "Not configured"
-                      : "Targets tracked"
+                      : "Goals tracked"
                 }
                 href="/goals"
               />

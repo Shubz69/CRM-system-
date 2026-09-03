@@ -30,6 +30,7 @@ export default function GoalsPage() {
   const [targetValue, setTargetValue] = useState("10");
   const [attachGoalId, setAttachGoalId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/goals");
@@ -40,7 +41,10 @@ export default function GoalsPage() {
   }, []);
 
   useEffect(() => {
-    load().catch((e) => toast.error(e.message));
+    setLoading(true);
+    load()
+      .catch((e) => toast.error(e.message))
+      .finally(() => setLoading(false));
   }, [load]);
 
   const active = goals.filter((g) => g.status === "ACTIVE" || g.status === "AT_RISK");
@@ -222,7 +226,11 @@ export default function GoalsPage() {
 
       <section className="space-y-4">
         <h2 className="font-[family-name:var(--font-fraunces)] text-xl">Your goals</h2>
-        {goals.length === 0 ? (
+        {loading ? (
+          <div className="surface p-6" role="status" aria-live="polite">
+            <p className="text-sm text-[var(--muted)]">Loading goals…</p>
+          </div>
+        ) : goals.length === 0 ? (
           <div className="surface max-w-xl p-6 md:p-8">
             <p className="font-[family-name:var(--font-fraunces)] text-2xl text-[var(--foreground)]">
               No goals yet

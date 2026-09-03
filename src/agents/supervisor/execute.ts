@@ -26,6 +26,8 @@ import {
 import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
 import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
+import { scoreResearchQuality } from "@/services/research-quality";
+import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -863,11 +865,14 @@ export async function executeAgentRun(input: {
 
   // Truncated by maxSteps / governor tool budget
   if (plan.steps.length > governedMaxSteps) {
+    const originalUserPrompt = readOriginalUserPrompt(run);
     const shapedPartial = await finalizeModeOutput({
       organisationId: input.organisationId,
       agentRunId: run.id,
       answerMode: run.answerMode,
       raw: previousOutput,
+      originalUserPrompt,
+      request: run.request,
     });
     return finishRun({
       organisationId: input.organisationId,
@@ -882,11 +887,14 @@ export async function executeAgentRun(input: {
     });
   }
 
+  const originalUserPrompt = readOriginalUserPrompt(run);
   const shapedFinal = await finalizeModeOutput({
     organisationId: input.organisationId,
     agentRunId: run.id,
     answerMode: run.answerMode,
     raw: previousOutput,
+    originalUserPrompt,
+    request: run.request,
   });
 
   return finishRun({
@@ -900,31 +908,155 @@ export async function executeAgentRun(input: {
   });
 }
 
+function readOriginalUserPrompt(run: {
+  request: string;
+  pendingBrief?: unknown;
+}): string {
+  const brief = run.pendingBrief;
+  if (brief && typeof brief === "object" && !Array.isArray(brief)) {
+    const o = brief as Record<string, unknown>;
+    if (typeof o.originalUserPrompt === "string" && o.originalUserPrompt.trim()) {
+      return stripClarificationMetadata(o.originalUserPrompt);
+    }
+  }
+  return stripClarificationMetadata(run.request);
+}
+
 async function finalizeModeOutput(input: {
   organisationId: string;
   agentRunId: string;
   answerMode: import("@prisma/client").AgentAnswerMode | null;
   raw: unknown;
+  originalUserPrompt?: string | null;
+  request?: string | null;
 }): Promise<unknown> {
-  if (!input.answerMode || input.raw == null) return input.raw;
-  const shaped = shapeFinalOutputForMode(input.answerMode, input.raw);
-  if (!shaped) return input.raw;
-
-  if (shaped.mode === "action" || shaped.mode === "deep") {
-    try {
-      return await attachApprovalProposals({
-        organisationId: input.organisationId,
-        agentRunId: input.agentRunId,
-        answerMode: input.answerMode,
-        output: shaped as ActionAnswer | DeepAnswer,
-      });
-    } catch (error) {
-      logger.warn("Capability approval proposals skipped", {
-        agentRunId: input.agentRunId,
-        message: error instanceof Error ? error.message : "unknown",
-      });
-      return shaped;
+  let base: unknown = input.raw;
+  if (input.answerMode && input.raw != null) {
+    const shaped = shapeFinalOutputForMode(input.answerMode, input.raw);
+    if (shaped) {
+      if (shaped.mode === "action" || shaped.mode === "deep") {
+        try {
+          base = await attachApprovalProposals({
+            organisationId: input.organisationId,
+            agentRunId: input.agentRunId,
+            answerMode: input.answerMode,
+            output: shaped as ActionAnswer | DeepAnswer,
+          });
+        } catch (error) {
+          logger.warn("Capability approval proposals skipped", {
+            agentRunId: input.agentRunId,
+            message: error instanceof Error ? error.message : "unknown",
+          });
+          base = shaped;
+        }
+      } else {
+        base = shaped;
+      }
     }
   }
-  return shaped;
+
+  return attachResearchQualityIfApplicable({
+    organisationId: input.organisationId,
+    answerMode: input.answerMode,
+    originalUserPrompt: input.originalUserPrompt,
+    request: input.request,
+    output: base,
+  });
+}
+
+function attachResearchQualityIfApplicable(input: {
+  organisationId: string;
+  answerMode: import("@prisma/client").AgentAnswerMode | null;
+  originalUserPrompt?: string | null;
+  request?: string | null;
+  output: unknown;
+}): unknown {
+  if (!input.output || typeof input.output !== "object") return input.output;
+  const obj = input.output as Record<string, unknown>;
+  const looksLikeResearch =
+    Array.isArray(obj.claims) ||
+    Array.isArray(obj.sources) ||
+    typeof obj.researchJobId === "string" ||
+    typeof obj.brief === "string" ||
+    typeof obj.shortAnswer === "string";
+  if (!looksLikeResearch) return input.output;
+
+  try {
+    const claims = Array.isArray(obj.claims)
+      ? (obj.claims as Array<Record<string, unknown>>).map((c) => ({
+          claim: String(c.claim || ""),
+          sourceUrl: typeof c.sourceUrl === "string" ? c.sourceUrl : undefined,
+          evidenceExcerpt: typeof c.evidenceExcerpt === "string" ? c.evidenceExcerpt : undefined,
+          claimKind: typeof c.claimKind === "string" ? c.claimKind : undefined,
+          confidence: typeof c.confidence === "number" ? c.confidence : undefined,
+        }))
+      : [];
+    const sources = Array.isArray(obj.sources)
+      ? (obj.sources as Array<Record<string, unknown>>).map((s) => ({
+          url: String(s.url || ""),
+          title: typeof s.title === "string" ? s.title : null,
+          platform: typeof s.platform === "string" ? s.platform : null,
+        }))
+      : claims
+          .filter((c) => c.sourceUrl)
+          .map((c) => ({ url: c.sourceUrl!, title: null, platform: null }));
+
+    const finalAnswerText = [
+      typeof obj.shortAnswer === "string" ? obj.shortAnswer : "",
+      typeof obj.summary === "string" ? obj.summary : "",
+      typeof obj.brief === "string" ? obj.brief : "",
+      typeof obj.executiveSummary === "string" ? obj.executiveSummary : "",
+      typeof obj.answer === "string" ? obj.answer : "",
+      typeof obj.keyFinding === "string" ? obj.keyFinding : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const prompt = stripClarificationMetadata(
+      (input.originalUserPrompt || input.request || "").trim(),
+    );
+    const report = scoreResearchQuality({
+      originalUserPrompt: prompt,
+      researchTopic: prompt,
+      resolvedIntent: null,
+      answerMode: input.answerMode,
+      businessSpecific: false,
+      organisationId: input.organisationId,
+      outputOrganisationId: input.organisationId,
+      claims,
+      sources: sources.filter((s) => s.url),
+      finalAnswerText,
+      gaps: Array.isArray(obj.gaps) ? obj.gaps.filter((g): g is string => typeof g === "string") : [],
+      contradictions: Array.isArray(obj.contradictions)
+        ? (obj.contradictions as Array<{ description?: string; sourceUrls?: string[] }>)
+            .filter((c) => c && typeof c.description === "string")
+            .map((c) => ({ description: c.description!, sourceUrls: c.sourceUrls }))
+        : [],
+    });
+
+    const withQuality: Record<string, unknown> = {
+      ...obj,
+      researchQuality: report,
+      researchQualitySummary: `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
+    };
+
+    // Below threshold: keep best supported answer but surface limitations (never invent).
+    if (!report.accepted && report.hardGateFailures.length) {
+      const lim = report.limitations.slice(0, 4).join(" ");
+      if (withQuality.gaps == null) {
+        withQuality.gaps = report.limitations.slice(0, 6);
+      }
+      if (!finalAnswerText.trim()) {
+        withQuality.shortAnswer =
+          `I could not produce an accepted research answer yet. ${lim || "Please try again with a clearer question."}`;
+      }
+    }
+
+    return withQuality;
+  } catch (error) {
+    logger.warn("Research quality scoring skipped", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return input.output;
+  }
 }
