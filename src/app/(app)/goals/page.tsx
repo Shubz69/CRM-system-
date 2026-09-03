@@ -25,8 +25,10 @@ export default function GoalsPage() {
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [calculators, setCalculators] = useState<Calculator[]>([]);
   const [name, setName] = useState("");
-  const [kpiKey, setKpiKey] = useState("open_pipeline");
-  const [calcKey, setCalcKey] = useState("open_pipeline_cents");
+  const [kpiKey, setKpiKey] = useState("qualified_lead_count");
+  const [calcKey, setCalcKey] = useState("qualified_lead_count");
+  const [targetValue, setTargetValue] = useState("10");
+  const [attachGoalId, setAttachGoalId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
   const load = useCallback(async () => {
@@ -108,11 +110,25 @@ export default function GoalsPage() {
           </div>
 
           <div className="border-t border-[var(--border)] pt-4">
-            <h3 className="text-sm font-medium">Optional: attach a KPI</h3>
+            <h3 className="text-sm font-medium">Attach a KPI target to a goal</h3>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              KPIs use real workspace numbers — never invented scores.
+              Creates the KPI definition and attaches a numeric target — both required for a
+              complete save.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                className="input min-w-[12rem]"
+                value={attachGoalId}
+                onChange={(e) => setAttachGoalId(e.target.value)}
+                aria-label="Goal for KPI"
+              >
+                <option value="">Select goal…</option>
+                {goals.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
               <select
                 className="input min-w-[14rem]"
                 value={calcKey}
@@ -129,14 +145,33 @@ export default function GoalsPage() {
                   </option>
                 ))}
               </select>
+              <input
+                className="input w-28"
+                type="number"
+                min={0}
+                step="any"
+                value={targetValue}
+                onChange={(e) => setTargetValue(e.target.value)}
+                aria-label="Target value"
+                placeholder="Target"
+              />
               <button
                 className="btn btn-secondary"
                 type="button"
                 onClick={async () => {
                   const calc = calculators.find((c) => c.key === calcKey);
                   if (!calc) return;
+                  if (!attachGoalId) {
+                    toast.error("Select a goal before attaching a KPI target");
+                    return;
+                  }
+                  const target = Number(targetValue);
+                  if (!Number.isFinite(target) || target < 0) {
+                    toast.error("Enter a valid target value");
+                    return;
+                  }
                   try {
-                    const res = await fetch("/api/goals", {
+                    const createRes = await fetch("/api/goals", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -147,16 +182,38 @@ export default function GoalsPage() {
                         calculatorKey: calc.key,
                       }),
                     });
-                    const json = await res.json();
-                    if (!res.ok) throw new Error(json.error || "KPI create failed");
-                    toast.success("KPI added");
+                    const createJson = await createRes.json();
+                    if (!createRes.ok) {
+                      throw new Error(createJson.error || "KPI create failed");
+                    }
+                    const kpiId = createJson.kpi?.id as string | undefined;
+                    if (!kpiId) throw new Error("KPI created without an id");
+                    const attachRes = await fetch("/api/goals", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: "attach_target",
+                        goalId: attachGoalId,
+                        kpiDefinitionId: kpiId,
+                        targetValue: target,
+                        unit: calc.unit,
+                      }),
+                    });
+                    const attachJson = await attachRes.json();
+                    if (!attachRes.ok) {
+                      throw new Error(
+                        attachJson.error ||
+                          "KPI created but target was not attached — open the goal and retry",
+                      );
+                    }
+                    toast.success("KPI target attached to goal");
                     await load();
                   } catch (e) {
                     toast.error(e instanceof Error ? e.message : "Failed");
                   }
                 }}
               >
-                Add KPI
+                Add KPI target
               </button>
             </div>
           </div>

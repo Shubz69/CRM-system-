@@ -76,6 +76,14 @@ describe("Retired Anthropic model + webhook terminal state", () => {
     expect(resolveOperationalAnthropicModel("claude-sonnet-4-20250514")).toBe("claude-sonnet-4-6");
   });
 
+  it("breaks env self-loop when ANTHROPIC_DEFAULT_MODEL is itself retired", () => {
+    process.env.ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514";
+    expect(getAiModels().default).toBe("claude-sonnet-4-20250514");
+    expect(resolveOperationalAnthropicModel("claude-sonnet-4-20250514")).toBe("claude-sonnet-4-6");
+    expect(resolveModelForTier("default")).toBe("claude-sonnet-4-6");
+    delete process.env.ANTHROPIC_DEFAULT_MODEL;
+  });
+
   it("Inbox conversation path uses configured model — ignores retired agent override", () => {
     const router = {
       taskTiers: { ...DEFAULT_TASK_TIERS },

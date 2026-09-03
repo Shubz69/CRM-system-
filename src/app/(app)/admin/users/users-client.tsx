@@ -65,7 +65,11 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Action failed");
       if (action === "send_password_reset") {
-        toast.success("Password reset issued — user must change password on next login");
+        toast.success(
+          json.emailed
+            ? "Password reset email sent — user must also change password on next login"
+            : "Password reset issued — user must change password on next login (email not sent)",
+        );
       } else {
         toast.success("Updated");
       }

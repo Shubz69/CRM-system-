@@ -1,15 +1,22 @@
 /**
- * Hosted production Playwright acceptance — env-driven, non-destructive.
+ * Hosted production Playwright acceptance — env-driven.
  *
  * Required for hosted runs:
  *   PLAYWRIGHT_SKIP_WEBSERVER=1
  *   PLAYWRIGHT_BASE_URL=https://<production-host>   (or APP_URL — must not be localhost)
  *   E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD
  *   E2E_READONLY_EMAIL / E2E_READONLY_PASSWORD
- * Optional:
+ * Optional (read-only / platform):
  *   E2E_PLATFORM_ADMIN_EMAIL / E2E_PLATFORM_ADMIN_PASSWORD
  *   E2E_WORKSPACE_NAME   (regex-friendly display name; default matches any non-empty workspace shell)
  *
+ * Mutating tests ALSO require (fail closed otherwise — see e2e/helpers/tenant-safety.ts):
+ *   E2E_ALLOW_MUTATIONS=true
+ *   E2E_TARGET_ORG_ID
+ *   E2E_TARGET_ORG_NAME   (exact; e.g. "Agent Desk Automated QA")
+ * Optional: E2E_TEST_RUN_ID — disposable names use prefix E2E-<runId>-
+ *
+ * Hard rule: Shobhit Agency = real business data only. Never mutate it from Playwright.
  * Never hard-code passwords, tokens, or workspace ids.
  * Do not commit QA/hosted-production-acceptance-report.json (local artifact).
  */
@@ -17,6 +24,10 @@ import { config as loadEnv } from "dotenv";
 import { test, expect, type Browser, type BrowserContext, type Page, type APIRequestContext } from "@playwright/test";
 import fs from "fs";
 import path from "path";
+import {
+  assertSafeQaTenantForMutations,
+  e2eDisposableName,
+} from "./helpers/tenant-safety";
 
 loadEnv({ path: path.join(process.cwd(), ".env") });
 
@@ -313,13 +324,16 @@ test.describe("Hosted production acceptance", () => {
       assertPageOk(page, res, route);
     }
 
+    // Probe POSTs must not land on Shobhit Agency / wrong tenant if a permission bug allows them.
+    await assertSafeQaTenantForMutations(request, BASE);
+
     const company = await apiJson(request, "POST", "/api/companies", {
-      name: `E2E-READONLY-SHOULD-FAIL-${Date.now()}`,
+      name: e2eDisposableName("READONLY-SHOULD-FAIL"),
     });
     expect([401, 403]).toContain(company.status);
 
     const contact = await apiJson(request, "POST", "/api/contacts", {
-      fullName: `E2E Readonly ${Date.now()}`,
+      fullName: e2eDisposableName("Readonly"),
       organisationId: "fake-org-should-be-ignored",
     });
     expect([401, 403, 404, 405]).toContain(contact.status);
@@ -389,8 +403,10 @@ test.describe("Hosted production acceptance", () => {
     const { context } = await newAuthedContext(browser, ADMIN);
     const request = context.request;
 
+    await assertSafeQaTenantForMutations(request, BASE);
+
     const forged = await apiJson(request, "POST", "/api/companies", {
-      name: `E2E-tenant-probe-${Date.now()}`,
+      name: e2eDisposableName("tenant-probe"),
       organisationId: "org_forged_should_never_win",
     });
     if (forged.status === 200 || forged.status === 201) {
@@ -447,9 +463,12 @@ test.describe("Hosted production acceptance", () => {
     const { context, page } = await newAuthedContext(browser, ADMIN);
     const request = context.request;
 
+    await assertSafeQaTenantForMutations(request, BASE);
+
     const roCtx = await browser.newContext({ baseURL: BASE });
     const roPage = await roCtx.newPage();
     await signIn(roPage, READONLY.email, READONLY.password);
+    await assertSafeQaTenantForMutations(roCtx.request, BASE);
     const roAsk = await apiJson(roCtx.request, "POST", "/api/ask", {
       request: "quick status of our pipeline",
       answerMode: "QUICK",
@@ -522,6 +541,7 @@ test.describe("Hosted production acceptance", () => {
     await context.close();
 
     const ro = await newAuthedContext(browser, READONLY);
+    await assertSafeQaTenantForMutations(ro.context.request, BASE);
     const mutate = await apiJson(ro.context.request, "POST", "/api/integrations/manychat", {
       action: "disconnect",
     });
@@ -544,6 +564,7 @@ test.describe("Hosted production acceptance", () => {
     await context.close();
 
     const ro = await newAuthedContext(browser, READONLY);
+    await assertSafeQaTenantForMutations(ro.context.request, BASE);
     const mutate = await apiJson(ro.context.request, "POST", "/api/integrations/meta-instagram", {
       action: "disconnect",
     });

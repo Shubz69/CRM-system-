@@ -75,7 +75,12 @@ function humanizeDbError(error: unknown): string {
   return "Password reset failed while talking to the database. Check Vercel DATABASE_URL and Supabase status.";
 }
 
-/** Request a password reset. Always returns ok to avoid email enumeration (unless bootstrap recovery). */
+/**
+ * Request or complete a password reset.
+ * Request path: emails a link when SMTP is configured; fails closed (503) when it is not
+ * (unless local/dev or ADMIN_BOOTSTRAP_SECRET unlocks an inline recovery link).
+ * Unknown emails still return a generic ok when SMTP is configured (anti-enumeration).
+ */
 export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get("x-forwarded-for") || "unknown";
@@ -128,6 +133,16 @@ export async function POST(req: NextRequest) {
     const env = getEnv();
     const allowInlineLink =
       env.NODE_ENV === "development" || bootstrapAuthorized(req);
+    const smtpConfigured = Boolean(env.EMAIL_SMTP_URL?.trim());
+
+    // Production without SMTP cannot deliver mail — never pretend a reset was emailed.
+    // Bootstrap / local dev may still return an inline recovery link.
+    if (!smtpConfigured && !allowInlineLink) {
+      return jsonError(
+        "Password reset email is not configured. Set EMAIL_SMTP_URL and EMAIL_FROM on the server, or open «No email yet? Use recovery secret» and paste ADMIN_BOOTSTRAP_SECRET to get a one-time reset link.",
+        503,
+      );
+    }
 
     const user = await prisma.user.findFirst({
       where: { email: email.toLowerCase(), deletedAt: null, isActive: true },
@@ -153,11 +168,30 @@ export async function POST(req: NextRequest) {
         entityId: user.id,
       });
 
-      const base = (env.APP_URL || env.NEXTAUTH_URL || "").replace(/\/$/, "");
+      const configuredBase = (env.APP_URL || env.NEXTAUTH_URL || "").replace(/\/$/, "");
+      // Emails need the public site URL; inline recovery can fall back to this request's origin.
+      const base = configuredBase || (allowInlineLink ? req.nextUrl.origin : "");
+      if (!base) {
+        logger.error("Password reset blocked: APP_URL / NEXTAUTH_URL missing", {
+          userId: user.id,
+        });
+        return jsonError(
+          "Password reset email cannot be built: set APP_URL (or NEXTAUTH_URL) to the public site URL, then retry.",
+          503,
+        );
+      }
       const resetUrl = `${base}/reset-password?token=${rawToken}`;
+      const canEmail = smtpConfigured && Boolean(configuredBase);
 
       let emailed = false;
-      if (env.EMAIL_SMTP_URL) {
+      let emailError: string | undefined;
+      if (smtpConfigured && !configuredBase && !allowInlineLink) {
+        return jsonError(
+          "Password reset email cannot be built: set APP_URL (or NEXTAUTH_URL) to the public site URL, then retry.",
+          503,
+        );
+      }
+      if (canEmail) {
         const delivery = await getEmailAdapter().send({
           organisationId: "platform",
           to: [user.email],
@@ -173,17 +207,20 @@ export async function POST(req: NextRequest) {
           metadata: { kind: "password_reset" },
         });
         emailed = delivery.ok;
+        emailError = delivery.error;
         if (!delivery.ok) {
           logger.error("Password reset email failed", {
             userId: user.id,
             error: delivery.error,
           });
         }
+      } else if (smtpConfigured && !configuredBase) {
+        emailError = "APP_URL / NEXTAUTH_URL is not set — cannot email a public reset link";
       }
 
       logger.info("Password reset link generated", {
         userId: user.id,
-        emailConfigured: Boolean(env.EMAIL_SMTP_URL),
+        emailConfigured: smtpConfigured,
         emailed,
         inlineLink: allowInlineLink,
       });
@@ -193,28 +230,40 @@ export async function POST(req: NextRequest) {
           ok: true,
           message: emailed
             ? "Reset email sent. A recovery link is also shown below."
-            : env.EMAIL_SMTP_URL
+            : smtpConfigured
               ? "Email send failed — use the recovery link below."
               : "Email is not configured — use the recovery link below.",
           resetUrl,
           emailed,
+          ...(emailError && !emailed ? { emailError } : {}),
         });
       }
 
-      if (env.EMAIL_SMTP_URL && !emailed) {
+      if (!emailed) {
         return jsonError(
-          "Could not send the reset email. Check EMAIL_SMTP_URL / EMAIL_FROM on the server, or retry with the admin bootstrap secret to get a recovery link.",
+          emailError
+            ? `Could not send the reset email (${emailError}). Check EMAIL_SMTP_URL / EMAIL_FROM, or retry with the admin bootstrap secret to get a recovery link.`
+            : "Could not send the reset email. Check EMAIL_SMTP_URL / EMAIL_FROM on the server, or retry with the admin bootstrap secret to get a recovery link.",
           503,
         );
       }
-    } else if (allowInlineLink) {
+
+      return Response.json({
+        ok: true,
+        message: "If the account exists, a reset link was sent by email.",
+        emailed: true,
+      });
+    }
+
+    if (allowInlineLink) {
       // Ops recovery: do not pretend success when they authenticated with bootstrap secret.
       return jsonError("No active user found for that email.", 404);
     }
 
+    // SMTP is configured but no matching active user — do not reveal that.
     return Response.json({
       ok: true,
-      message: "If the account exists, a reset link was generated.",
+      message: "If the account exists, a reset link was sent by email.",
     });
   } catch (error) {
     if (error instanceof z.ZodError) return jsonError("Invalid request", 400);

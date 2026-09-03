@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { MemberRole } from "@prisma/client";
+import { createHash, randomBytes } from "crypto";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
-import { randomBytes } from "crypto";
+import { getEnv } from "@/lib/env";
+import { getEmailAdapter } from "@/adapters/email";
+import { logger } from "@/lib/logger";
 
 const mutateSchema = z.object({
   action: z.enum([
@@ -199,12 +202,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Force password change on next login; issue one-time reset token for /reset-password flows.
-    const token = randomBytes(32).toString("hex");
+    // Must match /api/auth/password-reset: identifier = email, token = sha256(raw).
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
     const expires = new Date(Date.now() + 60 * 60 * 1000);
+    await prisma.verificationToken.deleteMany({ where: { identifier: user.email } });
     await prisma.verificationToken.create({
       data: {
-        identifier: `password-reset:${user.email}`,
-        token,
+        identifier: user.email,
+        token: tokenHash,
         expires,
       },
     });
@@ -212,17 +218,52 @@ export async function POST(req: NextRequest) {
       where: { id: user.id },
       data: { mustChangePassword: true },
     });
+
+    const env = getEnv();
+    const base = (env.APP_URL || env.NEXTAUTH_URL || "").replace(/\/$/, "");
+    const resetUrl = base ? `${base}/reset-password?token=${rawToken}` : null;
+    let emailed = false;
+    if (env.EMAIL_SMTP_URL && resetUrl) {
+      const delivery = await getEmailAdapter().send({
+        organisationId: body.organisationId || session.organisationId || "platform",
+        to: [user.email],
+        subject: "Reset your Agent Desk password",
+        bodyText: [
+          "An administrator issued a password reset for your Agent Desk account.",
+          "",
+          `Open this link within 1 hour to set a new password:`,
+          resetUrl,
+          "",
+          "If you did not expect this, contact your administrator.",
+        ].join("\n"),
+        metadata: { kind: "password_reset_admin" },
+      });
+      emailed = delivery.ok;
+      if (!delivery.ok) {
+        logger.error("Admin-issued password reset email failed", {
+          userId: user.id,
+          error: delivery.error,
+        });
+      }
+    }
+
     await writeAuditLog({
       organisationId: body.organisationId || session.organisationId,
       userId: session.userId,
       action: "user.password_reset_issued",
       entityType: "User",
       entityId: user.id,
-      metadata: { expires: expires.toISOString(), tokenIssued: true },
+      metadata: {
+        expires: expires.toISOString(),
+        tokenIssued: true,
+        emailed,
+      },
     });
     return Response.json({
       ok: true,
-      resetToken: token,
+      resetToken: rawToken,
+      resetUrl,
+      emailed,
       expiresAt: expires.toISOString(),
     });
   } catch (error) {

@@ -952,7 +952,7 @@ export async function processInboundMessage(
             organisationId: input.organisationId,
             conversationId: result.conversation.id,
             question: (analysis.knowledge_gap.question || input.message.text).slice(0, 280),
-            reason: analysis.knowledge_gap.reason || "Claude detected a knowledge gap",
+            reason: analysis.knowledge_gap.reason || "Knowledge gap detected",
             status: "NEW",
           },
         });

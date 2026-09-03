@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -59,6 +60,7 @@ type ResearchJob = {
 };
 
 export default function ResearchPage() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [topic, setTopic] = useState("");
   const [answerMode, setAnswerMode] = useState<"" | "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP">("");
@@ -138,15 +140,20 @@ export default function ResearchPage() {
           <button
             className="btn btn-primary"
             type="button"
-            disabled={busy || !topic.trim()}
+            disabled={busy}
             onClick={async () => {
+              const trimmed = topic.trim();
+              if (!trimmed) {
+                toast.message("Enter a research topic first");
+                return;
+              }
               setBusy(true);
               try {
                 const res = await fetch("/api/ask", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
-                    request: `Research ${topic.trim()}`,
+                    request: `Research ${trimmed}`,
                     ...(answerMode ? { answerMode } : {}),
                   }),
                 });
@@ -159,6 +166,9 @@ export default function ResearchPage() {
                 );
                 setTopic("");
                 await load();
+                if (json.runId) {
+                  router.push(`/ask?runId=${encodeURIComponent(json.runId)}`);
+                }
               } catch (e) {
                 toast.error(e instanceof Error ? e.message : "Failed");
               } finally {

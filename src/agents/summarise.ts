@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Agent } from "@/agents/types";
-import { completeStructured } from "@/adapters/ai/structured";
+import { completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 
 export const summariseInputSchema = z.object({
@@ -43,7 +43,7 @@ export const summariseAgent: Agent<SummariseInput, SummariseOutput> = {
     const parsed = summariseInputSchema.parse(input);
     const maxSentences = parsed.maxSentences ?? 3;
     const model = resolveModelForTier("cheap");
-    const data = await completeStructured(summariseOutputSchema, {
+    const result = await completeStructuredSafe(summariseOutputSchema, {
       organisationId: ctx.organisationId,
       tier: "cheap",
       model,
@@ -52,10 +52,22 @@ export const summariseAgent: Agent<SummariseInput, SummariseOutput> = {
       prompt: `Summarise the following text in at most ${maxSentences} sentences.\n\n---\n${parsed.text}\n---`,
       temperature: 0.2,
     });
+    if (!result.ok) {
+      // Deterministic degrade — never fail the whole Ask on schema/provider flakiness.
+      const trimmed = parsed.text.trim().replace(/\s+/g, " ");
+      const fallback =
+        trimmed.length <= 400
+          ? trimmed
+          : `${trimmed.slice(0, 397).trimEnd()}…`;
+      return {
+        output: { summary: fallback },
+        model,
+        costCents: summariseAgent.estimateCostCents(parsed),
+      };
+    }
     return {
-      output: data,
+      output: result.data,
       model,
-      // Token accounting is refined later; estimate for now.
       costCents: summariseAgent.estimateCostCents(parsed),
     };
   },

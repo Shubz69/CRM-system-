@@ -505,6 +505,36 @@ describe("workspace onboarding", () => {
     );
   });
 
+  it("removeMember deletes READ_ONLY membership and retains audit", async () => {
+    mocks.organisationMember.findUnique.mockResolvedValue({
+      id: "mem_ro",
+      organisationId: "org_qa",
+      userId: "ro_1",
+      role: MemberRole.READ_ONLY,
+    });
+    mocks.organisationMember.delete.mockResolvedValue({});
+    mocks.user.findUnique.mockResolvedValue({
+      id: "ro_1",
+      activeOrganisationId: "org_qa",
+    });
+    mocks.organisationMember.findFirst.mockResolvedValue(null);
+    mocks.user.update.mockResolvedValue({});
+
+    const result = await removeMember({
+      organisationId: "org_qa",
+      userId: "ro_1",
+      actorUserId: "owner_1",
+    });
+    expect(result.removed).toBe(true);
+    expect(mocks.organisationMember.delete).toHaveBeenCalledWith({ where: { id: "mem_ro" } });
+    expect(writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "workspace.member.remove",
+        metadata: expect.objectContaining({ targetUserId: "ro_1", role: MemberRole.READ_ONLY }),
+      }),
+    );
+  });
+
   it("platform-admin flag is not assigned via role change (isolation)", async () => {
     // changeMemberRole never writes user.isPlatformAdmin — only MemberRole.
     mocks.organisationMember.findUnique.mockResolvedValue({

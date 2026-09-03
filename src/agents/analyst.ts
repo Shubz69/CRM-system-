@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
-import { completeStructured } from "@/adapters/ai/structured";
+import { completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export const analystInputSchema = z.object({
   researchJobId: z.string().min(1),
@@ -13,7 +14,16 @@ export const analystInputSchema = z.object({
 
 const claimSchema = z.object({
   claim: z.string().min(1),
-  sourceUrl: z.string().url(),
+  sourceUrl: z
+    .string()
+    .min(1)
+    .transform((raw) => {
+      const trimmed = raw.trim();
+      if (/^https?:\/\//i.test(trimmed)) return trimmed;
+      if (/^[\w.-]+\.[a-z]{2,}([/:].*)?$/i.test(trimmed)) return `https://${trimmed}`;
+      return trimmed;
+    })
+    .pipe(z.string().url()),
   evidenceExcerpt: z.string().max(800).optional(),
   claimKind: z
     .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
@@ -25,7 +35,16 @@ const viralExampleSchema = z.object({
   title: z.string().min(1).max(200),
   whyItWorked: z.string().min(1).max(500),
   platform: z.string().min(1).max(40),
-  sourceUrl: z.string().url(),
+  sourceUrl: z
+    .string()
+    .min(1)
+    .transform((raw) => {
+      const trimmed = raw.trim();
+      if (/^https?:\/\//i.test(trimmed)) return trimmed;
+      if (/^[\w.-]+\.[a-z]{2,}([/:].*)?$/i.test(trimmed)) return `https://${trimmed}`;
+      return trimmed;
+    })
+    .pipe(z.string().url()),
   formatHint: z.string().max(120).optional(),
 });
 
@@ -163,7 +182,7 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
       .join("\n");
 
     const model = resolveModelForTier("balanced");
-    const brief = await completeStructured(briefSchema, {
+    const briefResult = await completeStructuredSafe(briefSchema, {
       organisationId: ctx.organisationId,
       tier: "balanced",
       model,
@@ -197,9 +216,64 @@ ${catalog.slice(0, 70_000)}`,
       temperature: 0.35,
     });
 
+    const brief = briefResult.ok
+      ? briefResult.data
+      : (() => {
+          logger.warn("Analyst brief degraded to findings fallback", {
+            researchJobId: job.id,
+            organisationId: ctx.organisationId,
+            reason: briefResult.reason,
+          });
+          const fallbackClaims = job.findings
+            .map((f) => {
+              const src = job.sources.find((s) => s.id === f.researchSourceId);
+              if (!src?.url || !allowedUrls.has(src.url)) return null;
+              return {
+                claim: f.claim,
+                sourceUrl: src.url,
+                evidenceExcerpt: f.evidenceExcerpt ?? undefined,
+                claimKind: undefined as undefined,
+                confidence: f.confidence ?? undefined,
+              };
+            })
+            .filter((c): c is NonNullable<typeof c> => c != null)
+            .slice(0, 20);
+          const sourceTitles = job.sources
+            .slice(0, 5)
+            .map((s) => s.title || s.url)
+            .filter(Boolean);
+          return {
+            shortAnswer:
+              fallbackClaims.length > 0
+                ? fallbackClaims
+                    .slice(0, 6)
+                    .map((c) => `- ${c.claim}`)
+                    .join("\n")
+                : `- Collected ${job.sources.length} sources on “${parsed.topic || job.topic}”.\n- Structured synthesis was unavailable; review sources below.`,
+            summary:
+              fallbackClaims.length > 0
+                ? `Sourced overview of “${parsed.topic || job.topic}” from ${job.sources.length} collected sources.`
+                : `Gathered ${job.sources.length} sources on “${parsed.topic || job.topic}” but could not complete a full structured brief.`,
+            brief:
+              fallbackClaims.length > 0
+                ? `## Findings\n${fallbackClaims.map((c) => `- ${c.claim} (${c.sourceUrl})`).join("\n")}\n\n## Sources\n${sourceTitles.map((t) => `- ${t}`).join("\n")}`
+                : `## Sources collected\n${sourceTitles.map((t) => `- ${t}`).join("\n") || "(none)"}`,
+            claims: fallbackClaims,
+            viralExamples: [] as z.infer<typeof viralExampleSchema>[],
+            nextBigThings: [] as z.infer<typeof nextBigThingSchema>[],
+            contentHooks: [] as string[],
+            algorithmNotes: [] as string[],
+            contradictions: [] as Array<{ description: string; sourceUrls: string[] }>,
+            gaps: [
+              "Structured analyst synthesis failed validation; showing grounded findings/sources only.",
+              ...(briefResult.ok ? [] : ["Retry the Ask for a fuller brief if needed."]),
+            ],
+          };
+        })();
+
     const claims = brief.claims.filter((c) => allowedUrls.has(c.sourceUrl));
-    const viralExamples = brief.viralExamples.filter((v) => allowedUrls.has(v.sourceUrl));
-    const contradictions = brief.contradictions
+    const viralExamples = (brief.viralExamples || []).filter((v) => allowedUrls.has(v.sourceUrl));
+    const contradictions = (brief.contradictions || [])
       .map((c) => ({
         description: c.description,
         sourceUrls: c.sourceUrls.filter((u) => allowedUrls.has(u)),
@@ -213,11 +287,11 @@ ${catalog.slice(0, 70_000)}`,
       brief: brief.brief,
       claims,
       viralExamples,
-      nextBigThings: brief.nextBigThings,
-      contentHooks: brief.contentHooks,
-      algorithmNotes: brief.algorithmNotes,
+      nextBigThings: brief.nextBigThings || [],
+      contentHooks: brief.contentHooks || [],
+      algorithmNotes: brief.algorithmNotes || [],
       contradictions,
-      gaps: brief.gaps,
+      gaps: brief.gaps || [],
     };
 
     await prisma.researchJob.updateMany({

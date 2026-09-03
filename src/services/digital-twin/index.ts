@@ -214,6 +214,7 @@ export async function getBusinessContextCompleteness(organisationId: string): Pr
   const [
     products,
     audiences,
+    marketClaims,
     competitorRels,
     goals,
     kpis,
@@ -227,6 +228,14 @@ export async function getBusinessContextCompleteness(organisationId: string): Pr
   ] = await Promise.all([
     prisma.productOffering.count({ where: { organisationId, status: "ACTIVE" } }),
     prisma.audienceSegment.count({ where: { organisationId } }),
+    prisma.businessClaim.count({
+      where: {
+        organisationId,
+        predicate: { in: ["operates_in_market", "serves_region", "market_region"] },
+        status: { not: BusinessClaimStatus.DISPUTED },
+        OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }],
+      },
+    }),
     prisma.entityRelation.count({
       where: { organisationId, relationshipType: "COMPETES_WITH" },
     }),
@@ -294,10 +303,10 @@ export async function getBusinessContextCompleteness(organisationId: string): Pr
     {
       key: "markets",
       label: "Markets / regions",
-      status: audiences > 0 ? "partial" : "missing",
+      status: marketClaims > 0 ? "known" : "missing",
       detail:
-        audiences > 0
-          ? "Audience segments exist — confirm geographic markets"
+        marketClaims > 0
+          ? `${marketClaims} market / region claim(s)`
           : "No markets or regions recorded yet",
     },
     {

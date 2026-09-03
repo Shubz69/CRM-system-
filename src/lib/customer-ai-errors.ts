@@ -3,13 +3,16 @@
  */
 
 const PROVIDER_LEAK =
-  /\b(anthropic|claude|openai|gpt-4|gpt-3|groq|mistral|deepseek|gemini|ai provider)\b/i;
+  /\b(anthropic|claude|openai|gpt-4|gpt-3|groq|mistral|deepseek|gemini|ai provider|model:\s*claude|sonnet-4)\b/i;
 
 export const CUSTOMER_AI_UNAVAILABLE =
   "Agent Desk intelligence is temporarily unavailable.";
 
+export const CUSTOMER_AI_VALIDATE_FAILED =
+  "Agent Desk couldn't validate this information right now. Please try again.";
+
 export function isProviderLeakingMessage(message: string): boolean {
-  return PROVIDER_LEAK.test(message);
+  return PROVIDER_LEAK.test(message) || /not_found_error|model:\s*[\w.-]+/i.test(message);
 }
 
 /** Map internal AI failures to a safe customer message. */
@@ -23,8 +26,9 @@ export function toCustomerAiError(error: unknown): string {
 
   if (
     isProviderLeakingMessage(raw) ||
-    /api key|not configured|rate.?limit|429|401|403/i.test(raw)
+    /api key|not configured|rate.?limit|429|401|403|404/i.test(raw)
   ) {
+    if (/validat/i.test(raw)) return CUSTOMER_AI_VALIDATE_FAILED;
     return CUSTOMER_AI_UNAVAILABLE;
   }
 

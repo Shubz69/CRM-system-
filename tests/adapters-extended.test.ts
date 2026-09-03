@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chunkText } from "@/services/knowledge";
 import { MockBookingProvider, clearMockBookingLog, mockBookingLog } from "@/adapters/booking";
 import { getSheetsAdapter, clearMockSheetsExportLog, mockSheetsExportLog } from "@/adapters/sheets";
-import { getEmailAdapter, clearMockEmailLog, mockEmailLog } from "@/adapters/email";
+import { getEmailAdapter, clearMockEmailLog, mockEmailLog, MockEmailAdapter } from "@/adapters/email";
 
 describe("Knowledge chunking", () => {
   it("splits long content into fixed-size chunks", () => {
@@ -57,7 +57,7 @@ describe("Sheets and email adapters", () => {
 
   it("records mock emails", async () => {
     clearMockEmailLog();
-    const result = await getEmailAdapter().send({
+    const result = await new MockEmailAdapter().send({
       organisationId: "org_1",
       to: ["ops@example.com"],
       subject: "Daily report",
@@ -65,5 +65,7 @@ describe("Sheets and email adapters", () => {
     });
     expect(result.ok).toBe(true);
     expect(mockEmailLog).toHaveLength(1);
+    // When SMTP is configured, getEmailAdapter switches away from mock — still callable.
+    expect(typeof getEmailAdapter().send).toBe("function");
   });
 });

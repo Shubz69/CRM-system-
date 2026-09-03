@@ -161,8 +161,26 @@ function nextActionsFor(
   }
 }
 
-function costNote(totalCostCents: number): string | null {
-  if (totalCostCents <= 0) return "No AI charge for this run so far.";
+/** Exported for unit tests — customer-facing run usage copy. */
+export function costNote(
+  totalCostCents: number,
+  status?: string | null,
+): string | null {
+  if (totalCostCents <= 0) {
+    if (
+      status === "RUNNING" ||
+      status === "PLANNING" ||
+      status === "PENDING" ||
+      status === "AWAITING_CLARIFICATION" ||
+      status === "AWAITING_PROMPT_CONFIRM"
+    ) {
+      return "Usage updates after tool calls complete.";
+    }
+    if (status === "FAILED" || status === "PARTIAL") {
+      return "Usage for this run may still appear in monthly AI spend.";
+    }
+    return "No recorded AI usage for this run yet.";
+  }
   if (totalCostCents < 100) {
     return `About ${totalCostCents}¢ used for this run.`;
   }
@@ -565,7 +583,7 @@ export async function getAgentRunProgress(input: {
     stepsTotal: Math.max(planSteps, run.steps.length),
     elapsedMs: Math.max(0, ended - started),
     totalCostCents: run.totalCostCents,
-    costNote: costNote(run.totalCostCents),
+    costNote: costNote(run.totalCostCents, run.status),
     outputSoFar: lastCompletedOutput,
     finalOutput: run.finalOutput,
     userFacingError: run.userFacingError,

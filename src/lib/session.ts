@@ -2,11 +2,27 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { assertPermission, roleHasPermission, type Permission } from "@/lib/permissions";
 import type { MemberRole } from "@prisma/client";
+import {
+  assertActiveWorkspaceAccess,
+  WorkspaceAccessError,
+} from "@/services/workspace-access";
 
 export async function requireSession() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id || !session.user.organisationId || !session.user.role) {
     throw new Error("UNAUTHORIZED");
+  }
+  // Membership must be live — JWT alone is not enough after Team Remove.
+  try {
+    await assertActiveWorkspaceAccess({
+      userId: session.user.id,
+      organisationId: session.user.organisationId,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceAccessError) {
+      throw new Error("UNAUTHORIZED");
+    }
+    throw error;
   }
   return {
     userId: session.user.id,

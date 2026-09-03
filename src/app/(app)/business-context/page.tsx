@@ -14,7 +14,7 @@ type CompletenessItem = {
 };
 
 type Profile = {
-  organisation: { name: string; slug: string } | null;
+  organisation: { id: string; name: string; slug: string } | null;
   products: Array<{ id: string; name: string }>;
   audiences: Array<{ id: string; name: string }>;
   competitors: Array<{ id: string; sourceId: string; targetId: string }>;
@@ -55,6 +55,8 @@ export default function BusinessContextPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [completeness, setCompleteness] = useState<CompletenessItem[]>([]);
   const [productName, setProductName] = useState("");
+  const [audienceName, setAudienceName] = useState("");
+  const [marketRegion, setMarketRegion] = useState("");
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -171,6 +173,81 @@ export default function BusinessContextPage() {
                           placeholder="Add a product or service"
                           value={productName}
                           onChange={(e) => setProductName(e.target.value)}
+                        />
+                        <button className="btn btn-secondary" type="submit">
+                          Add
+                        </button>
+                      </form>
+                    ) : item.key === "audience" ? (
+                      <form
+                        className="mt-3 flex flex-wrap gap-2"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!audienceName.trim()) return;
+                          const res = await fetch("/api/business-context", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "create_audience",
+                              name: audienceName.trim(),
+                            }),
+                          });
+                          if (!res.ok) {
+                            toast.error("Could not add audience");
+                            return;
+                          }
+                          setAudienceName("");
+                          toast.success("Audience added");
+                          await load();
+                        }}
+                      >
+                        <input
+                          className="input flex-1"
+                          placeholder="Add a customer / audience segment"
+                          value={audienceName}
+                          onChange={(e) => setAudienceName(e.target.value)}
+                        />
+                        <button className="btn btn-secondary" type="submit">
+                          Add
+                        </button>
+                      </form>
+                    ) : item.key === "markets" ? (
+                      <form
+                        className="mt-3 flex flex-wrap gap-2"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!marketRegion.trim()) return;
+                          const subjectId = profile?.organisation?.id;
+                          if (!subjectId) {
+                            toast.error("Workspace profile not loaded yet");
+                            return;
+                          }
+                          const res = await fetch("/api/business-context", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "upsert_claim",
+                              subjectType: "Organisation",
+                              subjectId,
+                              predicate: "operates_in_market",
+                              valueText: marketRegion.trim(),
+                              source: "business_profile_checklist",
+                            }),
+                          });
+                          if (!res.ok) {
+                            toast.error("Could not add market / region");
+                            return;
+                          }
+                          setMarketRegion("");
+                          toast.success("Market / region added");
+                          await load();
+                        }}
+                      >
+                        <input
+                          className="input flex-1"
+                          placeholder="e.g. UK, US East Coast, DACH"
+                          value={marketRegion}
+                          onChange={(e) => setMarketRegion(e.target.value)}
                         />
                         <button className="btn btn-secondary" type="submit">
                           Add

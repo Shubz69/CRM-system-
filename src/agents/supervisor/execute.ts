@@ -25,6 +25,7 @@ import {
 } from "@/services/answer-modes";
 import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
+import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -846,10 +847,16 @@ export async function executeAgentRun(input: {
         finalOutput: previousOutput,
         error: message,
         userFacingError:
-          userFacing ||
+          (userFacing && !isProviderLeakingMessage(userFacing)
+            ? userFacing
+            : userFacing
+              ? toCustomerAiError(userFacing)
+              : null) ||
           (stepOutputs.length
             ? `I completed ${stepOutputs.length} of ${stepsToRun.length} steps, then ran into a problem and stopped. Here's what I finished before that.`
-            : "I couldn't finish that request. Nothing useful was produced — try again in a moment, or rephrase what you need."),
+            : isProviderLeakingMessage(message)
+              ? toCustomerAiError(error)
+              : "I couldn't finish that request. Nothing useful was produced — try again in a moment, or rephrase what you need."),
       });
     }
   }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
-import { completeStructured } from "@/adapters/ai/structured";
+import { completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
@@ -15,6 +15,7 @@ import {
   mapPool,
   rankSourceResults,
   searchConfiguredSources,
+  SourceNotConfiguredError,
   type SourceResult,
 } from "@/adapters/sources";
 import { getEnv } from "@/lib/env";
@@ -119,17 +120,38 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
 
     const platforms = listConfiguredSourcePlatforms();
     const started = Date.now();
-    const { results, errors, billableCents } = await searchConfiguredSources({
-      query: parsed.topic,
-      platforms,
-      concurrency: Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3),
-      options: {
-        organisationId: ctx.organisationId,
-        limit: maxPosts,
-        recent: true,
-        nicheHint: parsed.nicheHint,
-      },
-    });
+    let results: SourceResult[] = [];
+    let errors: Array<{ platform: string; message: string; code?: string }> = [];
+    let billableCents = 0;
+    try {
+      const searched = await searchConfiguredSources({
+        query: parsed.topic,
+        platforms,
+        concurrency: Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3),
+        options: {
+          organisationId: ctx.organisationId,
+          limit: maxPosts,
+          recent: true,
+          nicheHint: parsed.nicheHint,
+        },
+      });
+      results = searched.results;
+      errors = searched.errors.map((e) => ({
+        platform: e.platform,
+        message: e.message,
+        code: e.code,
+      }));
+      billableCents = searched.billableCents;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "search failed";
+      if (error instanceof SourceNotConfiguredError) {
+        logger.warn("Social listening: no research sources configured", {
+          organisationId: ctx.organisationId,
+          message,
+        });
+      }
+      errors.push({ platform: "web", message });
+    }
     costCents += billableCents;
 
     await recordResearchToolCall({
@@ -155,9 +177,10 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
     const complaints = new Map<string, { label: string; frequency: number; evidenceUrls: Set<string> }>();
 
     // CHEAP tier only — volume extraction must not use heavy/balanced.
+    // Per-post extract failures degrade; never abort the whole listening run.
     await mapPool(ranked, 3, async (post: SourceResult) => {
       await assertWithinSpendCap(ctx.organisationId, 1);
-      const extract = await completeStructured(postExtractSchema, {
+      const extractResult = await completeStructuredSafe(postExtractSchema, {
         organisationId: ctx.organisationId,
         tier: "cheap",
         model,
@@ -167,6 +190,16 @@ export const socialListeningAgent: Agent<SocialListeningInput, SocialListeningOu
         temperature: 0.2,
       });
       costCents += 1;
+
+      const extract = extractResult.ok
+        ? extractResult.data
+        : { themes: [] as string[], hooks: [] as string[], formats: [] as string[], questions: [] as string[], complaints: [] as string[] };
+      if (!extractResult.ok) {
+        logger.warn("Social listening post extract degraded", {
+          url: post.url,
+          reason: extractResult.reason,
+        });
+      }
 
       const persisted = await persistResearchSourceWithSnapshot({
         organisationId: ctx.organisationId,

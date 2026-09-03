@@ -56,28 +56,44 @@ export function isRetiredAnthropicModel(model?: string | null): boolean {
 }
 
 /**
+ * Canonical non-retired model for a tier.
+ * Env overrides win only when they are not themselves retired (breaks env self-loops).
+ */
+export function resolveCanonicalTierModel(tier: AiModelTier): string {
+  const fromEnv = getAiModels()[tier];
+  if (fromEnv && !isRetiredAnthropicModel(fromEnv)) return fromEnv;
+  return DEFAULT_MODELS[tier];
+}
+
+/**
  * Resolve an operational Anthropic model ID.
- * - Env / platform defaults win for tiers
- * - Retired dated IDs remap to the current tier default (never sent to Anthropic)
+ * - Env / platform defaults win for tiers (when not retired)
+ * - Retired dated IDs remap to the canonical tier default (never sent to Anthropic)
  * - Does not invent a different provider
  */
 export function resolveOperationalAnthropicModel(
   requested?: string | null,
   fallbackTier: AiModelTier = "default",
 ): string {
-  const models = getAiModels();
   const trimmed = requested?.trim();
-  if (!trimmed) return models[fallbackTier] || models.default;
+  if (!trimmed) return resolveCanonicalTierModel(fallbackTier);
 
   const retiredTier = RETIRED_ANTHROPIC_MODELS[trimmed];
-  if (retiredTier) return models[retiredTier] || models.default;
+  if (retiredTier) return resolveCanonicalTierModel(retiredTier);
 
-  // Any other dated claude-* snapshot that isn't the active configured default → remap
+  // Any other dated claude-* snapshot that isn't a live non-retired config → remap
   if (/^claude-/i.test(trimmed) && /-\d{8}$/.test(trimmed)) {
-    const active = new Set(Object.values(models));
+    const liveConfigured = Object.values(getAiModels()).filter(
+      (m) => typeof m === "string" && !isRetiredAnthropicModel(m),
+    );
+    const active = new Set([...Object.values(DEFAULT_MODELS), ...liveConfigured]);
     if (!active.has(trimmed)) {
-      return models[fallbackTier] || models.default;
+      return resolveCanonicalTierModel(fallbackTier);
     }
+  }
+
+  if (isRetiredAnthropicModel(trimmed)) {
+    return resolveCanonicalTierModel(fallbackTier);
   }
 
   return trimmed;
@@ -142,11 +158,10 @@ export function getAiProviderDefaults() {
 }
 
 export function resolveModelForTier(tier: AiModelTier | FormalAiTier): string {
-  const models = getAiModels();
   if (tier === "cheap" || tier === "balanced" || tier === "heavy") {
-    return resolveOperationalAnthropicModel(models[tier] || models.balanced, "default");
+    return resolveCanonicalTierModel(FORMAL_TO_LEGACY_TIER[tier]);
   }
-  return resolveOperationalAnthropicModel(models[tier] || models.default, tier);
+  return resolveCanonicalTierModel(tier);
 }
 
 /** True when an Anthropic HTTP error is a deterministic model/config failure (do not retry). */

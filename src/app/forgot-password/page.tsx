@@ -40,7 +40,8 @@ export default function ForgotPasswordPage() {
   return (
     <AuthFrame title="Reset password">
       <p className="mt-2 text-sm text-[var(--muted)]">
-        Enter your account email. We never display your current password.
+        Enter your account email. If mail is not configured on the server, use the recovery
+        secret option below.
       </p>
       <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <label className="block text-sm">

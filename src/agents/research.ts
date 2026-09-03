@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
-import { completeStructured } from "@/adapters/ai/structured";
+import { completeStructured, completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { assertEntitlement, recordMeteredUsage } from "@/services/entitlements";
@@ -34,9 +34,21 @@ export const researchInputSchema = z.object({
     .optional(),
 });
 
+/** Accept absolute URLs; models often omit scheme — coerce http(s) when possible. */
+const flexibleSourceUrl = z
+  .string()
+  .min(1)
+  .transform((raw) => {
+    const trimmed = raw.trim();
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (/^[\w.-]+\.[a-z]{2,}([/:].*)?$/i.test(trimmed)) return `https://${trimmed}`;
+    return trimmed;
+  })
+  .pipe(z.string().url());
+
 const findingSchema = z.object({
   claim: z.string().min(1),
-  sourceUrl: z.string().url(),
+  sourceUrl: flexibleSourceUrl,
   evidenceExcerpt: z.string().optional(),
   claimKind: z
     .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
@@ -307,21 +319,37 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       .join("\n\n----\n\n");
 
     await assertWithinSpendCap(ctx.organisationId, 2);
-    const extracted = catalog
-      ? await completeStructured(findingsExtractSchema, {
+    let extractedFindings: z.infer<typeof findingsExtractSchema>["findings"] = [];
+    if (catalog) {
+      // Never throw after sources are already billed — degrade to sources-only.
+      const extractResult = await completeStructuredSafe(findingsExtractSchema, {
+        organisationId: ctx.organisationId,
+        tier: "cheap",
+        model,
+        system:
+          'Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION (what happened), INFERENCE (your reasoned take), or SECONDARY (repost/summary). Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit.',
+        prompt: `Topic: ${parsed.topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
+        temperature: 0.1,
+      });
+      costCents += 2;
+      if (extractResult.ok) {
+        extractedFindings = extractResult.data.findings;
+      } else {
+        logger.warn("Research findings extract degraded after sources collected", {
+          researchJobId: job.id,
           organisationId: ctx.organisationId,
-          tier: "cheap",
-          model,
-          system:
-            'Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION (what happened), INFERENCE (your reasoned take), or SECONDARY (repost/summary). Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit.',
-          prompt: `Topic: ${parsed.topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
-          temperature: 0.1,
-        })
-      : { findings: [] };
-    costCents += 2;
+          reason: extractResult.reason,
+          sourceCount: ranked.length,
+        });
+        adapterErrors.push({
+          platform: "findings_extract",
+          message: "Could not structure findings from sources; returning sources only.",
+        });
+      }
+    }
 
     const allowedUrls = new Set(ranked.map((r) => r.url));
-    const findings = extracted.findings.filter((f) => allowedUrls.has(f.sourceUrl));
+    const findings = extractedFindings.filter((f) => allowedUrls.has(f.sourceUrl));
 
     for (const f of findings) {
       const sourceId = urlToId.get(f.sourceUrl);

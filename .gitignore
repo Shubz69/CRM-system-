@@ -54,3 +54,8 @@ next-env.d.ts
 # local junk / old extracts
 _to_delete/
 
+
+# Playwright local auth storage (never commit)
+e2e/.auth/
+**/storageState*.json
+

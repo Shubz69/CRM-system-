@@ -359,7 +359,20 @@ export default function AskPage() {
     }
     if (card.prefill) {
       setRequest(card.prefill);
-      inputRef.current?.focus();
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        const el = inputRef.current;
+        if (el) {
+          const end = el.value.length;
+          el.setSelectionRange(end, end);
+        }
+      });
+      const needsTopic = /\s$/.test(card.prefill) || /:\s*$/.test(card.prefill);
+      if (needsTopic) {
+        toast.message("Add a topic in the box, then press Go");
+      } else {
+        toast.message("Prompt ready — press Go to run");
+      }
     }
   }
 

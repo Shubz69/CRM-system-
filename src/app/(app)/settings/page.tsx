@@ -45,6 +45,13 @@ const INVITE_ROLE_OPTIONS = [
 
 const MEMBER_ROLE_OPTIONS = ["OWNER", ...INVITE_ROLE_OPTIONS] as const;
 
+/** Stable YYYY-MM-DD — avoids SSR/client locale hydration mismatches (#418). */
+function formatInviteExpiry(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toISOString().slice(0, 10);
+}
+
 type OrgInfo = {
   name?: string;
   slug?: string;
@@ -84,6 +91,7 @@ export default function SettingsPage() {
   const [inviteRole, setInviteRole] = useState<string>("SALES_AGENT");
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [memberActionBusy, setMemberActionBusy] = useState<string | null>(null);
 
   async function load() {
     const [settingsRes, channelsRes, providersRes, membersRes, socialRes] = await Promise.all([
@@ -197,34 +205,48 @@ export default function SettingsPage() {
   }
 
   async function changeRole(userId: string, role: string) {
-    const res = await fetch(`/api/workspace/members/${userId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "role", role }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      toast.error(json.error || "Role change failed");
-      return;
+    setMemberActionBusy(`role-${userId}`);
+    try {
+      const res = await fetch(`/api/workspace/members/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "role", role }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Role change failed");
+        return;
+      }
+      toast.success("Role updated");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Role change failed");
+    } finally {
+      setMemberActionBusy(null);
     }
-    toast.success("Role updated");
-    await load();
   }
 
   async function removeMember(userId: string) {
     if (!window.confirm("Remove this member from the workspace?")) return;
-    const res = await fetch(`/api/workspace/members/${userId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "remove" }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      toast.error(json.error || "Remove failed");
-      return;
+    setMemberActionBusy(`remove-${userId}`);
+    try {
+      const res = await fetch(`/api/workspace/members/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remove" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Remove failed");
+        return;
+      }
+      toast.success("Member removed");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setMemberActionBusy(null);
     }
-    toast.success("Member removed");
-    await load();
   }
 
   async function copyInviteLink() {
@@ -424,6 +446,7 @@ export default function SettingsPage() {
                       className="input py-1 text-xs"
                       aria-label={`Role for ${m.user.email}`}
                       value={m.role}
+                      disabled={Boolean(memberActionBusy)}
                       onChange={(e) => changeRole(m.userId, e.target.value)}
                     >
                       {MEMBER_ROLE_OPTIONS.map((role) => (
@@ -438,9 +461,10 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       className="btn btn-secondary py-1 text-xs"
+                      disabled={Boolean(memberActionBusy)}
                       onClick={() => removeMember(m.userId)}
                     >
-                      Remove
+                      {memberActionBusy === `remove-${m.userId}` ? "Removing…" : "Remove"}
                     </button>
                   </>
                 ) : (
@@ -464,7 +488,7 @@ export default function SettingsPage() {
                     {inv.email}
                     <span className="block text-xs text-[var(--muted)]">
                       {inv.role.replace(/_/g, " ")} · expires{" "}
-                      {new Date(inv.expiresAt).toLocaleDateString()}
+                      {formatInviteExpiry(inv.expiresAt)}
                     </span>
                   </span>
                   <div className="flex gap-2">
