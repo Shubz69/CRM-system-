@@ -28,6 +28,7 @@ export default function ContactsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const workspaceReady = useWorkspaceReady();
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [q, setQ] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fullName, setFullName] = useState("");
@@ -39,10 +40,15 @@ export default function ContactsPage() {
   const [saving, setSaving] = useState(false);
 
   async function load(query = q) {
+    setListState("loading");
     const res = await fetch(`/api/contacts?q=${encodeURIComponent(query)}`);
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed");
+    if (!res.ok) {
+      setListState("error");
+      throw new Error(json.error || "Failed");
+    }
     setContacts(json.contacts ?? []);
+    setListState("ready");
   }
 
   useEffect(() => {
@@ -139,7 +145,21 @@ export default function ContactsPage() {
             </tr>
           </thead>
           <tbody>
-            {contacts.length === 0 && (
+            {listState === "loading" && (
+              <tr>
+                <td colSpan={6} className="p-6 text-sm text-[var(--muted)]">
+                  Loading contacts…
+                </td>
+              </tr>
+            )}
+            {listState === "error" && (
+              <tr>
+                <td colSpan={6} className="p-6 text-sm text-[var(--danger)]">
+                  Could not load contacts. Try again.
+                </td>
+              </tr>
+            )}
+            {listState === "ready" && contacts.length === 0 && (
               <tr>
                 <td colSpan={6}>
                   <div className="p-4">
@@ -155,7 +175,8 @@ export default function ContactsPage() {
                 </td>
               </tr>
             )}
-            {contacts.map((c) => (
+            {listState === "ready" &&
+              contacts.map((c) => (
               <tr key={c.id} className="cursor-pointer">
                 <td>
                   <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.fullName || "Unknown"}</Link>

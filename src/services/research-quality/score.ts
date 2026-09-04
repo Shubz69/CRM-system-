@@ -1,5 +1,11 @@
 import { stripClarificationMetadata, isInternalClarificationOption } from "@/lib/agent-request-sanitize";
 import {
+  classifyResearchStakes,
+  HIGH_STAKES_NO_PRIMARY_SOURCE_QUALITY_CAP,
+  isPrimaryAuthorityUrl,
+  tierForAuthorityHost,
+} from "@/lib/research-authority";
+import {
   RESEARCH_ACCEPTANCE,
   RESEARCH_QUALITY_WEIGHTS,
   type ClaimKindLabel,
@@ -302,30 +308,24 @@ function tierForSource(s: ScoreResearchInput["sources"][number]): SourceTier {
       return "";
     }
   })();
-  // UK primary / regulator preference (GDPR, consumer, official stats)
-  if (
-    /\bico\.org\.uk\b|legislation\.gov\.uk\b|\.gov\.uk\b|ons\.gov|europa\.eu|worldbank|oecd|imf\.org/i.test(
-      host,
-    )
-  ) {
-    return "A";
-  }
-  if (/\.gov\b|\.edu\b|nature\.com|sciencedirect|ieee\.org|acm\.org/i.test(host)) return "A";
-  if (/reuters|bloomberg|ft\.com|wsj\.com|bbc\.|theguardian|nytimes/i.test(host)) return "B";
-  if (/linkedin\.com|youtube\.com|youtu\.be|instagram\.com|tiktok\.com/i.test(host)) return "C";
-  if (/medium\.com|substack\.com|blogspot|wordpress/i.test(host)) return "D";
-  if (!host) return "E";
-  return "C";
+  return tierForAuthorityHost(host);
 }
 
 function scoreSourceQuality(input: ScoreResearchInput): number {
   if (!input.sources.length) return 0;
   const tiers = input.sources.map(tierForSource);
-  const points = tiers.map((t) => ({ A: 100, B: 85, C: 65, D: 40, E: 15 })[t]);
+  const points = tiers.map((t) => ({ A: 100, B: 85, C: 55, D: 30, E: 15 })[t]);
   const avg = points.reduce((a, b) => a + b, 0) / points.length;
-  // Penalise promoting only weak tiers when many sources claimed
   const weakOnly = tiers.every((t) => t === "D" || t === "E");
-  return clamp(weakOnly ? avg * 0.7 : avg);
+  let score = weakOnly ? avg * 0.7 : avg;
+
+  const highStakes = classifyResearchStakes(input.originalUserPrompt) === "HIGH_STAKES_REGULATORY";
+  const primaryCount = input.sources.filter((s) => isPrimaryAuthorityUrl(s.url)).length;
+  // High-stakes with zero primary authority cannot look "reasonably strong".
+  if (highStakes && primaryCount === 0) {
+    score = Math.min(score, HIGH_STAKES_NO_PRIMARY_SOURCE_QUALITY_CAP);
+  }
+  return clamp(score);
 }
 
 function scoreCrossVerification(input: ScoreResearchInput): number {
@@ -538,13 +538,19 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
     });
   }
 
-  // High-stakes (GDPR / legal / financial) + only weak sources → never high confidence.
-  const highStakes = /\b(gdpr|data protection|privacy|legal|compliance|ico|regulation)\b/i.test(
-    input.originalUserPrompt,
-  );
+  // High-stakes regulatory + zero primary authority → hard fail (never "reasonably sourced").
+  const highStakes =
+    classifyResearchStakes(input.originalUserPrompt) === "HIGH_STAKES_REGULATORY";
+  const primaryAuthorityCount = input.sources.filter((s) => isPrimaryAuthorityUrl(s.url)).length;
   const tiers = input.sources.map(tierForSource);
   const weakOnly = tiers.length > 0 && tiers.every((t) => t === "D" || t === "E" || t === "C");
-  if (highStakes && weakOnly) {
+  if (highStakes && primaryAuthorityCount === 0) {
+    hardGateFailures.push({
+      code: "UNSUPPORTED_DEFINITIVE_CLAIM",
+      message:
+        "High-stakes regulatory research found no primary authority sources (prefer ICO, GOV.UK, or legislation.gov.uk).",
+    });
+  } else if (highStakes && weakOnly) {
     hardGateFailures.push({
       code: "UNSUPPORTED_DEFINITIVE_CLAIM",
       message:
@@ -565,7 +571,7 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
     uniqueFailures.length === 0 && weighted >= RESEARCH_ACCEPTANCE.overallTarget;
 
   let confidence = confidenceLabel(weighted, accepted || uniqueFailures.length === 0);
-  if (highStakes && weakOnly) {
+  if (highStakes && (primaryAuthorityCount === 0 || weakOnly)) {
     confidence = "Not accepted";
   }
 
@@ -580,7 +586,7 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
     confidenceLabel: confidence,
     breakdown,
     hardGateFailures: uniqueFailures,
-    accepted: accepted && !(highStakes && weakOnly),
+    accepted: accepted && !(highStakes && (primaryAuthorityCount === 0 || weakOnly)),
     claimConfidences: factual.claimConfidences,
     limitations,
     originalUserPrompt: stripClarificationMetadata(input.originalUserPrompt),

@@ -59,6 +59,7 @@ export default function AutomationsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [name, setName] = useState("");
   const [triggerType, setTriggerType] = useState("lead_qualified");
   const [actionType, setActionType] = useState("send_follow_up");
@@ -67,17 +68,22 @@ export default function AutomationsPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   async function load() {
+    setListState("loading");
     const [rulesRes, approvalsRes] = await Promise.all([
       fetch("/api/automations"),
       fetch("/api/approvals"),
     ]);
     const rulesJson = await rulesRes.json();
-    if (!rulesRes.ok) throw new Error(rulesJson.error || "Failed");
+    if (!rulesRes.ok) {
+      setListState("error");
+      throw new Error(rulesJson.error || "Failed");
+    }
     setRules(rulesJson.rules);
     if (approvalsRes.ok) {
       const a = await approvalsRes.json();
       setApprovals(a.approvals ?? []);
     }
+    setListState("ready");
   }
 
   useEffect(() => {
@@ -327,7 +333,13 @@ export default function AutomationsPage() {
             </p>
           </article>
         ))}
-        {rules.length === 0 && (
+        {listState === "loading" && (
+          <p className="p-4 text-sm text-[var(--muted)]">Loading automations…</p>
+        )}
+        {listState === "error" && (
+          <p className="p-4 text-sm text-[var(--danger)]">Could not load automations.</p>
+        )}
+        {listState === "ready" && rules.length === 0 && (
           <EmptyState
             title="No automations yet"
             body="Describe a follow-up or handoff in plain language, review the workflow, then enable."

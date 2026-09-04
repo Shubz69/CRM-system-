@@ -210,7 +210,7 @@ export const ASK_OUTCOME_CARDS: OutcomeCard[] = [
     title: "Summarise my pipeline",
     hint: "Where deals are stuck and what to do next",
     group: "Sales",
-    prefill: "Summarise my pipeline and flag stalled deals",
+    prefill: "Summarise my current sales pipeline and tell me which deals are stuck.",
   },
   {
     id: "dms",

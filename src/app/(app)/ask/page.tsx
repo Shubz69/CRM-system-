@@ -418,7 +418,7 @@ export default function AskPage() {
         return;
       }
       // Complete prompts (e.g. Summarise my pipeline) — one click starts the run.
-      void startRun(card.prefill);
+      void executeAsk({ prompt: card.prefill, source: `tile:${card.id}` });
     }
   }
 
@@ -461,24 +461,30 @@ export default function AskPage() {
     );
   }
 
-  async function startRun(text: string) {
+  async function executeAsk(args: {
+    prompt: string;
+    source: "go" | `tile:${string}` | string;
+  }) {
+    const text = args.prompt.trim();
+    if (!text) return;
+    if (!isWorkspaceContextReady()) {
+      toast.message("Workspace is still loading — try again in a moment.");
+      return;
+    }
+    // Always read frozen context at execution time (never a stale render snapshot).
+    const ctx = getImmutableWorkspaceContext(null);
     setSubmitting(true);
     setProgress(null);
     stopPolling();
     try {
-      const res = await workspaceFetch(
-        workspaceContext.loadedOrganisationId,
-        workspaceContext.workspaceRevision,
-        "/api/ask",
-        {
+      const res = await workspaceFetch(ctx.loadedOrganisationId, ctx.workspaceRevision, "/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           request: text,
           ...(referenceAssetId ? { referenceAssetId } : {}),
         }),
-        },
-      );
+      });
       const json = await res.json();
       if (!res.ok) {
         await handleAskApiFailure(res, json, "Could not start");
@@ -499,11 +505,15 @@ export default function AskPage() {
     }
   }
 
+  async function startRun(text: string) {
+    await executeAsk({ prompt: text, source: "go" });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const text = request.trim();
     if (!text) return;
-    await startRun(text);
+    await executeAsk({ prompt: text, source: "go" });
   }
 
   async function onClarify(option: string) {
@@ -944,10 +954,12 @@ export default function AskPage() {
 
         <button
           type="submit"
-          disabled={submitting || !request.trim()}
+          disabled={submitting || !workspaceReady || !request.trim()}
           className="btn btn-primary disabled:opacity-50"
+          data-testid="ask-go"
+          aria-disabled={submitting || !workspaceReady || !request.trim()}
         >
-          {submitting ? "Starting…" : "Go"}
+          {!workspaceReady ? "Loading…" : submitting ? "Starting…" : "Go"}
         </button>
       </form>
 

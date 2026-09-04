@@ -51,6 +51,7 @@ export default function KnowledgePage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("faq");
   const [content, setContent] = useState("");
@@ -60,17 +61,22 @@ export default function KnowledgePage() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");
 
   async function load() {
+    setListState("loading");
     const [docsRes, recRes] = await Promise.all([
       fetch("/api/knowledge"),
       fetch("/api/knowledge/recommendations"),
     ]);
     const docsJson = await docsRes.json();
-    if (!docsRes.ok) throw new Error(docsJson.error || "Failed");
+    if (!docsRes.ok) {
+      setListState("error");
+      throw new Error(docsJson.error || "Failed");
+    }
     setDocs(docsJson.documents);
     if (recRes.ok) {
       const recJson = await recRes.json();
       setRecommendations(recJson.recommendations || []);
     }
+    setListState("ready");
   }
 
   useEffect(() => {
@@ -180,7 +186,11 @@ export default function KnowledgePage() {
           ) : null}
         </div>
 
-        {docs.length === 0 ? (
+        {listState === "loading" ? (
+          <p className="p-6 text-sm text-[var(--muted)]">Loading knowledge…</p>
+        ) : listState === "error" ? (
+          <p className="p-6 text-sm text-[var(--danger)]">Could not load knowledge.</p>
+        ) : docs.length === 0 ? (
           <EmptyState
             title="Teach the AI what your business knows"
             body="Add FAQs, pricing, and tone of voice so replies stay accurate."

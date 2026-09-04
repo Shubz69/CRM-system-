@@ -23,6 +23,7 @@ import {
 } from "@/adapters/sources";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { authorityFirstQueries, isPrimaryAuthorityUrl } from "@/lib/research-authority";
 
 export const researchInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -245,7 +246,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     });
     costCents += 2;
 
-    const queries = [...new Set([topic, ...expanded])].slice(0, 8);
+    const queries = [
+      ...authorityFirstQueries(topic),
+      ...new Set([topic, ...expanded]),
+    ].slice(0, 10);
 
     const job = await prisma.researchJob.create({
       data: {
@@ -312,7 +316,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       }
     }
 
-    const ranked = rankSourceResults(dedupeSourceResults(collected)).slice(0, maxSources);
+    const deduped = dedupeSourceResults(collected);
+    const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
+    const secondary = rankSourceResults(deduped.filter((r) => !isPrimaryAuthorityUrl(r.url)));
+    const ranked = [...primary, ...secondary].slice(0, maxSources);
 
     const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
     for (const r of ranked) {

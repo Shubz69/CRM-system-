@@ -15,6 +15,7 @@ const event = (partial: Partial<OrgChangedBroadcast> & { organisationId: string 
 describe("workspaceGateShouldBlock lifecycle", () => {
   beforeEach(() => {
     const store = new Map<string, string>();
+    const local = new Map<string, string>();
     vi.stubGlobal("sessionStorage", {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => {
@@ -22,6 +23,15 @@ describe("workspaceGateShouldBlock lifecycle", () => {
       },
       removeItem: (k: string) => {
         store.delete(k);
+      },
+    });
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => local.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        local.set(k, v);
+      },
+      removeItem: (k: string) => {
+        local.delete(k);
       },
     });
   });

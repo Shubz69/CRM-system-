@@ -127,6 +127,8 @@ export default function InboxPage() {
       const json = await res.json();
       if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
       if (!res.ok) throw new Error(json.error || "Failed to load conversation");
+      if (json.conversation?.id !== id) return;
+      if (selectedIdRef.current !== id) return;
       setDetail(json.conversation);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;

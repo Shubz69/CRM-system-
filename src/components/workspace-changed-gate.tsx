@@ -18,6 +18,8 @@ import {
   acknowledgeOrgChangedEvent,
   getImmutableWorkspaceContext,
   isWorkspaceContextReady,
+  migrateWorkspaceStorage,
+  prepareWorkspaceTabReload,
   readLastOrgChangedEvent,
   subscribeOrgChanged,
   subscribeWorkspaceContextReady,
@@ -66,6 +68,8 @@ export function WorkspaceChangedGate({
   const [pending, setPending] = useState<OrgChangedBroadcast | null>(null);
 
   useEffect(() => {
+    migrateWorkspaceStorage();
+
     function recompute(event?: OrgChangedBroadcast | null) {
       const existing = event === undefined ? readLastOrgChangedEvent() : event;
       setPending(evaluateGate(currentOrganisationId, currentWorkspaceRevision, existing));
@@ -105,6 +109,7 @@ export function WorkspaceChangedGate({
   }, [currentOrganisationId, currentWorkspaceRevision]);
 
   useEffect(() => {
+    // CRITICAL: no capture listeners while unblocked / loading — they swallow first clicks.
     if (!pending) return;
     const block = (e: Event) => {
       const target = e.target as HTMLElement | null;
@@ -113,7 +118,6 @@ export function WorkspaceChangedGate({
       e.stopPropagation();
       e.stopImmediatePropagation?.();
     };
-    // Capture early so stale pages cannot mutate; remove when pending clears after reload.
     document.addEventListener("pointerdown", block, true);
     document.addEventListener("click", block, true);
     document.addEventListener("keydown", block, true);
@@ -157,7 +161,9 @@ export function WorkspaceChangedGate({
             className="btn btn-primary"
             data-testid="workspace-gate-reload"
             onClick={() => {
-              // Full navigation reload reinitialises immutable context for this document.
+              // Discard only this tab's stale loaded snapshot, then hard-reload.
+              // Keeps the global switch EVENT so other stale tabs can still detect it.
+              prepareWorkspaceTabReload();
               window.location.reload();
             }}
           >

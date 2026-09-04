@@ -5,15 +5,37 @@
  * A tab blocks only while its loaded snapshot is behind the event destination.
  * After reload/reinit into the current org+revision, the same localStorage event
  * must not re-arm the gate (no DevTools recovery).
+ *
+ * STORAGE_SCHEMA_VERSION bumps migrate legacy Round 3/4/4C/5 keys so long-lived
+ * browser profiles recover without DevTools.
  */
 
 import { EXPECTED_ORG_HEADER } from "@/lib/workspace-mutation-guard";
 import { EXPECTED_WORKSPACE_REVISION_HEADER } from "@/lib/workspace-mutation-guard";
 
-const CHANNEL = "agent-desk-workspace";
-const STORAGE_EVENT_KEY = "agent-desk-workspace-event";
-const IMMUTABLE_CONTEXT_KEY = "agent-desk-workspace-context";
-const ACK_KEY = "agent-desk-workspace-event-ack";
+export const WORKSPACE_CHANNEL = "agent-desk-workspace";
+export const STORAGE_EVENT_KEY = "agent-desk-workspace-event";
+export const IMMUTABLE_CONTEXT_KEY = "agent-desk-workspace-context";
+export const ACK_KEY = "agent-desk-workspace-event-ack";
+/** Bumps when storage semantics change; triggers allowlisted migration. */
+export const STORAGE_SCHEMA_VERSION = 6;
+export const STORAGE_SCHEMA_VERSION_KEY = "agent-desk-workspace-storage-version";
+
+const CHANNEL = WORKSPACE_CHANNEL;
+
+/**
+ * Every Agent Desk workspace-related key ever written (Rounds 3–5).
+ * Migration may touch ONLY these — never auth/session/unrelated keys.
+ */
+export const ALL_WORKSPACE_STORAGE_KEYS = [
+  STORAGE_EVENT_KEY,
+  IMMUTABLE_CONTEXT_KEY,
+  ACK_KEY,
+  STORAGE_SCHEMA_VERSION_KEY,
+] as const;
+
+/** Keys that Round 4 briefly stored in localStorage (now session-only). */
+export const LEGACY_LOCAL_CONTEXT_KEYS = [IMMUTABLE_CONTEXT_KEY] as const;
 
 /**
  * New JS realm per full document load. sessionStorage survives reload, so a
@@ -26,6 +48,7 @@ const DOCUMENT_LOAD_ID =
 
 let frozenForThisDocument = false;
 let workspaceContextReady = false;
+let storageMigrated = false;
 const readyListeners = new Set<() => void>();
 
 export type OrgChangedBroadcast = {
@@ -68,7 +91,112 @@ export function compareWorkspaceRevisions(
   return a < b ? -1 : 1;
 }
 
+/**
+ * Migrate/invalidate legacy Agent Desk workspace storage only.
+ * Never clears entire localStorage/sessionStorage.
+ */
+export function migrateWorkspaceStorage(): { migrated: boolean; fromVersion: number } {
+  if (typeof sessionStorage === "undefined" || typeof localStorage === "undefined") {
+    return { migrated: false, fromVersion: STORAGE_SCHEMA_VERSION };
+  }
+  let fromVersion = 0;
+  try {
+    const raw = localStorage.getItem(STORAGE_SCHEMA_VERSION_KEY);
+    fromVersion = raw ? Number.parseInt(raw, 10) || 0 : 0;
+  } catch {
+    fromVersion = 0;
+  }
+
+  if (storageMigrated && fromVersion >= STORAGE_SCHEMA_VERSION) {
+    return { migrated: false, fromVersion };
+  }
+
+  try {
+    // Round 4: immutable context lived in localStorage — never authoritative after switch.
+    for (const key of LEGACY_LOCAL_CONTEXT_KEYS) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Pre-documentLoadId session snapshots re-arm the gate on every reload.
+    try {
+      const raw = sessionStorage.getItem(IMMUTABLE_CONTEXT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ImmutableWorkspaceContext;
+        if (!parsed.documentLoadId) {
+          sessionStorage.removeItem(IMMUTABLE_CONTEXT_KEY);
+        }
+      }
+    } catch {
+      try {
+        sessionStorage.removeItem(IMMUTABLE_CONTEXT_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Normalize workspace event shape (ensure changeId when possible).
+    try {
+      const eventRaw = localStorage.getItem(STORAGE_EVENT_KEY);
+      if (eventRaw) {
+        const event = JSON.parse(eventRaw) as OrgChangedBroadcast;
+        if (event?.type === "org-changed" && event.organisationId) {
+          if (!event.changeId && !event.eventId) {
+            const changeId = `${event.organisationId}:${event.workspaceRevision || ""}:${event.timestamp || Date.now()}`;
+            localStorage.setItem(
+              STORAGE_EVENT_KEY,
+              JSON.stringify({ ...event, changeId, eventId: changeId }),
+            );
+          }
+        } else {
+          localStorage.removeItem(STORAGE_EVENT_KEY);
+        }
+      }
+    } catch {
+      try {
+        localStorage.removeItem(STORAGE_EVENT_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    localStorage.setItem(STORAGE_SCHEMA_VERSION_KEY, String(STORAGE_SCHEMA_VERSION));
+    storageMigrated = true;
+  } catch {
+    storageMigrated = true;
+  }
+
+  return { migrated: fromVersion < STORAGE_SCHEMA_VERSION, fromVersion };
+}
+
+/**
+ * Before "Reload this tab": drop ONLY this tab's loaded snapshot + ack so the
+ * next document load freezes authoritative org/revision. Keep the global
+ * localStorage event for other stale tabs.
+ */
+export function prepareWorkspaceTabReload(): void {
+  if (typeof sessionStorage === "undefined") return;
+  migrateWorkspaceStorage();
+  try {
+    sessionStorage.removeItem(IMMUTABLE_CONTEXT_KEY);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.removeItem(ACK_KEY);
+  } catch {
+    /* ignore */
+  }
+  // Allow a fresh freeze after soft re-init within the same module (tests).
+  frozenForThisDocument = false;
+  workspaceContextReady = false;
+}
+
 export function broadcastOrgChanged(msg: OrgChangedBroadcast) {
+  migrateWorkspaceStorage();
   const changeId =
     msg.changeId ||
     msg.eventId ||
@@ -91,10 +219,10 @@ export function broadcastOrgChanged(msg: OrgChangedBroadcast) {
   } catch {
     /* BroadcastChannel unavailable */
   }
-  // Compact: keep only the latest event (single-key storage already does this).
 }
 
 export function subscribeOrgChanged(handler: (msg: OrgChangedBroadcast) => void): () => void {
+  migrateWorkspaceStorage();
   let bc: BroadcastChannel | null = null;
   try {
     bc = new BroadcastChannel(CHANNEL);
@@ -127,6 +255,7 @@ export function subscribeOrgChanged(handler: (msg: OrgChangedBroadcast) => void)
 }
 
 export function readLastOrgChangedEvent(): OrgChangedBroadcast | null {
+  migrateWorkspaceStorage();
   try {
     const raw = localStorage.getItem(STORAGE_EVENT_KEY);
     if (!raw) return null;
@@ -204,6 +333,7 @@ export function subscribeWorkspaceContextReady(handler: () => void): () => void 
 }
 
 export function setImmutableWorkspaceContext(ctx: ImmutableWorkspaceContext) {
+  migrateWorkspaceStorage();
   try {
     if (frozenForThisDocument) return;
     frozenForThisDocument = true;
@@ -212,6 +342,12 @@ export function setImmutableWorkspaceContext(ctx: ImmutableWorkspaceContext) {
       IMMUTABLE_CONTEXT_KEY,
       JSON.stringify({ ...ctx, documentLoadId: DOCUMENT_LOAD_ID }),
     );
+    // Never leave a localStorage copy (legacy Round 4).
+    try {
+      localStorage.removeItem(IMMUTABLE_CONTEXT_KEY);
+    } catch {
+      /* ignore */
+    }
     // If current authoritative context already matches last event, acknowledge it
     // so reloads / new mounts never re-arm from an obsolete localStorage event.
     const last = readLastOrgChangedEvent();
@@ -242,12 +378,14 @@ export function setImmutableWorkspaceContext(ctx: ImmutableWorkspaceContext) {
 export function getImmutableWorkspaceContext(
   fallbackOrganisationId?: string | null,
 ): ImmutableWorkspaceContext {
+  migrateWorkspaceStorage();
   try {
     const raw = sessionStorage.getItem(IMMUTABLE_CONTEXT_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as ImmutableWorkspaceContext;
-      // Ignore snapshots frozen by a previous document load (reload poison).
-      if (parsed.documentLoadId && parsed.documentLoadId !== DOCUMENT_LOAD_ID) {
+      // Missing documentLoadId = pre-v5/v6 legacy snapshot → treat as stale.
+      // Mismatched documentLoadId = previous document load → ignore until re-freeze.
+      if (!parsed.documentLoadId || parsed.documentLoadId !== DOCUMENT_LOAD_ID) {
         return {
           loadedOrganisationId: fallbackOrganisationId || null,
           workspaceRevision: null,
@@ -288,4 +426,9 @@ export async function workspaceFetch(
   init?: RequestInit,
 ): Promise<Response> {
   return fetch(input, withExpectedOrganisation(organisationId, workspaceRevision, init));
+}
+
+// Boot migration as soon as this module loads in a browser-like environment.
+if (typeof localStorage !== "undefined" && typeof sessionStorage !== "undefined") {
+  migrateWorkspaceStorage();
 }
