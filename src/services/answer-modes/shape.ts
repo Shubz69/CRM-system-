@@ -166,10 +166,18 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
     if (!c || typeof c !== "object") continue;
     const claim = str((c as { claim?: unknown }).claim);
     if (!claim) continue;
+    const claimKind = str((c as { claimKind?: unknown }).claimKind) ?? undefined;
+    const confidenceRaw = (c as { confidence?: unknown }).confidence;
+    const confidence =
+      typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw)
+        ? Math.max(0, Math.min(1, confidenceRaw))
+        : undefined;
     findings.push({
       claim,
       sourceUrl: str((c as { sourceUrl?: unknown }).sourceUrl) ?? undefined,
       evidenceExcerpt: str((c as { evidenceExcerpt?: unknown }).evidenceExcerpt) ?? undefined,
+      claimKind,
+      confidence,
     });
   }
 

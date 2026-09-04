@@ -2,6 +2,12 @@ export {
   scoreResearchQuality,
   customerQualitySummary,
 } from "./score";
+export {
+  extractCanonicalGroundedClaims,
+  toScoreResearchClaims,
+  countLinkedGroundedClaims,
+} from "./grounded-claims";
+export type { CanonicalGroundedClaim } from "./grounded-claims";
 export type {
   ResearchQualityReport,
   ResearchProvenance,

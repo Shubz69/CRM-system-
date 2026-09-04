@@ -88,6 +88,8 @@ export const analystOutputSchema = z.object({
       }),
     )
     .optional(),
+  /** Narrative enrichment aborted; grounded claims/findings remain authoritative for RQS. */
+  analystEnrichmentFailed: z.boolean().optional(),
 });
 
 export type AnalystInput = z.infer<typeof analystInputSchema>;
@@ -357,6 +359,8 @@ ${catalog.slice(0, 70_000)}`,
               ...(briefResult.ok ? [] : ["Retry the Ask for a fuller brief if needed."]),
             ],
             sources: sourceCards,
+            // Enrichment failed; grounded findings remain the RQS claim source of truth.
+            analystEnrichmentFailed: true,
           };
         })();
 
@@ -413,6 +417,10 @@ ${catalog.slice(0, 70_000)}`,
       contradictions,
       gaps: brief.gaps || [],
       sources: sourceCards,
+      ...("analystEnrichmentFailed" in brief &&
+      (brief as { analystEnrichmentFailed?: boolean }).analystEnrichmentFailed
+        ? { analystEnrichmentFailed: true }
+        : {}),
     };
 
     await prisma.researchJob.updateMany({

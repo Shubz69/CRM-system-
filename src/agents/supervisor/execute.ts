@@ -27,6 +27,10 @@ import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
 import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
 import { scoreResearchQuality } from "@/services/research-quality";
+import {
+  extractCanonicalGroundedClaims,
+  toScoreResearchClaims,
+} from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 
 export type ExecuteAgentRunResult = {
@@ -975,31 +979,35 @@ function attachResearchQualityIfApplicable(input: {
   const obj = input.output as Record<string, unknown>;
   const looksLikeResearch =
     Array.isArray(obj.claims) ||
+    Array.isArray(obj.findings) ||
     Array.isArray(obj.sources) ||
     typeof obj.researchJobId === "string" ||
     typeof obj.brief === "string" ||
-    typeof obj.shortAnswer === "string";
+    typeof obj.shortAnswer === "string" ||
+    typeof obj.executiveSummary === "string";
   if (!looksLikeResearch) return input.output;
 
   try {
-    const claims = Array.isArray(obj.claims)
-      ? (obj.claims as Array<Record<string, unknown>>).map((c) => ({
-          claim: String(c.claim || ""),
-          sourceUrl: typeof c.sourceUrl === "string" ? c.sourceUrl : undefined,
-          evidenceExcerpt: typeof c.evidenceExcerpt === "string" ? c.evidenceExcerpt : undefined,
-          claimKind: typeof c.claimKind === "string" ? c.claimKind : undefined,
-          confidence: typeof c.confidence === "number" ? c.confidence : undefined,
-        }))
-      : [];
     const sources = Array.isArray(obj.sources)
       ? (obj.sources as Array<Record<string, unknown>>).map((s) => ({
           url: String(s.url || ""),
           title: typeof s.title === "string" ? s.title : null,
           platform: typeof s.platform === "string" ? s.platform : null,
         }))
-      : claims
-          .filter((c) => c.sourceUrl)
-          .map((c) => ({ url: c.sourceUrl!, title: null, platform: null }));
+      : [];
+
+    // Canonical set: Deep-shaped `findings` and/or analyst `claims`.
+    // Analyst abort must not erase grounded research findings from RQS input.
+    const grounded = extractCanonicalGroundedClaims(obj, {
+      allowedSourceUrls: sources.map((s) => s.url).filter(Boolean),
+    });
+    const claims = toScoreResearchClaims(grounded);
+    const sourcesForScore =
+      sources.filter((s) => s.url).length > 0
+        ? sources.filter((s) => s.url)
+        : claims
+            .filter((c) => c.sourceUrl)
+            .map((c) => ({ url: c.sourceUrl!, title: null, platform: null }));
 
     const finalAnswerText = [
       typeof obj.shortAnswer === "string" ? obj.shortAnswer : "",
@@ -1008,6 +1016,7 @@ function attachResearchQualityIfApplicable(input: {
       typeof obj.executiveSummary === "string" ? obj.executiveSummary : "",
       typeof obj.answer === "string" ? obj.answer : "",
       typeof obj.keyFinding === "string" ? obj.keyFinding : "",
+      typeof obj.businessImplications === "string" ? obj.businessImplications : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -1024,15 +1033,33 @@ function attachResearchQualityIfApplicable(input: {
       organisationId: input.organisationId,
       outputOrganisationId: input.organisationId,
       claims,
-      sources: sources.filter((s) => s.url),
+      sources: sourcesForScore,
       finalAnswerText,
-      gaps: Array.isArray(obj.gaps) ? obj.gaps.filter((g): g is string => typeof g === "string") : [],
+      gaps: Array.isArray(obj.gaps)
+        ? obj.gaps.filter((g): g is string => typeof g === "string")
+        : Array.isArray(obj.unknowns)
+          ? obj.unknowns.filter((g): g is string => typeof g === "string")
+          : [],
       contradictions: Array.isArray(obj.contradictions)
-        ? (obj.contradictions as Array<{ description?: string; sourceUrls?: string[] }>)
-            .filter((c) => c && typeof c.description === "string")
-            .map((c) => ({ description: c.description!, sourceUrls: c.sourceUrls }))
+        ? (obj.contradictions as Array<string | { description?: string; sourceUrls?: string[] }>)
+            .flatMap((c) => {
+              if (typeof c === "string") return [{ description: c }];
+              if (c && typeof c.description === "string") {
+                return [{ description: c.description, sourceUrls: c.sourceUrls }];
+              }
+              return [];
+            })
         : [],
     });
+
+    const analystEnrichmentFailed =
+      (Array.isArray(obj.gaps) &&
+        obj.gaps.some(
+          (g) =>
+            typeof g === "string" &&
+            /structured analyst|analyst synthesis failed|enrichment/i.test(g),
+        )) ||
+      obj.analystEnrichmentFailed === true;
 
     const withQuality: Record<string, unknown> = {
       ...obj,
@@ -1041,12 +1068,16 @@ function attachResearchQualityIfApplicable(input: {
         report.overall === 0 && !report.accepted
           ? "Quality gate failed — not enough verifiable evidence to score."
           : `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
+      groundedClaimCount: grounded.length,
+      ...(analystEnrichmentFailed
+        ? { analystEnrichmentFailed: true, phase: "ANALYST_ENRICHMENT_FAILED" }
+        : {}),
     };
 
     // Below threshold: keep best supported answer but surface limitations (never invent).
     if (!report.accepted && report.hardGateFailures.length) {
       const lim = report.limitations.slice(0, 4).join(" ");
-      if (withQuality.gaps == null) {
+      if (withQuality.gaps == null && withQuality.unknowns == null) {
         withQuality.gaps = report.limitations.slice(0, 6);
       }
       if (!finalAnswerText.trim()) {

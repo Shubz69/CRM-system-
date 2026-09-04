@@ -56,6 +56,8 @@ export const deepAnswerSchema = z.object({
         claim: z.string().min(1),
         sourceUrl: z.string().optional(),
         evidenceExcerpt: z.string().optional(),
+        claimKind: z.string().optional(),
+        confidence: z.number().min(0).max(1).optional(),
       }),
     )
     .optional(),
