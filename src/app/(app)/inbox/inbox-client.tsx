@@ -92,6 +92,13 @@ export default function InboxPage() {
     searchParams.get("c") || searchParams.get("conversationId"),
   );
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
+  /** LOADING(target) | READY(target) | ERROR(target) — never null-selected while a target is chosen. */
+  const [detailState, setDetailState] = useState<
+    | { status: "idle" }
+    | { status: "loading"; id: string }
+    | { status: "ready"; id: string }
+    | { status: "error"; id: string; message: string }
+  >({ status: "idle" });
   const [reply, setReply] = useState("");
   const [stages, setStages] = useState<Stage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,42 +107,34 @@ export default function InboxPage() {
   const [queue, setQueue] = useState<"all" | "needs_reply" | "hot" | "human" | "waiting">("all");
   const [mobilePanel, setMobilePanel] = useState<"list" | "thread">("list");
   const [showCustomerSheet, setShowCustomerSheet] = useState(false);
-  const detailSeq = useRef(0);
-  const detailAbort = useRef<AbortController | null>(null);
+  /** Bumps on every deliberate selection so same-id re-clicks still reload. */
+  const [selectionEpoch, setSelectionEpoch] = useState(0);
   const selectedIdRef = useRef<string | null>(selectedId);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
+  const selectConversation = useCallback((id: string) => {
+    // Synchronous selection — never briefly clear to null while targeting an id.
+    selectedIdRef.current = id;
+    setSelectedId(id);
+    setMobilePanel("thread");
+    setShowCustomerSheet(false);
+    setDetail((prev) => (prev?.id === id ? prev : null));
+    setDetailState({ status: "loading", id });
+    setSelectionEpoch((n) => n + 1);
+  }, []);
+
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load inbox");
     setItems(json.conversations);
-    setSelectedId((current) => current ?? json.conversations[0]?.id ?? null);
-  }, []);
-
-  const loadDetail = useCallback(async (id: string) => {
-    detailAbort.current?.abort();
-    const ac = new AbortController();
-    detailAbort.current = ac;
-    const seq = ++detailSeq.current;
-    try {
-      const res = await fetch(`/api/conversations/${id}`, { signal: ac.signal });
-      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
-      const json = await res.json();
-      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
-      if (!res.ok) throw new Error(json.error || "Failed to load conversation");
-      if (json.conversation?.id !== id) return;
-      if (selectedIdRef.current !== id) return;
-      setDetail(json.conversation);
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      if (seq !== detailSeq.current || selectedIdRef.current !== id) return;
-      throw e;
+    if (!selectedIdRef.current && json.conversations[0]?.id) {
+      selectConversation(json.conversations[0].id);
     }
-  }, []);
+  }, [selectConversation]);
 
   useEffect(() => {
     Promise.all([
@@ -156,27 +155,51 @@ export default function InboxPage() {
 
   useEffect(() => {
     const fromQuery = searchParams.get("c") || searchParams.get("conversationId");
-    if (fromQuery) {
-      setSelectedId(fromQuery);
-      setMobilePanel("thread");
+    if (fromQuery && fromQuery !== selectedIdRef.current) {
+      selectConversation(fromQuery);
     }
-  }, [searchParams]);
+  }, [searchParams, selectConversation]);
 
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setDetailState({ status: "idle" });
       return;
     }
-    // Clear stale thread immediately so we never show A while B is selected.
-    setDetail((prev) => (prev && prev.id === selectedId ? prev : null));
-    loadDetail(selectedId).catch((e) => {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      toast.error(e.message);
-    });
+    const targetId = selectedId;
+    const ac = new AbortController();
+    let cancelled = false;
+    setDetail((prev) => (prev && prev.id === targetId ? prev : null));
+    setDetailState({ status: "loading", id: targetId });
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/conversations/${targetId}`, { signal: ac.signal });
+        if (cancelled || selectedIdRef.current !== targetId) return;
+        const json = await res.json();
+        if (cancelled || selectedIdRef.current !== targetId) return;
+        if (!res.ok) {
+          throw new Error(json.error || "Failed to load conversation");
+        }
+        // Ignore stale responses that do not match the selected id.
+        if (json.conversation?.id !== targetId) return;
+        if (selectedIdRef.current !== targetId) return;
+        setDetail(json.conversation);
+        setDetailState({ status: "ready", id: targetId });
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        if (cancelled || selectedIdRef.current !== targetId) return;
+        const message = e instanceof Error ? e.message : "Failed to load conversation";
+        setDetailState({ status: "error", id: targetId, message });
+        toast.error(message);
+      }
+    })();
+
     return () => {
-      detailAbort.current?.abort();
+      cancelled = true;
+      ac.abort();
     };
-  }, [selectedId, loadDetail]);
+  }, [selectedId, selectionEpoch]);
 
   useEffect(() => {
     if (!showCustomerSheet) return;
@@ -234,7 +257,8 @@ export default function InboxPage() {
       return;
     }
     toast.success("Updated");
-    await Promise.all([loadList(), loadDetail(selectedId)]);
+    await loadList();
+    if (selectedId) selectConversation(selectedId);
   }
 
   async function onReply(e: FormEvent) {
@@ -504,11 +528,7 @@ export default function InboxPage() {
                 type="button"
                 data-testid={`inbox-row-${c.id}`}
                 data-conversation-id={c.id}
-                onClick={() => {
-                  setSelectedId(c.id);
-                  setMobilePanel("thread");
-                  setShowCustomerSheet(false);
-                }}
+                onClick={() => selectConversation(c.id)}
                 className={`block w-full border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-2)] ${
                   selectedId === c.id ? "bg-[var(--accent-soft)]" : ""
                 }`}
@@ -540,7 +560,18 @@ export default function InboxPage() {
             <div className="p-6 text-[var(--muted)]" data-inbox-empty="true">
               Select a conversation
             </div>
-          ) : !detail || detail.id !== selectedId ? (
+          ) : detailState.status === "error" && detailState.id === selectedId ? (
+            <div className="p-6 text-[var(--muted)]" data-inbox-error={selectedId}>
+              <p>Could not load conversation.</p>
+              <button
+                type="button"
+                className="btn btn-secondary mt-3"
+                onClick={() => selectConversation(selectedId)}
+              >
+                Retry
+              </button>
+            </div>
+          ) : !detail || detail.id !== selectedId || detailState.status === "loading" ? (
             <div className="p-6 text-[var(--muted)]" data-inbox-loading={selectedId}>
               Loading conversation…
             </div>

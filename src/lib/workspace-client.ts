@@ -327,6 +327,12 @@ export function subscribeWorkspaceContextReady(handler: () => void): () => void 
     return () => undefined;
   }
   readyListeners.add(handler);
+  // Close the race where readiness flips between the check and listener registration.
+  if (workspaceContextReady) {
+    readyListeners.delete(handler);
+    handler();
+    return () => undefined;
+  }
   return () => {
     readyListeners.delete(handler);
   };

@@ -312,7 +312,7 @@ test.describe("Round 6 production-parity", () => {
   });
 
   test("inbox 100 first-click across clean/recovery/legacy/mixed", async ({ browser }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(900_000);
     let pass = 0;
     const profiles: Array<"clean" | "recovery" | "legacy" | "mixed"> = [
       "clean",
@@ -401,19 +401,27 @@ test.describe("Round 6 production-parity", () => {
 
       for (let i = 0; i < 25; i++) {
         const name = names[i % 3]!;
-        const row = page.getByRole("button", { name: new RegExp(name, "i") }).first();
+        const row = page.getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i") }).first();
         const conversationId = await row.getAttribute("data-conversation-id");
         expect(conversationId).toBeTruthy();
+        const detailRes = page.waitForResponse(
+          (r) =>
+            r.url().includes(`/api/conversations/${conversationId}`) &&
+            r.request().method() === "GET" &&
+            r.ok(),
+          { timeout: 30_000 },
+        );
         await row.click({ timeout: 10_000 });
         await expect(page.locator("[data-selected-conversation-id]")).toHaveAttribute(
           "data-selected-conversation-id",
           conversationId!,
-          { timeout: 20_000 },
+          { timeout: 5_000 },
         );
+        await detailRes;
         await expect(page.getByTestId("inbox-detail-header")).toHaveAttribute(
           "data-conversation-id",
           conversationId!,
-          { timeout: 20_000 },
+          { timeout: 30_000 },
         );
         await expect(page.getByText(/Select a conversation/i)).toHaveCount(0);
         pass++;
@@ -452,8 +460,8 @@ test.describe("Round 6 production-parity", () => {
         });
         await waitReady(page);
         const goBtn = page.getByTestId("ask-go");
-        await expect(goBtn).toBeEnabled({ timeout: 20_000 });
         await page.getByRole("textbox").first().fill(`E2E-${RUN_ID} quick ping ${profile}-${i}`);
+        await expect(goBtn).toBeEnabled({ timeout: 20_000 });
         const askPost = page.waitForResponse(
           (r) => r.url().includes("/api/ask") && r.request().method() === "POST",
           { timeout: 30_000 },
