@@ -54,6 +54,10 @@ import {
   recordQueueOp,
 } from "@/services/queue-ops";
 import {
+  getAiProviderConfigPreflight,
+  probeAiProviderAuth,
+} from "@/services/ai-provider-preflight";
+import {
   dispatchDomainEventBatch,
   recoverStaleDomainEventClaims,
   recoverMissionQueueJobs,
@@ -418,6 +422,35 @@ async function startRedisWorkers() {
     queues: [queueName],
     prefix: getQueuePrefix(),
   });
+
+  // AI provider preflight — config sync, cheap auth probe once (internal only).
+  {
+    const preflight = getAiProviderConfigPreflight();
+    if (preflight.degraded) {
+      markWorkerDegraded(true, `ai_provider:${preflight.status}`);
+      logger.warn("Worker AI provider preflight degraded", {
+        provider: preflight.provider,
+        status: preflight.status,
+        detail: preflight.detail,
+      });
+    } else {
+      logger.info("Worker AI provider config preflight OK", {
+        provider: preflight.provider,
+        status: preflight.status,
+      });
+    }
+    void probeAiProviderAuth()
+      .then((result) => {
+        if (result.degraded || result.authValid === false) {
+          markWorkerDegraded(true, `ai_provider:${result.status}`);
+          logger.warn("Worker AI provider auth preflight failed", {
+            provider: result.provider,
+            status: result.status,
+          });
+        }
+      })
+      .catch(() => undefined);
+  }
 
   startFollowUpDbSweep();
   startMaintenanceDbSweeps();

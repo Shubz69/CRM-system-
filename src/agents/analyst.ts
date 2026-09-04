@@ -6,6 +6,10 @@ import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import {
+  isAiProviderAuthError,
+  RESEARCH_SYNTHESIS_FAILED_CUSTOMER,
+} from "@/services/ai-provider-preflight";
 
 export const analystInputSchema = z.object({
   researchJobId: z.string().min(1),
@@ -257,6 +261,19 @@ ${catalog.slice(0, 70_000)}`,
     const brief = briefResult.ok
       ? briefResult.data
       : (() => {
+          if (isAiProviderAuthError(briefResult.reason)) {
+            logger.warn("Analyst synthesis failed — provider authentication", {
+              researchJobId: job.id,
+              organisationId: ctx.organisationId,
+            });
+            const err = new Error(RESEARCH_SYNTHESIS_FAILED_CUSTOMER) as Error & {
+              userFacingMessage: string;
+              synthesisPhase: string;
+            };
+            err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
+            err.synthesisPhase = "SYNTHESIS_FAILED";
+            throw err;
+          }
           logger.warn("Analyst brief degraded to findings fallback", {
             researchJobId: job.id,
             organisationId: ctx.organisationId,

@@ -50,7 +50,7 @@ describe("Round 6 workspace storage migration", () => {
         STORAGE_SCHEMA_VERSION_KEY,
       ]),
     );
-    expect(STORAGE_SCHEMA_VERSION).toBe(6);
+    expect(STORAGE_SCHEMA_VERSION).toBe(7);
   });
 
   it("removes legacy localStorage immutable context and versions storage", () => {
@@ -110,6 +110,32 @@ describe("Round 6 workspace storage migration", () => {
       workspaceGateShouldBlock({
         currentOrganisationId: "org-b",
         currentWorkspaceRevision: "2026-01-02T00:00:00.000Z",
+        event: JSON.parse(local.get(STORAGE_EVENT_KEY)!),
+      }),
+    ).toBe(false);
+  });
+
+  it("reload recovery clears gate when org matches even if freeze revision lags event", () => {
+    local.set(
+      STORAGE_EVENT_KEY,
+      JSON.stringify({
+        type: "org-changed",
+        organisationId: "org-b",
+        organisationName: "B",
+        workspaceRevision: "2026-01-02T00:00:05.000Z",
+        changeId: "switch-lag",
+      }),
+    );
+    prepareWorkspaceTabReload();
+    // Freeze captured an older revision than the broadcast (reload race).
+    setImmutableWorkspaceContext({
+      loadedOrganisationId: "org-b",
+      workspaceRevision: "2026-01-02T00:00:01.000Z",
+    });
+    expect(
+      workspaceGateShouldBlock({
+        currentOrganisationId: "org-b",
+        currentWorkspaceRevision: "2026-01-02T00:00:01.000Z",
         event: JSON.parse(local.get(STORAGE_EVENT_KEY)!),
       }),
     ).toBe(false);

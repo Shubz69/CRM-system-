@@ -7,6 +7,10 @@ import { getBookingProvider } from "@/adapters/booking";
 import { listConfiguredSourcePlatforms } from "@/adapters/sources";
 import { getPublicProviderCapabilityHealth } from "@/services/provider-capability-health";
 import { customerSafeAiHealth } from "@/lib/customer-ai-errors";
+import {
+  getAiProviderConfigPreflight,
+  getCachedAiProviderPreflight,
+} from "@/services/ai-provider-preflight";
 
 function isPlatformViewer(session: {
   user?: { isPlatformAdmin?: boolean; role?: string };
@@ -35,15 +39,17 @@ export async function GET() {
   const booking = getBookingProvider();
   const snapshot = getPublicProviderCapabilityHealth();
   const aiReady = Boolean(env.ANTHROPIC_API_KEY) || ai.name === "mock";
+  const aiPreflight = getCachedAiProviderPreflight() || getAiProviderConfigPreflight();
 
   if (!platform) {
     const messagingConfigured = Boolean(env.MANYCHAT_WEBHOOK_SECRET || env.MANYCHAT_API_TOKEN);
     const bookingConfigured = Boolean(env.BOOKING_WEBHOOK_SECRET);
     const emailConfigured = Boolean(env.EMAIL_SMTP_URL);
+    const customerAiReady = aiReady && !aiPreflight.degraded;
     return Response.json({
       ok: true,
       providers: {
-        ai: customerSafeAiHealth(aiReady),
+        ai: customerSafeAiHealth(customerAiReady),
         research: {
           configuredPlatforms: listConfiguredSourcePlatforms().length > 0,
         },
@@ -67,6 +73,16 @@ export async function GET() {
   return Response.json({
     ok: true,
     ...snapshot,
+    aiPreflight: {
+      status: aiPreflight.status,
+      provider: aiPreflight.provider,
+      configured: aiPreflight.configured,
+      formatValid: aiPreflight.formatValid,
+      authValid: aiPreflight.authValid,
+      degraded: aiPreflight.degraded,
+      detail: aiPreflight.detail,
+      checkedAt: aiPreflight.checkedAt,
+    },
     legacy: {
       ai: {
         primary: "anthropic",

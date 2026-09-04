@@ -528,7 +528,22 @@ export default function InboxPage() {
                 type="button"
                 data-testid={`inbox-row-${c.id}`}
                 data-conversation-id={c.id}
-                onClick={() => selectConversation(c.id)}
+                onPointerDown={(e) => {
+                  // Establish selection on the first pointer contact (normal click path).
+                  // Avoids lost first-clicks when a capture listener ate click but not the intent.
+                  if (e.button !== 0) return;
+                  if (typeof document !== "undefined") {
+                    const gate = document.documentElement.dataset.workspaceGate;
+                    if (gate === "blocked") return;
+                  }
+                  selectConversation(c.id);
+                }}
+                onClick={(e) => {
+                  // Pointerdown already selected; still handle click for keyboard/accessibility
+                  // and environments that synthesize click without prior pointerdown.
+                  e.preventDefault();
+                  selectConversation(c.id);
+                }}
                 className={`block w-full border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-2)] ${
                   selectedId === c.id ? "bg-[var(--accent-soft)]" : ""
                 }`}

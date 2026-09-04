@@ -429,11 +429,43 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       if (extractResult.ok) {
         extractedFindings = extractResult.data.findings;
       } else {
+        const { isAiProviderAuthError, RESEARCH_SYNTHESIS_FAILED_CUSTOMER } = await import(
+          "@/services/ai-provider-preflight"
+        );
+        if (isAiProviderAuthError(extractResult.reason)) {
+          logger.warn("Research findings extract failed — provider authentication", {
+            researchJobId: job.id,
+            organisationId: ctx.organisationId,
+            phase: "SYNTHESIS_FAILED",
+            evidenceGathered: ranked.length > 0,
+          });
+          await prisma.researchJob.updateMany({
+            where: { id: job.id, organisationId: ctx.organisationId },
+            data: {
+              status: "FAILED",
+              brief: {
+                phase: "SYNTHESIS_FAILED",
+                evidenceGathered: true,
+                sourceCount: ranked.length,
+              } as unknown as Prisma.InputJsonValue,
+              totalCostCents: costCents,
+              finishedAt: new Date(),
+              userFacingError: RESEARCH_SYNTHESIS_FAILED_CUSTOMER,
+              error: "synthesis_auth_failed",
+            },
+          });
+          const err = new Error(RESEARCH_SYNTHESIS_FAILED_CUSTOMER) as Error & {
+            userFacingMessage: string;
+          };
+          err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
+          throw err;
+        }
         logger.warn("Research findings extract degraded after sources collected", {
           researchJobId: job.id,
           organisationId: ctx.organisationId,
           reason: extractResult.reason,
           sourceCount: ranked.length,
+          phase: "EVIDENCE_GATHERED",
         });
         adapterErrors.push({
           platform: "findings_extract",

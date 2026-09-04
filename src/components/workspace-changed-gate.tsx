@@ -34,11 +34,12 @@ function evaluateGate(
 ): OrgChangedBroadcast | null {
   const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
   // Prefer frozen snapshot once ready; never treat a previous-document freeze as truth.
+  // Org must stay snap-first (live session can update across tabs without reload).
   const baselineOrg = isWorkspaceContextReady()
     ? snap.loadedOrganisationId || currentOrganisationId || null
     : snap.loadedOrganisationId || null;
   const baselineRev = isWorkspaceContextReady()
-    ? snap.workspaceRevision || currentWorkspaceRevision || null
+    ? snap.workspaceRevision || null
     : snap.workspaceRevision || null;
 
   if (!baselineOrg) return null;
@@ -47,6 +48,8 @@ function evaluateGate(
     workspaceGateShouldBlock({
       currentOrganisationId: baselineOrg,
       currentWorkspaceRevision: baselineRev,
+      // Live prop may be newer after /api/organisations refresh post-reload.
+      liveWorkspaceRevision: isWorkspaceContextReady() ? currentWorkspaceRevision : null,
       event,
     })
   ) {
@@ -72,7 +75,15 @@ export function WorkspaceChangedGate({
 
     function recompute(event?: OrgChangedBroadcast | null) {
       const existing = event === undefined ? readLastOrgChangedEvent() : event;
-      setPending(evaluateGate(currentOrganisationId, currentWorkspaceRevision, existing));
+      const next = evaluateGate(currentOrganisationId, currentWorkspaceRevision, existing);
+      setPending(next);
+      // Explicit clear when authoritative context matches destination — never leave
+      // a stale React pending=true after reload recovery.
+      if (!next) {
+        document.documentElement.dataset.workspaceGate = "clear";
+      } else {
+        document.documentElement.dataset.workspaceGate = "blocked";
+      }
     }
 
     // Do not arm from localStorage until this document has frozen authoritative context
@@ -81,6 +92,7 @@ export function WorkspaceChangedGate({
       recompute();
     } else {
       setPending(null);
+      document.documentElement.dataset.workspaceGate = "clear";
     }
 
     const unsubReady = subscribeWorkspaceContextReady(() => recompute());
@@ -89,16 +101,23 @@ export function WorkspaceChangedGate({
       // last known immutable snapshot so open forms block without waiting.
       const snap = getImmutableWorkspaceContext(currentOrganisationId ?? null);
       const org = snap.loadedOrganisationId || currentOrganisationId || null;
-      const rev = snap.workspaceRevision || currentWorkspaceRevision || null;
+      const rev = snap.workspaceRevision || null;
       if (
         org &&
         workspaceGateShouldBlock({
           currentOrganisationId: org,
           currentWorkspaceRevision: rev,
+          liveWorkspaceRevision: currentWorkspaceRevision,
           event: msg,
         })
       ) {
         setPending(msg);
+        document.documentElement.dataset.workspaceGate = "blocked";
+      } else if (msg) {
+        // Destination already reflected in this tab — consume and keep clear.
+        const next = evaluateGate(currentOrganisationId, currentWorkspaceRevision, msg);
+        setPending(next);
+        document.documentElement.dataset.workspaceGate = next ? "blocked" : "clear";
       }
     });
 
@@ -110,7 +129,11 @@ export function WorkspaceChangedGate({
 
   useEffect(() => {
     // CRITICAL: no capture listeners while unblocked / loading — they swallow first clicks.
-    if (!pending) return;
+    if (!pending) {
+      document.documentElement.dataset.workspaceGate = "clear";
+      return;
+    }
+    document.documentElement.dataset.workspaceGate = "blocked";
     const block = (e: Event) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest?.("[data-workspace-gate]")) return;
@@ -127,6 +150,10 @@ export function WorkspaceChangedGate({
       document.removeEventListener("click", block, true);
       document.removeEventListener("keydown", block, true);
       document.removeEventListener("submit", block, true);
+      // Cleanup must restore clear state so listeners never linger after unmount.
+      if (!pending) {
+        document.documentElement.dataset.workspaceGate = "clear";
+      }
     };
   }, [pending]);
 

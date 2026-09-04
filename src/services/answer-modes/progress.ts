@@ -34,3 +34,19 @@ export function customerFacingStatusForStep(status: "RUNNING" | "COMPLETED" | "F
       return "Couldn't finish";
   }
 }
+
+/** Internal phase labels — never expose provider names. */
+export function customerFacingSynthesisPhase(
+  phase: "EVIDENCE_GATHERED" | "SYNTHESIS_FAILED" | "QUALITY_REJECTED" | "SYNTHESIS_OK",
+): string | null {
+  switch (phase) {
+    case "SYNTHESIS_FAILED":
+      return "We found authoritative sources, but couldn't complete the analysis. Please try again shortly.";
+    case "QUALITY_REJECTED":
+      return "The answer did not meet our quality bar. Please try again or narrow the question.";
+    case "EVIDENCE_GATHERED":
+      return null;
+    case "SYNTHESIS_OK":
+      return null;
+  }
+}

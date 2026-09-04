@@ -17,8 +17,10 @@ export const WORKSPACE_CHANNEL = "agent-desk-workspace";
 export const STORAGE_EVENT_KEY = "agent-desk-workspace-event";
 export const IMMUTABLE_CONTEXT_KEY = "agent-desk-workspace-context";
 export const ACK_KEY = "agent-desk-workspace-event-ack";
+/** Set by "Reload this tab" — next freeze into destination org consumes the event. */
+export const RELOAD_RECOVERY_KEY = "agent-desk-workspace-reload-recovery";
 /** Bumps when storage semantics change; triggers allowlisted migration. */
-export const STORAGE_SCHEMA_VERSION = 6;
+export const STORAGE_SCHEMA_VERSION = 7;
 export const STORAGE_SCHEMA_VERSION_KEY = "agent-desk-workspace-storage-version";
 
 const CHANNEL = WORKSPACE_CHANNEL;
@@ -31,6 +33,7 @@ export const ALL_WORKSPACE_STORAGE_KEYS = [
   STORAGE_EVENT_KEY,
   IMMUTABLE_CONTEXT_KEY,
   ACK_KEY,
+  RELOAD_RECOVERY_KEY,
   STORAGE_SCHEMA_VERSION_KEY,
 ] as const;
 
@@ -190,6 +193,12 @@ export function prepareWorkspaceTabReload(): void {
   } catch {
     /* ignore */
   }
+  try {
+    // Next freeze into the event destination must clear the gate (recovery contract).
+    sessionStorage.setItem(RELOAD_RECOVERY_KEY, "1");
+  } catch {
+    /* ignore */
+  }
   // Allow a fresh freeze after soft re-init within the same module (tests).
   frozenForThisDocument = false;
   workspaceContextReady = false;
@@ -285,6 +294,21 @@ export function acknowledgeOrgChangedEvent(event: OrgChangedBroadcast | null) {
 }
 
 /**
+ * Prefer the newer of two ISO workspace revisions (nulls ignored).
+ * Used so a post-reload live prop revision can clear the gate even if the
+ * frozen snapshot briefly captured an older revision from the same org.
+ */
+export function newerWorkspaceRevision(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): string | null {
+  if (!a && !b) return null;
+  if (!a) return b || null;
+  if (!b) return a || null;
+  return compareWorkspaceRevisions(a, b) >= 0 ? a : b;
+}
+
+/**
  * True when this tab's LOADED snapshot is still behind the switch destination.
  * If loaded org+revision already matches or is newer than the event destination,
  * the event is obsolete/consumed — do not block (fixes localStorage poison).
@@ -292,6 +316,8 @@ export function acknowledgeOrgChangedEvent(event: OrgChangedBroadcast | null) {
 export function workspaceGateShouldBlock(args: {
   currentOrganisationId?: string | null;
   currentWorkspaceRevision?: string | null;
+  /** Optional live revision from the latest organisations fetch (gate clear only). */
+  liveWorkspaceRevision?: string | null;
   event: OrgChangedBroadcast | null;
 }): boolean {
   const loadedOrg = args.currentOrganisationId;
@@ -303,7 +329,12 @@ export function workspaceGateShouldBlock(args: {
 
   const destOrg = event.organisationId;
   const destRev = event.workspaceRevision || null;
-  const loadedRev = args.currentWorkspaceRevision || null;
+  // Gate clear may use max(frozen, live) so reload recovery is not stuck when
+  // the freeze raced an older revision while the live session is already current.
+  const loadedRev = newerWorkspaceRevision(
+    args.currentWorkspaceRevision,
+    args.liveWorkspaceRevision,
+  );
 
   // Still on a different organisation than the switch destination → stale.
   if (loadedOrg !== destOrg) return true;
@@ -354,10 +385,30 @@ export function setImmutableWorkspaceContext(ctx: ImmutableWorkspaceContext) {
     } catch {
       /* ignore */
     }
-    // If current authoritative context already matches last event, acknowledge it
-    // so reloads / new mounts never re-arm from an obsolete localStorage event.
     const last = readLastOrgChangedEvent();
+    let recovering = false;
+    try {
+      recovering = sessionStorage.getItem(RELOAD_RECOVERY_KEY) === "1";
+    } catch {
+      recovering = false;
+    }
+    // Reload recovery: once this tab freezes into the destination org, consume the
+    // event. Do not require revision equality here — that was leaving the banner up
+    // after a successful org recovery. A→B→A still blocks on non-recovery tabs via
+    // revision compare in workspaceGateShouldBlock.
     if (
+      last &&
+      recovering &&
+      ctx.loadedOrganisationId &&
+      ctx.loadedOrganisationId === last.organisationId
+    ) {
+      acknowledgeOrgChangedEvent(last);
+      try {
+        sessionStorage.removeItem(RELOAD_RECOVERY_KEY);
+      } catch {
+        /* ignore */
+      }
+    } else if (
       last &&
       !workspaceGateShouldBlock({
         currentOrganisationId: ctx.loadedOrganisationId,

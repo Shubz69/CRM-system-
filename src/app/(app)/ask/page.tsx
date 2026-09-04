@@ -513,6 +513,7 @@ export default function AskPage() {
     e.preventDefault();
     const text = request.trim();
     if (!text) return;
+    if (!workspaceReady || submitting) return;
     await executeAsk({ prompt: text, source: "go" });
   }
 
@@ -953,11 +954,16 @@ export default function AskPage() {
         )}
 
         <button
-          type="submit"
+          type="button"
+          data-testid="ask-go"
           disabled={submitting || !workspaceReady || !request.trim()}
           className="btn btn-primary disabled:opacity-50"
-          data-testid="ask-go"
           aria-disabled={submitting || !workspaceReady || !request.trim()}
+          onClick={() => {
+            const text = request.trim();
+            if (!text || submitting || !workspaceReady) return;
+            void executeAsk({ prompt: text, source: "go" });
+          }}
         >
           {!workspaceReady ? "Loading…" : submitting ? "Starting…" : "Go"}
         </button>
