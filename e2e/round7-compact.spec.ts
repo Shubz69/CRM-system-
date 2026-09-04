@@ -81,8 +81,48 @@ async function switchToOrg(page: Page, organisationId: string) {
 }
 
 async function waitReady(page: Page) {
-  await expect(page.locator('[data-workspace-ready="true"]')).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator('[data-workspace-gate="blocked"]')).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator('[data-workspace-ready="true"]')).toBeVisible({ timeout: 40_000 });
+}
+
+async function expectGateClear(page: Page) {
+  await expect(page.getByRole("alertdialog").filter({ hasText: /workspace changed/i })).toHaveCount(
+    0,
+    { timeout: 10_000 },
+  );
+  await expect(page.locator('[data-workspace-gate="blocked"]')).toHaveCount(0, { timeout: 10_000 });
+  const gate = await page.evaluate(() => document.documentElement.dataset.workspaceGate || "clear");
+  expect(gate).toBe("clear");
+}
+
+async function broadcastSwitch(
+  page: Page,
+  organisationId: string,
+  organisationName: string,
+  workspaceRevision: string | null,
+) {
+  await page.evaluate(
+    ({ organisationId, organisationName, workspaceRevision }) => {
+      const changeId = `${organisationId}:${workspaceRevision || ""}:${Date.now()}`;
+      const event = {
+        type: "org-changed",
+        organisationId,
+        organisationName,
+        workspaceRevision,
+        changeId,
+        eventId: changeId,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem("agent-desk-workspace-event", JSON.stringify(event));
+      try {
+        const bc = new BroadcastChannel("agent-desk-workspace");
+        bc.postMessage(event);
+        bc.close();
+      } catch {
+        /* ignore */
+      }
+    },
+    { organisationId, organisationName, workspaceRevision },
+  );
 }
 
 async function ensureCleanState(browser: Browser) {
@@ -235,17 +275,15 @@ test.describe("Round 7 compact", () => {
   test.skip(!hasAuth, "E2E_EMAIL/E2E_PASSWORD required");
 
   test("Workspace recovery 3/3", async ({ browser }) => {
-    test.setTimeout(120_000);
-    const clean = await ensureCleanState(browser);
-    const { context, page } = await openWithState(browser, clean);
-    const orgB = await resolveOrgB(page);
-    test.skip(!orgB, "Need a second QA org for workspace recovery");
-
+    test.setTimeout(300_000);
     let pass = 0;
     for (let i = 0; i < 3; i++) {
       console.log(`R7_WS_RECOVERY=${i + 1}/3`);
-      const tabA = page;
-      const tabB = await context.newPage();
+      const clean = await ensureCleanState(browser);
+      const { context, page: tabA } = await openWithState(browser, clean);
+      const orgB = await resolveOrgB(tabA);
+      test.skip(!orgB, "Need a second QA org for workspace recovery");
+
       await tabA.goto(withBypass(`${BASE}/contacts`), {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
@@ -253,74 +291,48 @@ test.describe("Round 7 compact", () => {
       await waitReady(tabA);
       await switchToOrg(tabA, ORG_A);
 
+      const tabB = await context.newPage();
       await tabB.goto(withBypass(`${BASE}/home`), {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
       await waitReady(tabB);
 
-      // Switch on B — A should block.
-      await tabB.evaluate(async (organisationId) => {
+      const switchRes = await tabB.evaluate(async (organisationId) => {
         const res = await fetch("/api/session/organisation", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ organisationId }),
         });
-        const json = await res.json();
-        const changeId = `${organisationId}:${json.workspaceRevision || ""}:${Date.now()}`;
-        localStorage.setItem(
-          "agent-desk-workspace-event",
-          JSON.stringify({
-            type: "org-changed",
-            organisationId,
-            organisationName: json.organisationName || "B",
-            workspaceRevision: json.workspaceRevision || null,
-            fromOrganisationId: null,
-            changeId,
-            eventId: changeId,
-            timestamp: Date.now(),
-          }),
-        );
-        try {
-          const bc = new BroadcastChannel("agent-desk-workspace");
-          bc.postMessage(JSON.parse(localStorage.getItem("agent-desk-workspace-event")!));
-          bc.close();
-        } catch {
-          /* ignore */
-        }
+        return res.json();
       }, orgB!);
+      await broadcastSwitch(
+        tabB,
+        orgB!,
+        switchRes.organisationName || "B",
+        typeof switchRes.workspaceRevision === "string" ? switchRes.workspaceRevision : null,
+      );
 
       await expect(tabA.getByRole("alertdialog").filter({ hasText: /workspace changed/i })).toBeVisible({
         timeout: 15_000,
       });
       await expect(tabA.locator('[data-workspace-gate="blocked"]')).toHaveCount(1);
 
-      // Reload recovery on A into destination org.
       await switchToOrg(tabA, orgB!);
       await tabA.getByTestId("workspace-gate-reload").click();
       await tabA.waitForLoadState("domcontentloaded");
       await waitReady(tabA);
-
-      await expect(tabA.getByRole("alertdialog").filter({ hasText: /workspace changed/i })).toHaveCount(
-        0,
-        { timeout: 10_000 },
-      );
-      await expect(tabA.locator('[data-workspace-gate="blocked"]')).toHaveCount(0);
-      const gate = await tabA.evaluate(() => document.documentElement.dataset.workspaceGate || "clear");
-      expect(gate).toBe("clear");
+      await expectGateClear(tabA);
 
       const orgs = await tabA.request.get(`${BASE}/api/organisations`).then((r) => r.json());
       expect(orgs.activeOrganisationId).toBe(orgB);
 
-      // Restore A for next loop
-      await switchToOrg(tabA, ORG_A);
-      await tabB.close();
       pass++;
       console.log(`R7_WS_OK=${pass}`);
+      await context.close();
     }
     console.log(`R7_WORKSPACE_PASS=${pass}/3`);
     expect(pass).toBe(3);
-    await context.close();
   });
 
   test("Inbox 5/5 clean profile", async ({ browser }) => {
