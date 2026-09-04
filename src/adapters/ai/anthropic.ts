@@ -46,6 +46,25 @@ export class AnthropicProvider implements AiProvider {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), defaults.timeoutMs);
       try {
+        const maxTokens = Math.max(256, request.maxTokens ?? defaults.maxTokens);
+        const body: Record<string, unknown> = {
+          model,
+          max_tokens: maxTokens,
+          temperature: request.temperature ?? defaults.temperature,
+          system: system || undefined,
+          messages,
+        };
+
+        // Native structured outputs when a JSON Schema is provided.
+        if (request.jsonSchema && typeof request.jsonSchema === "object") {
+          body.output_config = {
+            format: {
+              type: "json_schema",
+              schema: request.jsonSchema,
+            },
+          };
+        }
+
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -53,36 +72,56 @@ export class AnthropicProvider implements AiProvider {
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            model,
-            max_tokens: defaults.maxTokens,
-            temperature: request.temperature ?? defaults.temperature,
-            system: system || undefined,
-            messages,
-          }),
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
 
-        if (!response.ok) {
-          const body = await response.text();
+        // If structured output is rejected for this model, retry once without it.
+        if (
+          !response.ok &&
+          request.jsonSchema &&
+          (response.status === 400 || response.status === 422)
+        ) {
+          const errBody = await response.text();
+            if (/output_config|json_schema|structured|unsupported|invalid/i.test(errBody)) {
+              logger.warn("Anthropic structured output unsupported — falling back to free JSON", {
+                model,
+                status: response.status,
+                detail: errBody.slice(0, 180).replace(/sk-ant-[^\s"]+/g, "[redacted]"),
+              });
+            const fallbackBody = { ...body };
+            delete fallbackBody.output_config;
+            const retry = await fetch("https://api.anthropic.com/v1/messages", {
+              method: "POST",
+              headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(fallbackBody),
+              signal: controller.signal,
+            });
+            if (!retry.ok) {
+              const retryBody = await retry.text();
+              throw new Error(
+                `Anthropic request failed (${retry.status}): ${retryBody.slice(0, 300)}`,
+              );
+            }
+            return this.readTextCompletion(await retry.json());
+          }
           throw new Error(
-            `Anthropic request failed (${response.status}): ${body.slice(0, 300)}`,
+            `Anthropic request failed (${response.status}): ${errBody.slice(0, 300)}`,
           );
         }
 
-        const json = (await response.json()) as {
-          content?: Array<{ type: string; text?: string }>;
-          usage?: { input_tokens?: number; output_tokens?: number };
-        };
+        if (!response.ok) {
+          const errBody = await response.text();
+          throw new Error(
+            `Anthropic request failed (${response.status}): ${errBody.slice(0, 300)}`,
+          );
+        }
 
-        this.lastUsage = {
-          inputTokens: json.usage?.input_tokens,
-          outputTokens: json.usage?.output_tokens,
-        };
-
-        const text = json.content?.find((c) => c.type === "text")?.text;
-        if (!text) throw new Error("Anthropic returned an empty completion");
-        return text;
+        return this.readTextCompletion(await response.json());
       } catch (error) {
         lastError = error instanceof Error ? error : new Error("Anthropic error");
         if (isDeterministicAnthropicModelError(lastError.message)) {
@@ -105,6 +144,19 @@ export class AnthropicProvider implements AiProvider {
     }
 
     throw lastError || new Error("Anthropic request failed");
+  }
+
+  private readTextCompletion(json: {
+    content?: Array<{ type: string; text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  }): string {
+    this.lastUsage = {
+      inputTokens: json.usage?.input_tokens,
+      outputTokens: json.usage?.output_tokens,
+    };
+    const text = json.content?.find((c) => c.type === "text")?.text;
+    if (!text) throw new Error("Anthropic returned an empty completion");
+    return text;
   }
 
   async analyseConversation(input: {

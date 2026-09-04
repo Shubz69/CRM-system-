@@ -180,12 +180,13 @@ ${
   }
 }
 
-const findingsExtractSchema = z.object({
+/** Extraction contract used by research findings / claim structuring. */
+export const findingsExtractSchema = z.object({
   findings: z
     .array(
       z.object({
         claim: z.string().min(1).max(500),
-        sourceUrl: z.string().url(),
+        sourceUrl: flexibleSourceUrl,
         evidenceExcerpt: z.string().max(800).optional(),
         claimKind: z
           .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
@@ -195,6 +196,33 @@ const findingsExtractSchema = z.object({
     )
     .max(40),
 });
+
+/** Hand-written JSON Schema for Anthropic native structured output (matches findingsExtractSchema). */
+export const FINDINGS_EXTRACT_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          claim: { type: "string" },
+          sourceUrl: { type: "string" },
+          evidenceExcerpt: { type: "string" },
+          claimKind: {
+            type: "string",
+            enum: ["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"],
+          },
+          confidence: { type: "number" },
+        },
+        required: ["claim", "sourceUrl"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["findings"],
+  additionalProperties: false,
+} as const;
 
 function engagementScore(r: SourceResult): number {
   return r.engagement?.score ?? r.engagement?.views ?? r.engagement?.likes ?? 0;
@@ -415,23 +443,29 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     await assertWithinSpendCap(ctx.organisationId, 2);
     let extractedFindings: z.infer<typeof findingsExtractSchema>["findings"] = [];
     if (catalog) {
-      // Never throw after sources are already billed — degrade to sources-only.
+      const findingLimit = Math.min(maxSources, 15);
       const extractResult = await completeStructuredSafe(findingsExtractSchema, {
         organisationId: ctx.organisationId,
         tier: "cheap",
         model,
+        maxTokens: 8192,
+        jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
+        repairHint:
+          'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
         system:
-          'Extract factual findings from the sources. Every finding MUST include sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION (what happened), INFERENCE (your reasoned take), or SECONDARY (repost/summary). Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit.',
-        prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 60_000)}\n\nReturn up to ${Math.min(maxSources, 25)} findings.`,
+          'Extract factual findings from the sources. Return ONLY JSON shaped as {"findings":[...]}. Every finding MUST include claim and sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION, INFERENCE, or SECONDARY. Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit that finding.',
+        prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 45_000)}\n\nReturn up to ${findingLimit} findings.`,
         temperature: 0.1,
       });
       costCents += 2;
       if (extractResult.ok) {
         extractedFindings = extractResult.data.findings;
       } else {
-        const { isAiProviderAuthError, RESEARCH_SYNTHESIS_FAILED_CUSTOMER } = await import(
-          "@/services/ai-provider-preflight"
-        );
+        const {
+          isAiProviderAuthError,
+          RESEARCH_SYNTHESIS_FAILED_CUSTOMER,
+          RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
+        } = await import("@/services/ai-provider-preflight");
         if (isAiProviderAuthError(extractResult.reason)) {
           logger.warn("Research findings extract failed — provider authentication", {
             researchJobId: job.id,
@@ -460,22 +494,94 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
           throw err;
         }
-        logger.warn("Research findings extract degraded after sources collected", {
+        logger.warn("Research findings extract failed after sources collected", {
           researchJobId: job.id,
           organisationId: ctx.organisationId,
           reason: extractResult.reason,
+          failureClass: extractResult.failureClass,
           sourceCount: ranked.length,
-          phase: "EVIDENCE_GATHERED",
+          phase: "STRUCTURED_EXTRACTION_FAILED",
         });
-        adapterErrors.push({
-          platform: "findings_extract",
-          message: "Could not structure findings from sources; returning sources only.",
+        await prisma.researchJob.updateMany({
+          where: { id: job.id, organisationId: ctx.organisationId },
+          data: {
+            status: "FAILED",
+            brief: {
+              phase: "STRUCTURED_EXTRACTION_FAILED",
+              evidenceGathered: true,
+              sourceCount: ranked.length,
+              failureClass: extractResult.failureClass || "SCHEMA_FAILED",
+            } as unknown as Prisma.InputJsonValue,
+            totalCostCents: costCents,
+            finishedAt: new Date(),
+            userFacingError: RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
+            error: "structured_extraction_failed",
+          },
         });
+        const err = new Error(RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER) as Error & {
+          userFacingMessage: string;
+          synthesisPhase: string;
+        };
+        err.userFacingMessage = RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER;
+        err.synthesisPhase = "STRUCTURED_EXTRACTION_FAILED";
+        throw err;
       }
     }
 
-    const allowedUrls = new Set(ranked.map((r) => r.url));
-    const findings = extractedFindings.filter((f) => allowedUrls.has(f.sourceUrl));
+    const normalizeUrlKey = (u: string) => {
+      try {
+        const parsed = new URL(u.trim());
+        parsed.hash = "";
+        const path = parsed.pathname.replace(/\/+$/, "") || "/";
+        return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}`;
+      } catch {
+        return u.trim().replace(/\/+$/, "");
+      }
+    };
+    const allowedByNormalized = new Map(
+      ranked.map((r) => [normalizeUrlKey(r.url), r.url] as const),
+    );
+    const findings = extractedFindings
+      .map((f) => {
+        const exact = allowedByNormalized.get(normalizeUrlKey(f.sourceUrl));
+        return exact ? { ...f, sourceUrl: exact } : null;
+      })
+      .filter((f): f is NonNullable<typeof f> => f != null);
+
+    if (ranked.length > 0 && extractedFindings.length > 0 && findings.length === 0) {
+      const { RESEARCH_GROUNDING_FAILED_CUSTOMER } = await import(
+        "@/services/ai-provider-preflight"
+      );
+      logger.warn("Research findings had no usable source linkage", {
+        researchJobId: job.id,
+        organisationId: ctx.organisationId,
+        extractedCount: extractedFindings.length,
+        phase: "GROUNDING_FAILED",
+      });
+      await prisma.researchJob.updateMany({
+        where: { id: job.id, organisationId: ctx.organisationId },
+        data: {
+          status: "FAILED",
+          brief: {
+            phase: "GROUNDING_FAILED",
+            evidenceGathered: true,
+            sourceCount: ranked.length,
+            extractedCount: extractedFindings.length,
+          } as unknown as Prisma.InputJsonValue,
+          totalCostCents: costCents,
+          finishedAt: new Date(),
+          userFacingError: RESEARCH_GROUNDING_FAILED_CUSTOMER,
+          error: "grounding_failed",
+        },
+      });
+      const err = new Error(RESEARCH_GROUNDING_FAILED_CUSTOMER) as Error & {
+        userFacingMessage: string;
+        synthesisPhase: string;
+      };
+      err.userFacingMessage = RESEARCH_GROUNDING_FAILED_CUSTOMER;
+      err.synthesisPhase = "GROUNDING_FAILED";
+      throw err;
+    }
 
     for (const f of findings) {
       const sourceId = urlToId.get(f.sourceUrl);

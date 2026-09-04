@@ -234,8 +234,16 @@ export function isAiProviderAuthError(message: string | null | undefined): boole
 export const RESEARCH_SYNTHESIS_FAILED_CUSTOMER =
   "We found authoritative sources, but couldn't complete the analysis. Please try again shortly.";
 
+export const RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER =
+  "We found and analysed the sources, but couldn't verify the answer structure reliably enough to present it as a completed research result.";
+
+export const RESEARCH_GROUNDING_FAILED_CUSTOMER =
+  "We found sources, but couldn't reliably link the answer to evidence. Please try again shortly.";
+
 export type ResearchCompletionPhase =
   | "EVIDENCE_GATHERED"
   | "SYNTHESIS_FAILED"
+  | "STRUCTURED_EXTRACTION_FAILED"
+  | "GROUNDING_FAILED"
   | "QUALITY_REJECTED"
   | "SYNTHESIS_OK";

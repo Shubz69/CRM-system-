@@ -9,7 +9,12 @@ export type AiCompletionRequest = {
   model?: string;
   messages: AiMessage[];
   temperature?: number;
+  /** Prefer provider-native JSON / schema enforcement when available. */
   jsonMode?: boolean;
+  /** JSON Schema for native structured output (Anthropic output_config / OpenAI json_schema). */
+  jsonSchema?: Record<string, unknown>;
+  /** Override provider default max tokens (structured extraction often needs more headroom). */
+  maxTokens?: number;
 };
 
 export type AiProvider = {

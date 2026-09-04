@@ -37,11 +37,21 @@ export function customerFacingStatusForStep(status: "RUNNING" | "COMPLETED" | "F
 
 /** Internal phase labels — never expose provider names. */
 export function customerFacingSynthesisPhase(
-  phase: "EVIDENCE_GATHERED" | "SYNTHESIS_FAILED" | "QUALITY_REJECTED" | "SYNTHESIS_OK",
+  phase:
+    | "EVIDENCE_GATHERED"
+    | "SYNTHESIS_FAILED"
+    | "STRUCTURED_EXTRACTION_FAILED"
+    | "GROUNDING_FAILED"
+    | "QUALITY_REJECTED"
+    | "SYNTHESIS_OK",
 ): string | null {
   switch (phase) {
     case "SYNTHESIS_FAILED":
       return "We found authoritative sources, but couldn't complete the analysis. Please try again shortly.";
+    case "STRUCTURED_EXTRACTION_FAILED":
+      return "We found and analysed the sources, but couldn't verify the answer structure reliably enough to present it as a completed research result.";
+    case "GROUNDING_FAILED":
+      return "We found sources, but couldn't reliably link the answer to evidence. Please try again shortly.";
     case "QUALITY_REJECTED":
       return "The answer did not meet our quality bar. Please try again or narrow the question.";
     case "EVIDENCE_GATHERED":

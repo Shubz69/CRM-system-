@@ -7,10 +7,18 @@ import {
 } from "@/lib/ai-models";
 import { logger } from "@/lib/logger";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
+import { zodToAnthropicJsonSchema } from "@/adapters/ai/zod-json-schema";
 
 export type SafeStructuredResult<T> =
   | { ok: true; data: T; repaired: boolean; raw: unknown }
-  | { ok: false; reason: string; raw?: unknown };
+  | { ok: false; reason: string; raw?: unknown; failureClass?: StructuredFailureClass };
+
+export type StructuredFailureClass =
+  | "PARSE_FAILED"
+  | "SCHEMA_FAILED"
+  | "PROVIDER_FAILED"
+  | "EMPTY_CLAIMS"
+  | "REPAIR_FAILED";
 
 export class StructuredCompletionError extends Error {
   readonly code = "STRUCTURED_COMPLETION_FAILED";
@@ -24,25 +32,61 @@ export class StructuredCompletionError extends Error {
   }
 }
 
+/**
+ * Parse model text into a JSON value.
+ * Unwraps markdown fences and one level of double-encoded JSON strings.
+ */
 export function tryParseJson(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenced?.[1]?.trim() || trimmed;
+  let parsed: unknown;
   try {
-    return JSON.parse(candidate) as unknown;
+    parsed = JSON.parse(candidate) as unknown;
   } catch {
     const objStart = candidate.indexOf("{");
     const objEnd = candidate.lastIndexOf("}");
     if (objStart >= 0 && objEnd > objStart) {
-      return JSON.parse(candidate.slice(objStart, objEnd + 1)) as unknown;
+      parsed = JSON.parse(candidate.slice(objStart, objEnd + 1)) as unknown;
+    } else {
+      const arrStart = candidate.indexOf("[");
+      const arrEnd = candidate.lastIndexOf("]");
+      if (arrStart >= 0 && arrEnd > arrStart) {
+        parsed = JSON.parse(candidate.slice(arrStart, arrEnd + 1)) as unknown;
+      } else {
+        throw new Error("Response did not contain JSON");
+      }
     }
-    const arrStart = candidate.indexOf("[");
-    const arrEnd = candidate.lastIndexOf("]");
-    if (arrStart >= 0 && arrEnd > arrStart) {
-      return JSON.parse(candidate.slice(arrStart, arrEnd + 1)) as unknown;
-    }
-    throw new Error("Response did not contain JSON");
   }
+  return unwrapJsonStrings(parsed);
+}
+
+/** If the model returned a JSON string of JSON, unwrap a few times. */
+export function unwrapJsonStrings(value: unknown, depth = 0): unknown {
+  if (depth > 3) return value;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return value;
+  try {
+    return unwrapJsonStrings(JSON.parse(trimmed) as unknown, depth + 1);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Coerce raw completion text/value into the best structured candidate.
+ * Never invents fields — only unwraps encoding/wrapping.
+ */
+export function coerceStructuredValue(raw: unknown): unknown {
+  if (typeof raw === "string") {
+    try {
+      return tryParseJson(raw);
+    } catch {
+      return unwrapJsonStrings(raw);
+    }
+  }
+  return unwrapJsonStrings(raw);
 }
 
 /**
@@ -54,23 +98,26 @@ export async function runWithZodRepair<T>(input: {
   firstValue: unknown;
   repair: () => Promise<unknown>;
 }): Promise<SafeStructuredResult<T>> {
-  const first = input.schema.safeParse(input.firstValue);
+  const coercedFirst = coerceStructuredValue(input.firstValue);
+  const first = input.schema.safeParse(coercedFirst);
   if (first.success) {
-    return { ok: true, data: first.data, repaired: false, raw: input.firstValue };
+    return { ok: true, data: first.data, repaired: false, raw: coercedFirst };
   }
 
   logger.warn("Structured AI output failed Zod validation; attempting one repair", {
     issues: first.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).slice(0, 8),
+    firstValueType: typeof coercedFirst,
   });
 
   let repairedRaw: unknown;
   try {
-    repairedRaw = await input.repair();
+    repairedRaw = coerceStructuredValue(await input.repair());
   } catch (error) {
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "Repair attempt threw",
-      raw: input.firstValue,
+      raw: coercedFirst,
+      failureClass: "REPAIR_FAILED",
     };
   }
 
@@ -83,6 +130,7 @@ export async function runWithZodRepair<T>(input: {
     ok: false,
     reason: "AI output failed Zod validation after repair attempt",
     raw: repairedRaw,
+    failureClass: "SCHEMA_FAILED",
   };
 }
 
@@ -101,6 +149,10 @@ export type CompleteStructuredOptions = {
   repairHint?: string;
   /** Skip spend gate (tests only). */
   skipSpendGate?: boolean;
+  /** Override max tokens for large structured payloads. */
+  maxTokens?: number;
+  /** Optional explicit JSON Schema; otherwise derived from Zod. */
+  jsonSchema?: Record<string, unknown>;
 };
 
 /**
@@ -119,26 +171,9 @@ export async function completeStructuredSafe<T>(
   const tier = options.tier || "balanced";
   const model = options.model || resolveModelForTier(tier);
 
-  const baseMessages: AiMessage[] = options.messages?.length
-    ? options.messages
-    : [
-        ...(options.system ? [{ role: "system" as const, content: options.system }] : []),
-        { role: "user", content: options.prompt },
-      ];
-
   const jsonInstruction =
-    "Respond with valid JSON only that matches the required schema. No markdown fences.";
+    "Respond with valid JSON only that matches the required schema. No markdown fences. No prose before or after the JSON.";
 
-  const firstMessages: AiMessage[] = [
-    ...baseMessages.slice(0, -1),
-    {
-      role: "system",
-      content: `${options.system || ""}\n${jsonInstruction}`.trim(),
-    },
-    ...baseMessages.filter((m) => m.role === "user" || m.role === "assistant").slice(-1),
-  ];
-
-  // Prefer: system + user from options
   const messages: AiMessage[] = options.messages?.length
     ? [
         { role: "system", content: `${options.system || ""}\n${jsonInstruction}`.trim() },
@@ -151,7 +186,16 @@ export async function completeStructuredSafe<T>(
         { role: "user", content: options.prompt },
       ];
 
-  void firstMessages;
+  let jsonSchema: Record<string, unknown> | undefined = options.jsonSchema;
+  if (!jsonSchema) {
+    try {
+      jsonSchema = zodToAnthropicJsonSchema(schema as unknown as z.ZodTypeAny);
+    } catch {
+      jsonSchema = undefined;
+    }
+  }
+
+  const maxTokens = options.maxTokens ?? 8192;
 
   let firstRawText: string;
   try {
@@ -160,11 +204,14 @@ export async function completeStructuredSafe<T>(
       messages,
       temperature: options.temperature,
       jsonMode: true,
+      jsonSchema,
+      maxTokens,
     });
   } catch (error) {
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "AI completion failed",
+      failureClass: "PROVIDER_FAILED",
     };
   }
 
@@ -182,7 +229,7 @@ export async function completeStructuredSafe<T>(
       const repairMessages: AiMessage[] = [
         {
           role: "system",
-          content: `${options.system || ""}\n${jsonInstruction}\nYour previous JSON was invalid. Repair it to match the schema exactly.${
+          content: `${options.system || ""}\n${jsonInstruction}\nYour previous JSON was invalid. Repair it to match the schema exactly. Do not invent evidence or URLs.${
             options.repairHint ? `\n${options.repairHint}` : ""
           }`,
         },
@@ -198,6 +245,8 @@ export async function completeStructuredSafe<T>(
         messages: repairMessages,
         temperature: options.temperature ?? 0,
         jsonMode: true,
+        jsonSchema,
+        maxTokens,
       });
       try {
         return tryParseJson(repairedText);

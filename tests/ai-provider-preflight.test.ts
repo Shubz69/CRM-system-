@@ -19,6 +19,15 @@ describe("AI provider preflight", () => {
     expect(RESEARCH_SYNTHESIS_FAILED_CUSTOMER).not.toMatch(/anthropic|claude|api key|401/i);
   });
 
+  it("keeps structured-extraction customer copy provider-neutral", async () => {
+    const { RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER } = await import(
+      "@/services/ai-provider-preflight"
+    );
+    expect(RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER).not.toMatch(
+      /anthropic|claude|zod|json parser|api key|401/i,
+    );
+  });
+
   it("reports config preflight without exposing secrets", () => {
     const result = getAiProviderConfigPreflight();
     expect(result).toHaveProperty("status");

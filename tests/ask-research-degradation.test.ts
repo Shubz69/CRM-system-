@@ -93,7 +93,7 @@ describe("Ask/Research degradation + privacy", () => {
     (prisma.researchFinding.create as ReturnType<typeof vi.fn>).mockResolvedValue({});
   });
 
-  it("research completes with sources when findings extract fails Zod", async () => {
+  it("research fails honestly when findings extract fails Zod after evidence", async () => {
     searchConfiguredSources.mockResolvedValue({
       results: [
         {
@@ -116,24 +116,27 @@ describe("Ask/Research degradation + privacy", () => {
     completeStructuredSafe.mockResolvedValueOnce({
       ok: false,
       reason: "AI output failed Zod validation after repair attempt",
+      failureClass: "SCHEMA_FAILED",
       raw: { findings: [{ claim: "x", sourceUrl: "not-a-url" }] },
     });
 
-    const result = await researchAgent.execute(
-      { topic: "UK SME demand for AI consultancy" },
-      {
-        organisationId: "org-qa",
-        agentRunId: "run-1",
-        agentStepId: "step-1",
-      },
-    );
+    await expect(
+      researchAgent.execute(
+        { topic: "UK SME demand for AI consultancy" },
+        {
+          organisationId: "org-qa",
+          agentRunId: "run-1",
+          agentStepId: "step-1",
+        },
+      ),
+    ).rejects.toThrow(/verify the answer structure/i);
 
-    expect(result.output.sourceCount).toBe(1);
-    expect(result.output.findings).toEqual([]);
-    expect(result.costCents).toBeGreaterThan(0);
     expect(prisma.researchJob.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: "COMPLETED" }),
+        data: expect.objectContaining({
+          status: "FAILED",
+          error: "structured_extraction_failed",
+        }),
       }),
     );
   });

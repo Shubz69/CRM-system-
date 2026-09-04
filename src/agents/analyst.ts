@@ -228,6 +228,9 @@ export const analystAgent: Agent<AnalystInput, AnalystOutput> = {
       organisationId: ctx.organisationId,
       tier: "balanced",
       model,
+      maxTokens: 8192,
+      repairHint:
+        'Required JSON object with shortAnswer, summary, brief, claims[], viralExamples[], nextBigThings[], contentHooks[], algorithmNotes[], contradictions[], gaps[]. Each claim needs claim + sourceUrl matching a provided URL.',
       system: `You are a social-media intelligence analyst for creators and agencies.
 Your job is NOT a thin one-paragraph brief. Produce a full pack creators can act on today.
 
