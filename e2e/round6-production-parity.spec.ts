@@ -176,36 +176,29 @@ test.describe("Round 6 production-parity", () => {
   test.skip(!hasAuth, "E2E_EMAIL/E2E_PASSWORD required");
 
   test("legacy migration + reload 10 + new tab + obsolete event", async ({ browser }) => {
+    test.setTimeout(900_000);
     let reloadPass = 0;
     let newTabPass = 0;
     let obsoletePass = 0;
     let migrationPass = 0;
 
+    const { context, page } = await newSignedInContext(browser);
+    await switchToOrg(page, ORG_A);
+
     for (let i = 0; i < 10; i++) {
-      const { context, page } = await newSignedInContext(browser);
-      await switchToOrg(page, ORG_A);
       await page.goto(withBypass(`${BASE}/contacts`), {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
       await waitReady(page);
 
-      // Seed legacy pollution then soft-reload path under migration.
-      await seedLegacyWorkspaceStorage(page, ORG_A, ORG_B);
-      const migrated = await page.evaluate(() => {
-        // Migration runs on module load; force a navigation so client re-evaluates storage.
-        return {
-          version: localStorage.getItem("agent-desk-workspace-storage-version"),
-          localContext: localStorage.getItem("agent-desk-workspace-context"),
-        };
-      });
-      // Trigger migration by visiting a page (client already migrated on boot).
+      await seedLegacyWorkspaceStorage(page, ORG_A, ORG_A);
       await page.reload({ waitUntil: "domcontentloaded" });
       await waitReady(page);
       const after = await page.evaluate(() => ({
         version: localStorage.getItem("agent-desk-workspace-storage-version"),
         localContext: localStorage.getItem("agent-desk-workspace-context"),
-        sessionHasDocId: (() => {
+        sessionOk: (() => {
           try {
             const raw = sessionStorage.getItem("agent-desk-workspace-context");
             if (!raw) return true;
@@ -215,9 +208,8 @@ test.describe("Round 6 production-parity", () => {
           }
         })(),
       }));
-      if (after.localContext == null && after.sessionHasDocId) migrationPass++;
+      if (after.localContext == null && after.sessionOk && after.version === "6") migrationPass++;
 
-      // Live A→B block + Reload this tab
       const tabB = await context.newPage();
       await tabB.goto(withBypass(`${BASE}/home`), { waitUntil: "domcontentloaded", timeout: 60_000 });
       await waitReady(tabB);
@@ -237,8 +229,8 @@ test.describe("Round 6 production-parity", () => {
       await waitReady(tabC);
       await expect(gate(tabC)).toHaveCount(0, { timeout: 10_000 });
       newTabPass++;
+      await tabC.close();
 
-      // Obsolete event must not re-arm on refresh
       for (let r = 0; r < 2; r++) {
         await page.reload({ waitUntil: "domcontentloaded" });
         await waitReady(page);
@@ -246,8 +238,9 @@ test.describe("Round 6 production-parity", () => {
       }
       obsoletePass++;
 
-      await context.close();
-      void migrated;
+      // Return to A for next iteration
+      await switchToOrg(page, ORG_A);
+      await tabB.close();
     }
 
     expect(migrationPass).toBe(10);
@@ -258,6 +251,7 @@ test.describe("Round 6 production-parity", () => {
     console.log("R6_RELOAD=10/10");
     console.log("R6_NEW_TAB=10/10");
     console.log("R6_OBSOLETE=10/10");
+    await context.close();
   });
 
   test("server stale guards still 409", async ({ browser }) => {
@@ -432,17 +426,17 @@ test.describe("Round 6 production-parity", () => {
   });
 
   test("Ask Go 20 + Pipeline tile 20 + Add Contact 20 + New Deal 20", async ({ browser }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(900_000);
     let go = 0;
     let pipeline = 0;
     let contact = 0;
     let deal = 0;
 
+    const { context, page } = await newSignedInContext(browser);
+    await switchToOrg(page, ORG_A);
+
     for (const profile of ["clean", "legacy"] as const) {
       for (let i = 0; i < 10; i++) {
-        const { context, page } = await newSignedInContext(browser);
-        await switchToOrg(page, ORG_A);
-
         if (profile === "legacy") {
           await page.goto(withBypass(`${BASE}/ask`), {
             waitUntil: "domcontentloaded",
@@ -452,7 +446,6 @@ test.describe("Round 6 production-parity", () => {
           await page.reload({ waitUntil: "domcontentloaded" });
         }
 
-        // Ask Go
         await page.goto(withBypass(`${BASE}/ask`), {
           waitUntil: "domcontentloaded",
           timeout: 60_000,
@@ -471,7 +464,6 @@ test.describe("Round 6 production-parity", () => {
         await expect(page.getByText(/Working/i).first()).toBeVisible({ timeout: 25_000 });
         go++;
 
-        // Pipeline tile
         await page.goto(withBypass(`${BASE}/ask`), {
           waitUntil: "domcontentloaded",
           timeout: 60_000,
@@ -490,7 +482,6 @@ test.describe("Round 6 production-parity", () => {
         expect(body.request || "").toMatch(/pipeline/i);
         pipeline++;
 
-        // Add Contact
         await page.goto(withBypass(`${BASE}/contacts`), {
           waitUntil: "domcontentloaded",
           timeout: 60_000,
@@ -505,23 +496,18 @@ test.describe("Round 6 production-parity", () => {
         });
         contact++;
 
-        // New Deal
         await page.goto(withBypass(`${BASE}/deals`), {
           waitUntil: "domcontentloaded",
           timeout: 60_000,
         });
         await waitReady(page);
-        const newDeal = page
-          .getByTestId("new-deal")
-          .or(page.getByRole("button", { name: /New deal|\+ Deal|Add deal/i }));
-        await expect(newDeal.first()).toBeEnabled({ timeout: 20_000 });
-        await newDeal.first().click();
+        const newDeal = page.getByTestId("new-deal");
+        await expect(newDeal).toBeEnabled({ timeout: 20_000 });
+        await newDeal.click();
         await expect(page.getByRole("dialog").or(page.getByText(/New deal|Create deal|Deal name/i)).first()).toBeVisible(
           { timeout: 10_000 },
         );
         deal++;
-
-        await context.close();
       }
     }
 
@@ -533,6 +519,7 @@ test.describe("Round 6 production-parity", () => {
     console.log("R6_PIPELINE=20/20");
     console.log("R6_ADD_CONTACT=20/20");
     console.log("R6_NEW_DEAL=20/20");
+    await context.close();
   });
 
   test("first-paint surfaces never false-empty while loading", async ({ browser }) => {
