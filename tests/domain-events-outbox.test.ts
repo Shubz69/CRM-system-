@@ -40,7 +40,7 @@ describe("Phase 12B transactional outbox", () => {
     await destroyTestOrganisation(orgA);
     await destroyTestOrganisation(orgB);
     await destroyTestOrganisation(claimOrg);
-  });
+  }, 60_000);
 
   it("atomically commits business mutation + event", async () => {
     const dealId = await prisma.$transaction(async (tx) => {
@@ -327,12 +327,27 @@ describe("Phase 12B transactional outbox", () => {
         payload: { dealId: token },
       }),
     );
-    const result = await dispatchDomainEventBatch({
-      organisationId: claimOrg.organisationId,
-      batchSize: 5,
-    });
-    expect(result.claimed).toBeGreaterThanOrEqual(1);
-    const after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
+
+    // Drain this org's outbox until *this* event is processed.
+    // Earlier claimOrg tests leave PROCESSING/RETRY/PENDING siblings; a single
+    // small batch can process an older row while leaving the new event pending.
+    // A concurrent global outbox poller may also claim first (claimed=0 here).
+    let after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
+    for (let i = 0; i < 20 && after.status !== DomainEventStatus.PROCESSED; i++) {
+      await dispatchDomainEventBatch({
+        organisationId: claimOrg.organisationId,
+        batchSize: 50,
+      });
+      after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
+      if (
+        after.status === DomainEventStatus.PENDING ||
+        after.status === DomainEventStatus.PROCESSING ||
+        after.status === DomainEventStatus.RETRY
+      ) {
+        await new Promise((r) => setTimeout(r, 200));
+        after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
+      }
+    }
     expect(after.status).toBe(DomainEventStatus.PROCESSED);
   }, 20_000);
 
