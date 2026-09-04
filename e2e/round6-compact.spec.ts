@@ -162,7 +162,9 @@ async function selectInbox(page: Page, conversationId: string) {
 
   const detailPromise = page.waitForResponse(
     (r) =>
-      r.url().includes(`/api/conversations/${conversationId}`) && r.request().method() === "GET",
+      r.url().includes(`/api/conversations/${conversationId}`) &&
+      r.request().method() === "GET" &&
+      r.ok(),
     { timeout: 15_000 },
   );
   // One normal customer click — no mouse coords, force, or retries.
@@ -172,8 +174,7 @@ async function selectInbox(page: Page, conversationId: string) {
     conversationId,
     { timeout: 8_000 },
   );
-  const res = await detailPromise;
-  expect(res.ok(), `detail GET ${conversationId}`).toBeTruthy();
+  await detailPromise;
   await expect(page.getByTestId("inbox-detail-header")).toHaveAttribute(
     "data-conversation-id",
     conversationId,

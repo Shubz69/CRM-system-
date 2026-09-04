@@ -285,7 +285,8 @@ async function clickInboxRow(page: Page, conversationId: string) {
   const detailPromise = page.waitForResponse(
     (r) =>
       r.url().includes(`/api/conversations/${conversationId}`) &&
-      r.request().method() === "GET",
+      r.request().method() === "GET" &&
+      r.ok(),
     { timeout: 20_000 },
   );
   // One normal customer click — no mouse coords, force, or retries.
@@ -295,8 +296,7 @@ async function clickInboxRow(page: Page, conversationId: string) {
     conversationId,
     { timeout: 8_000 },
   );
-  const detailRes = await detailPromise;
-  expect(detailRes.ok()).toBeTruthy();
+  await detailPromise;
   await expect(page.getByTestId("inbox-detail-header")).toHaveAttribute(
     "data-conversation-id",
     conversationId,
@@ -536,6 +536,7 @@ test.describe(`Round 6 production-parity (${MODE})`, () => {
 
       for (let i = 0; i < n; i++) {
         const conversationId = ids[i % 3]!;
+        console.log(`Inbox locator ${pass + 1}/${COUNTS.inboxTotal} profile=${profile}`);
         await clickInboxRow(page, conversationId);
         pass++;
         if (pass % 10 === 0) {
