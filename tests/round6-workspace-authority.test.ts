@@ -15,6 +15,7 @@ import {
 import {
   classifyResearchStakes,
   authorityFirstQueries,
+  ukPrimaryAuthorityDomains,
   isPrimaryAuthorityUrl,
   HIGH_STAKES_NO_PRIMARY_SOURCE_QUALITY_CAP,
 } from "@/lib/research-authority";
@@ -120,9 +121,14 @@ describe("Round 6 research authority", () => {
     const prompt =
       "Research the current UK GDPR requirements for storing customer contact details in a CRM. Prioritise authoritative UK sources.";
     expect(classifyResearchStakes(prompt)).toBe("HIGH_STAKES_REGULATORY");
+    expect(ukPrimaryAuthorityDomains(prompt)).toEqual([
+      "ico.org.uk",
+      "gov.uk",
+      "legislation.gov.uk",
+    ]);
     const q = authorityFirstQueries(prompt);
-    expect(q.some((x) => /site:ico\.org\.uk/i.test(x))).toBe(true);
-    expect(q.some((x) => /site:gov\.uk/i.test(x))).toBe(true);
+    expect(q.length).toBeGreaterThan(0);
+    expect(q.some((x) => /GDPR|data protection|lawful/i.test(x))).toBe(true);
   });
 
   it("caps source quality and hard-fails when high-stakes has zero primary sources", () => {

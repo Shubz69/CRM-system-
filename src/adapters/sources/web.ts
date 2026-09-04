@@ -33,20 +33,24 @@ async function searchTavily(
   limit: number,
 ): Promise<SourceResult[]> {
   acquire(options.organisationId);
+  const body: Record<string, unknown> = {
+    api_key: apiKey,
+    query: options.nicheHint ? `${query} ${options.nicheHint}` : query,
+    max_results: limit,
+    include_answer: false,
+    search_depth: "advanced",
+  };
+  if (options.includeDomains?.length) {
+    body.include_domains = options.includeDomains;
+  }
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query: options.nicheHint ? `${query} ${options.nicheHint}` : query,
-      max_results: limit,
-      include_answer: false,
-      search_depth: "basic",
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Tavily search failed (${res.status}): ${body.slice(0, 300)}`);
+    const text = await res.text();
+    throw new Error(`Tavily search failed (${res.status}): ${text.slice(0, 300)}`);
   }
   const json = (await res.json()) as {
     results?: Array<{
@@ -67,7 +71,11 @@ async function searchTavily(
       publishedAt: r.published_date ? new Date(r.published_date) : null,
       platform: "web" as const,
       engagement: r.score != null ? { score: r.score } : null,
-      rawMetadata: { provider: "tavily", score: r.score },
+      rawMetadata: {
+        provider: "tavily",
+        score: r.score,
+        includeDomains: options.includeDomains ?? null,
+      },
     }));
 }
 
@@ -78,23 +86,27 @@ async function searchExa(
   limit: number,
 ): Promise<SourceResult[]> {
   acquire(options.organisationId);
+  const body: Record<string, unknown> = {
+    query: options.nicheHint ? `${query} ${options.nicheHint}` : query,
+    numResults: limit,
+    type: options.recent === false ? "auto" : "auto",
+    contents: { text: { maxCharacters: 4000 } },
+    useAutoprompt: true,
+  };
+  if (options.includeDomains?.length) {
+    body.includeDomains = options.includeDomains;
+  }
   const res = await fetch("https://api.exa.ai/search", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": apiKey,
     },
-    body: JSON.stringify({
-      query: options.nicheHint ? `${query} ${options.nicheHint}` : query,
-      numResults: limit,
-      type: options.recent === false ? "auto" : "auto",
-      contents: { text: { maxCharacters: 4000 } },
-      useAutoprompt: true,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Exa search failed (${res.status}): ${body.slice(0, 300)}`);
+    const text = await res.text();
+    throw new Error(`Exa search failed (${res.status}): ${text.slice(0, 300)}`);
   }
   const json = (await res.json()) as {
     results?: Array<{
@@ -116,7 +128,11 @@ async function searchExa(
       publishedAt: r.publishedDate ? new Date(r.publishedDate) : null,
       platform: "web" as const,
       engagement: r.score != null ? { score: r.score } : null,
-      rawMetadata: { provider: "exa", score: r.score },
+      rawMetadata: {
+        provider: "exa",
+        score: r.score,
+        includeDomains: options.includeDomains ?? null,
+      },
     }));
 }
 
@@ -132,7 +148,13 @@ export const webSourceAdapter: SourceAdapter = {
       platform: "web",
       query,
       organisationId: options.organisationId,
-      options: { limit, provider, recent: options.recent ?? true, nicheHint: options.nicheHint },
+      options: {
+        limit,
+        provider,
+        recent: options.recent ?? true,
+        nicheHint: options.nicheHint,
+        includeDomains: options.includeDomains?.slice().sort().join(",") ?? "",
+      },
     });
     const cached = getCachedSourceResults(cacheKey);
     if (cached) return cached.slice(0, limit);

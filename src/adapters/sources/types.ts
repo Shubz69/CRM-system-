@@ -38,6 +38,11 @@ export type SourceSearchOptions = {
   /** Optional subreddit / channel / site hint — never required. */
   nicheHint?: string;
   /**
+   * Restrict web results to these hostnames when the provider supports it
+   * (Tavily `include_domains` / Exa `includeDomains`).
+   */
+  includeDomains?: string[];
+  /**
    * Progressive Apify depth — from answerMode / Quality Engine / compute governor.
    * Small sample first; broaden only when evidence is insufficient.
    */

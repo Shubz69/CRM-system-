@@ -23,7 +23,7 @@ import {
 } from "@/adapters/sources";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { authorityFirstQueries, isPrimaryAuthorityUrl } from "@/lib/research-authority";
+import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
 
 export const researchInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -270,19 +270,30 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
     const collected: SourceResult[] = [];
     const adapterErrors: Array<{ platform: string; message: string }> = [];
+    const authorityDomains = ukPrimaryAuthorityDomains(topic);
+    const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
+    /** Reserve evidence budget for primary authorities before secondary fill. */
+    const primaryReserve = isHighStakes ? Math.min(12, Math.max(6, Math.floor(maxSources / 2))) : 0;
 
-    for (const query of queries) {
+    async function runSearch(
+      query: string,
+      searchOptions: {
+        limit: number;
+        includeDomains?: string[];
+      },
+    ) {
       const started = Date.now();
       try {
         const { results, errors, billableCents } = await searchConfiguredSources({
           query,
-          platforms,
+          platforms: searchOptions.includeDomains?.length ? (["web"] as SourcePlatform[]) : platforms,
           concurrency,
           options: {
             organisationId: ctx.organisationId,
-            limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+            limit: searchOptions.limit,
             recent: true,
             nicheHint: parsed.nicheHint,
+            includeDomains: searchOptions.includeDomains,
           },
         });
         collected.push(...results);
@@ -294,10 +305,16 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           organisationId: ctx.organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
-          args: { query, platforms, organisationId: ctx.organisationId },
+          args: {
+            query,
+            platforms: searchOptions.includeDomains?.length ? ["web"] : platforms,
+            organisationId: ctx.organisationId,
+            includeDomains: searchOptions.includeDomains ?? null,
+          },
           result: {
             count: results.length,
             urls: results.map((r) => r.url).slice(0, 40),
+            primaryCount: results.filter((r) => isPrimaryAuthorityUrl(r.url)).length,
             errors: errors.map((e) => ({ platform: e.platform, code: e.code })),
           },
           durationMs: Date.now() - started,
@@ -309,17 +326,60 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           organisationId: ctx.organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
-          args: { query, platforms, organisationId: ctx.organisationId },
+          args: {
+            query,
+            platforms,
+            organisationId: ctx.organisationId,
+            includeDomains: searchOptions.includeDomains ?? null,
+          },
           error: message,
           durationMs: Date.now() - started,
         });
       }
     }
 
+    // Phase 1 — dedicated provider-constrained authority searches (not site: text alone).
+    if (authorityDomains.length) {
+      const authorityQueries = authorityFirstQueries(topic);
+      for (const domain of authorityDomains) {
+        const q =
+          authorityQueries[0] ||
+          `UK GDPR personal data storage guidance`;
+        await runSearch(q, {
+          limit: Math.max(5, Math.ceil(primaryReserve / authorityDomains.length) + 1),
+          includeDomains: [domain],
+        });
+      }
+      // Bounded second attempt per domain if still empty for that host class.
+      const havePrimary = collected.some((r) => isPrimaryAuthorityUrl(r.url));
+      if (!havePrimary) {
+        for (const domain of authorityDomains) {
+          await runSearch(`UK GDPR data protection`, {
+            limit: 5,
+            includeDomains: [domain],
+          });
+        }
+      }
+    }
+
+    // Phase 2 — general / secondary queries (no domain filter).
+    for (const query of queries) {
+      await runSearch(query, {
+        limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+      });
+    }
+
     const deduped = dedupeSourceResults(collected);
     const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
     const secondary = rankSourceResults(deduped.filter((r) => !isPrimaryAuthorityUrl(r.url)));
-    const ranked = [...primary, ...secondary].slice(0, maxSources);
+    // High-stakes: fill primary reserve first so blogs cannot crowd out authorities.
+    const ranked = isHighStakes
+      ? [
+          ...primary.slice(0, primaryReserve),
+          ...secondary.slice(0, Math.max(0, maxSources - Math.min(primary.length, primaryReserve))),
+          ...primary.slice(primaryReserve),
+        ].slice(0, maxSources)
+      : [...primary, ...secondary].slice(0, maxSources);
 
     const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
     for (const r of ranked) {

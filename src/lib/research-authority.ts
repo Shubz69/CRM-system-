@@ -68,6 +68,7 @@ export function tierForAuthorityHost(host: string): SourceAuthorityTier {
 /**
  * Authority-first query expansions for high-stakes UK regulatory topics.
  * Bounded; does not invent answers — only biases retrieval.
+ * Prefer pairing with provider includeDomains (see ukPrimaryAuthorityDomains).
  */
 export function authorityFirstQueries(topic: string): string[] {
   const stakes = classifyResearchStakes(topic);
@@ -78,20 +79,25 @@ export function authorityFirstQueries(topic: string): string[] {
 
   if (/\bgdpr|data protection|privacy|contact details|crm\b/i.test(topic)) {
     queries.push(
-      `site:ico.org.uk ${base}`,
-      `site:gov.uk UK GDPR storing personal data CRM`,
-      `site:legislation.gov.uk UK GDPR`,
+      `UK GDPR storing personal data CRM guidance`,
+      `UK GDPR lawful basis personal data storage`,
+      `Data Protection Act 2018 personal data`,
       `ICO guidance lawful basis personal data CRM`,
     );
   } else {
-    queries.push(
-      `site:gov.uk ${base}`,
-      `site:legislation.gov.uk ${base}`,
-      `${base} official guidance regulator`,
-    );
+    queries.push(base, `${base} official guidance regulator`);
   }
 
   return [...new Set(queries)].slice(0, 6);
+}
+
+/** Domains for provider-constrained authority searches (UK regulatory). */
+export function ukPrimaryAuthorityDomains(topic: string): string[] {
+  if (classifyResearchStakes(topic) !== "HIGH_STAKES_REGULATORY") return [];
+  if (/\bgdpr|data protection|privacy|contact details|crm\b/i.test(topic)) {
+    return ["ico.org.uk", "gov.uk", "legislation.gov.uk"];
+  }
+  return ["gov.uk", "legislation.gov.uk"];
 }
 
 /** Cap for sourceQuality when high-stakes and zero primary authorities. */
