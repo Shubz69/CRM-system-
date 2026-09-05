@@ -32,6 +32,12 @@ import {
   toScoreResearchClaims,
 } from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
+import {
+  isResearchEvidenceAgent,
+  looksLikeResearchOutput,
+  remainingWallClockMs,
+  shouldSkipOptionalEnrichment,
+} from "@/agents/supervisor/research-deadline";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -469,6 +475,25 @@ export async function executeAgentRun(input: {
   for (let i = 0; i < stepsToRun.length; i++) {
     const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
     if (elapsedSec > maxWallClockSeconds) {
+      const originalUserPrompt = readOriginalUserPrompt(run);
+      const shapedPartial = await finalizeModeOutput({
+        organisationId: input.organisationId,
+        agentRunId: run.id,
+        answerMode: run.answerMode,
+        raw: previousOutput,
+        originalUserPrompt,
+        request: run.request,
+      });
+      const withPhase =
+        looksLikeResearchOutput(shapedPartial) &&
+        shapedPartial &&
+        typeof shapedPartial === "object" &&
+        (shapedPartial as { researchQuality?: unknown }).researchQuality != null
+          ? {
+              ...(shapedPartial as Record<string, unknown>),
+              phase: "PARTIAL_WITH_GROUNDED_QUALITY",
+            }
+          : shapedPartial;
       return finishRun({
         organisationId: input.organisationId,
         request: run.request,
@@ -476,13 +501,24 @@ export async function executeAgentRun(input: {
         status: "PARTIAL",
         totalCostCents,
         partialResults: { steps: stepOutputs },
-        finalOutput: previousOutput,
+        finalOutput: withPhase,
         error: "MAX_WALL_CLOCK",
         userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
       });
     }
 
     if (maxSpendCents != null && totalCostCents >= maxSpendCents) {
+      const originalUserPrompt = readOriginalUserPrompt(run);
+      const shapedPartial = looksLikeResearchOutput(previousOutput)
+        ? await finalizeModeOutput({
+            organisationId: input.organisationId,
+            agentRunId: run.id,
+            answerMode: run.answerMode,
+            raw: previousOutput,
+            originalUserPrompt,
+            request: run.request,
+          })
+        : previousOutput;
       return finishRun({
         organisationId: input.organisationId,
         request: run.request,
@@ -490,13 +526,77 @@ export async function executeAgentRun(input: {
         status: "PARTIAL",
         totalCostCents,
         partialResults: { steps: stepOutputs },
-        finalOutput: previousOutput,
+        finalOutput: shapedPartial,
         error: "MAX_SPEND_PER_RUN",
         userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then paused to stay within your spend limit for this run. You can raise the limit in settings if you want longer runs.`,
       });
     }
 
     const step = stepsToRun[i]!;
+
+    // Optional analyst/critic must not starve mandatory RQS after grounded evidence.
+    const remainingMs = remainingWallClockMs({
+      startedAt,
+      maxWallClockSeconds,
+    });
+    if (
+      looksLikeResearchOutput(previousOutput) &&
+      shouldSkipOptionalEnrichment({
+        agentName: step.agentName,
+        remainingMs,
+      })
+    ) {
+      for (let j = i; j < stepsToRun.length; j++) {
+        const pending = stepsToRun[j]!;
+        let pendingLabel = "Next step";
+        try {
+          const pendingAgent = getAgent(pending.agentName);
+          pendingLabel =
+            pendingAgent.userFacingLabel(pending.input as never) || pendingLabel;
+        } catch {
+          /* ignore */
+        }
+        await prisma.agentStep.create({
+          data: {
+            organisationId: input.organisationId,
+            agentRunId: run.id,
+            position: j,
+            agentName: pending.agentName,
+            userFacingLabel: pendingLabel,
+            input: pending.input as Prisma.InputJsonValue,
+            status: "SKIPPED",
+            userFacingStatus: "Skipped — not enough time left for optional enrichment",
+          },
+        });
+      }
+
+      const originalUserPrompt = readOriginalUserPrompt(run);
+      const shapedFinal = await finalizeModeOutput({
+        organisationId: input.organisationId,
+        agentRunId: run.id,
+        answerMode: run.answerMode,
+        raw:
+          previousOutput && typeof previousOutput === "object"
+            ? {
+                ...(previousOutput as Record<string, unknown>),
+                analystEnrichmentSkipped: true,
+                phase: "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT",
+              }
+            : previousOutput,
+        originalUserPrompt,
+        request: run.request,
+      });
+      return finishRun({
+        organisationId: input.organisationId,
+        request: run.request,
+        runId: run.id,
+        status: "COMPLETED",
+        totalCostCents,
+        finalOutput: shapedFinal,
+        partialResults: { steps: stepOutputs },
+      });
+    }
+
     let agent;
     try {
       agent = getAgent(step.agentName);
@@ -738,9 +838,31 @@ export async function executeAgentRun(input: {
           gaps: Array.isArray(prior.gaps) ? prior.gaps : [],
           findings: Array.isArray(prior.findings) ? prior.findings : undefined,
           sources: Array.isArray(prior.sources) ? prior.sources : undefined,
+          researchQuality: prior.researchQuality,
+          researchQualitySummary: prior.researchQualitySummary,
+          groundedClaimCount: prior.groundedClaimCount,
+          analystEnrichmentFailed: prior.analystEnrichmentFailed,
+          analystEnrichmentSkipped: prior.analystEnrichmentSkipped,
           verification: criticOut,
         };
       }
+
+      // Mandatory: attach RQS as soon as grounded research evidence exists,
+      // before optional analyst/critic can consume remaining wall-clock.
+      if (
+        isResearchEvidenceAgent(agent.name) ||
+        looksLikeResearchOutput(previousOutput)
+      ) {
+        const originalUserPrompt = readOriginalUserPrompt(run);
+        previousOutput = attachResearchQualityIfApplicable({
+          organisationId: input.organisationId,
+          answerMode: run.answerMode,
+          originalUserPrompt,
+          request: run.request,
+          output: previousOutput,
+        });
+      }
+
       stepOutputs.push({
         agentName: agent.name,
         userFacingLabel: progressLabel,
@@ -959,6 +1081,32 @@ async function finalizeModeOutput(input: {
     }
   }
 
+  // Shape builders omit deadline metadata — preserve mandatory quality flags.
+  if (
+    input.raw &&
+    typeof input.raw === "object" &&
+    base &&
+    typeof base === "object"
+  ) {
+    const raw = input.raw as Record<string, unknown>;
+    const out = base as Record<string, unknown>;
+    if (raw.analystEnrichmentSkipped === true) {
+      out.analystEnrichmentSkipped = true;
+    }
+    if (raw.analystEnrichmentFailed === true) {
+      out.analystEnrichmentFailed = true;
+    }
+    if (
+      typeof raw.phase === "string" &&
+      (raw.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
+        raw.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
+        raw.phase === "QUALITY_SCORING_FAILED" ||
+        raw.phase === "ANALYST_ENRICHMENT_FAILED")
+    ) {
+      out.phase = raw.phase;
+    }
+  }
+
   return attachResearchQualityIfApplicable({
     organisationId: input.organisationId,
     answerMode: input.answerMode,
@@ -977,15 +1125,7 @@ function attachResearchQualityIfApplicable(input: {
 }): unknown {
   if (!input.output || typeof input.output !== "object") return input.output;
   const obj = input.output as Record<string, unknown>;
-  const looksLikeResearch =
-    Array.isArray(obj.claims) ||
-    Array.isArray(obj.findings) ||
-    Array.isArray(obj.sources) ||
-    typeof obj.researchJobId === "string" ||
-    typeof obj.brief === "string" ||
-    typeof obj.shortAnswer === "string" ||
-    typeof obj.executiveSummary === "string";
-  if (!looksLikeResearch) return input.output;
+  if (!looksLikeResearchOutput(obj)) return input.output;
 
   try {
     const sources = Array.isArray(obj.sources)
@@ -1070,9 +1210,23 @@ function attachResearchQualityIfApplicable(input: {
           : `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
       groundedClaimCount: grounded.length,
       ...(analystEnrichmentFailed
-        ? { analystEnrichmentFailed: true, phase: "ANALYST_ENRICHMENT_FAILED" }
+        ? { analystEnrichmentFailed: true }
+        : {}),
+      ...(obj.analystEnrichmentSkipped === true
+        ? { analystEnrichmentSkipped: true }
         : {}),
     };
+
+    // Preserve explicit deadline / partial phases; otherwise surface analyst abort.
+    if (
+      obj.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
+      obj.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
+      obj.phase === "QUALITY_SCORING_FAILED"
+    ) {
+      withQuality.phase = obj.phase;
+    } else if (analystEnrichmentFailed) {
+      withQuality.phase = "ANALYST_ENRICHMENT_FAILED";
+    }
 
     // Below threshold: keep best supported answer but surface limitations (never invent).
     if (!report.accepted && report.hardGateFailures.length) {
@@ -1088,9 +1242,14 @@ function attachResearchQualityIfApplicable(input: {
 
     return withQuality;
   } catch (error) {
-    logger.warn("Research quality scoring skipped", {
+    logger.warn("Research quality scoring failed", {
       message: error instanceof Error ? error.message : "unknown",
     });
-    return input.output;
+    return {
+      ...(obj as Record<string, unknown>),
+      phase: "QUALITY_SCORING_FAILED",
+      researchQualityError:
+        error instanceof Error ? error.message : "QUALITY_SCORING_FAILED",
+    };
   }
 }
