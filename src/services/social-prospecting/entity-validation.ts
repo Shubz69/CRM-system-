@@ -756,7 +756,6 @@ export function validateProspectCandidate(
   // Soft / unconstrained / location-only queries cannot be EXACT.
   const hasRoleOrSizeOrIndustry =
     Boolean(icp.role) || Boolean(icp.companySize) || Boolean(icp.industry);
-  const hasMandatory = hasRoleOrSizeOrIndustry || Boolean(icp.location);
   const evidenceGaps: string[] = [];
   if (icp.role && !(role.roleEvidence && String(role.roleEvidence).trim())) {
     evidenceGaps.push("role");
