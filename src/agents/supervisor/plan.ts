@@ -72,9 +72,10 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bwhich (lead|opportunit|kpi)\b/.test(t) ||
     /\bwhat opportunit/.test(t) ||
     /\b(detected )?opportunit(y|ies)\b.*\b(review|attention|matter|focus)\b/.test(t) ||
-    /\bwhat (should|can) i (automate|ignore|create|deprioritis|improve)\b/.test(t) ||
+    /\bwhat (should|can) i (automate|ignore|create|deprioritis[e]?|improve)\b/.test(t) ||
+    /\bwhat content should (i )?create\b/.test(t) ||
     /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
-    /\b(deprioritis|what can wait|what should i ignore|safely deprioritis)\b/.test(t) ||
+    /\b(deprioritis[e]?|what can wait|what should i ignore|safely deprioritis[e]?)\b/.test(t) ||
     /\bwhat changed recently\b/.test(t) ||
     /\bwhere are we losing momentum\b/.test(t) ||
     /\bbiggest (sales )?risk\b/.test(t) ||

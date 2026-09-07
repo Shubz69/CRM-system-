@@ -419,6 +419,35 @@ function buildOperatorBrief(input: {
   if (/\b(content|create|draft)\b/.test(req) && content[0]) {
     topPriorities.unshift(content[0]);
   }
+  if (/\b(deal|pipeline|stuck|stalled)\b/.test(req)) {
+    if (!input.dealRows.length) {
+      topPriorities.unshift(
+        fmtRec({
+          what: "No open deals available to prioritise",
+          why: "This workspace has zero open deals right now",
+          evidence: "CRM open-deals query returned 0",
+          urgency: "medium",
+          next: "Create or import a deal, then ask again which deal needs attention",
+        }),
+      );
+    } else if (pipelineRisk[0]) {
+      topPriorities.unshift(pipelineRisk[0]);
+    } else if (sales[0]) {
+      topPriorities.unshift(sales[0]);
+    }
+  }
+  if (/\b(lead|opportunit)\b/.test(req) && sales[0]) {
+    topPriorities.unshift(sales[0]);
+  }
+  if (/\b(reply|inbox|follow)\b/.test(req)) {
+    const idx = topPriorities.findIndex((p) =>
+      /need a reply|needing reply|inbox|no conversations currently/i.test(p),
+    );
+    if (idx > 0) {
+      const [item] = topPriorities.splice(idx, 1);
+      if (item) topPriorities.unshift(item);
+    }
+  }
 
   const sections = {
     topPriorities: [...new Set(topPriorities)].slice(0, 6),
