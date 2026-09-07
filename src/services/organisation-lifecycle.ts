@@ -127,14 +127,18 @@ export async function purgeOrganisationHard(input: {
     },
   });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.auditLog.deleteMany({ where: { organisationId: org.id } });
-    await tx.usageRecord.deleteMany({ where: { organisationId: org.id } });
-    await tx.aiExecution.deleteMany({ where: { organisationId: org.id } });
-    await tx.webhookEvent.deleteMany({ where: { organisationId: org.id } });
-    await tx.failedJob.deleteMany({ where: { organisationId: org.id } });
-    await tx.organisation.delete({ where: { id: org.id } });
-  });
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.auditLog.deleteMany({ where: { organisationId: org.id } });
+      await tx.usageRecord.deleteMany({ where: { organisationId: org.id } });
+      await tx.aiExecution.deleteMany({ where: { organisationId: org.id } });
+      await tx.webhookEvent.deleteMany({ where: { organisationId: org.id } });
+      await tx.failedJob.deleteMany({ where: { organisationId: org.id } });
+      await tx.organisation.delete({ where: { id: org.id } });
+    },
+    // Supabase pooler + multi-delete purge exceeds Prisma's 5s interactive default.
+    { timeout: 30_000, maxWait: 15_000 },
+  );
 
   logger.warn("Organisation hard-purged after explicit ledger wipe", {
     organisationId: org.id,
