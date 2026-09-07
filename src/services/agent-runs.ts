@@ -298,8 +298,12 @@ export async function createAndEnqueueAgentRun(input: {
   const initialPlan = crmQuickSync
     ? looksLikeOperatorBrief(request)
       ? "Checking your CRM — building a prioritised operator brief…"
-      : "Checking your CRM…"
-    : "Thinking — preparing your answer…";
+      : /\b(pipeline|stuck|stalled|open deals?)\b/i.test(request)
+        ? "Reviewing your pipeline…"
+        : /\b(inbox|reply|follow[- ]?up|conversation)\b/i.test(request)
+          ? "Checking your inbox…"
+          : "Checking your CRM…"
+    : "Preparing your answer…";
 
   const run = await prisma.agentRun.create({
     data: {

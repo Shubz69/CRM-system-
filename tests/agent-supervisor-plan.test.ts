@@ -154,4 +154,46 @@ describe("supervisor planning", () => {
       expect((auto.plan.steps[0]?.input as { intent?: string }).intent).toBe("operator_brief");
     }
   });
+
+  it("does not clarify normal ambiguous business questions in QUICK", () => {
+    for (const q of [
+      "How is the pipeline looking?",
+      "What's urgent?",
+      "Any fires today?",
+      "Give me a status check",
+      "Do we have goals currently at risk?",
+      "What opportunities should I review?",
+    ]) {
+      const result = planAgentRunDeterministic(q, {
+        organisationId: "org_test",
+        answerMode: "QUICK",
+      });
+      expect(result.kind).toBe("plan");
+      if (result.kind === "plan") {
+        expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+      }
+    }
+  });
+
+  it("ACTION mode prefers operator_brief for who-needs-reply judgement questions", () => {
+    const result = planAgentRunDeterministic("Who needs a reply?", {
+      organisationId: "org_test",
+      answerMode: "ACTION",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("operator_brief");
+    }
+  });
+
+  it("QUICK keeps pipeline looking on pipeline_summary", () => {
+    const result = planAgentRunDeterministic("How is the pipeline looking?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("pipeline_summary");
+    }
+  });
 });

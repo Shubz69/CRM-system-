@@ -50,7 +50,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
   if (/\bgoals?\b.*\bat risk\b|\bat risk\b.*\bgoals?\b/.test(t) && !/\b(today|prioritis|operator)\b/.test(t)) {
     return false;
   }
-  // Reply/follow-up fact questions → follow_ups intent, not full brief.
+  // Reply/follow-up fact questions → follow_ups intent, not full brief (Quick path).
+  // ACTION/EXECUTIVE forces operator_brief later via preferOperatorBriefForMode.
   if (
     /\b(who needs (a )?reply|customers? need(s)? follow|needing reply)\b/.test(t) &&
     !/\b(today|prioritis|operator brief|what should i do)\b/.test(t)
@@ -69,6 +70,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
     (/\bwhat should i do\b/.test(t) && /\b(today|daily|now|next|priority|operator)\b/.test(t)) ||
     /\b(daily|today'?s?)\s+(brief|priorit|agenda|plan|operator)\b/.test(t) ||
     /\bwhich (lead|opportunit|kpi)\b/.test(t) ||
+    /\bwhat opportunit/.test(t) ||
+    /\b(detected )?opportunit(y|ies)\b.*\b(review|attention|matter|focus)\b/.test(t) ||
     /\bwhat (should|can) i (automate|ignore|create|deprioritis|improve)\b/.test(t) ||
     /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
     /\b(deprioritis|what can wait|what should i ignore|safely deprioritis)\b/.test(t) ||
@@ -79,7 +82,12 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bblocking revenue\b|\bwasting time\b|\bhighest-value actions\b/.test(t) ||
     /\boperator brief\b/.test(t) ||
     /\bchief of staff\b/.test(t) ||
-    /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t)
+    /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t) ||
+    /\b(what'?s urgent|any fires|top risk|status check|crm pulse|are we healthy|what matters (this )?(morning|today|now))\b/.test(
+      t,
+    ) ||
+    /\b(who should i talk to|who is waiting on me|anything overdue|where are we behind|blocking progress)\b/.test(t) ||
+    /\b(needs? attention|what needs me|pipeline and inbox)\b/.test(t)
   );
 }
 
@@ -93,11 +101,15 @@ export function looksLikeCrmInternal(request: string): boolean {
     return true;
   }
   return (
-    /\b(my pipeline|our pipeline|pipeline summary|open deals?)\b/.test(t) ||
+    /\b(my pipeline|our pipeline|the pipeline|pipeline summary|pipeline looking|open deals?)\b/.test(t) ||
+    /\bhow is (my |our |the )?pipeline\b/.test(t) ||
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?|customers? need)\b/.test(t) ||
     /\bhow many\s+conversations\b/.test(t) ||
-    /\b(goals?\s+(are\s+)?at risk|goals? marked at risk|kpi|goals? need|which goal|any goals?\b.*\bat risk)\b/.test(t) ||
+    /\b(goals?\b.{0,40}\bat risk|at risk\b.{0,40}\bgoals?|goals? marked at risk|kpi|goals? need|which goal)\b/.test(
+      t,
+    ) ||
+    /\bdo we have goals\b/.test(t) ||
     /\b(content\s+(is\s+)?(awaiting|waiting for) approval|awaiting approval|waiting for approval|content in review)\b/.test(
       t,
     ) ||
@@ -115,12 +127,31 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
     /\bwho needs (a )?reply\b/.test(t) ||
     /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
-    /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t)
+    /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
+    /\bopportunit(y|ies)\b/.test(t) ||
+    /\b(crm pulse|status check|inbox snapshot|what needs me|what'?s urgent|any fires|top risk)\b/.test(t)
+  );
+}
+
+function isPureDeterministicCrmFact(request: string): boolean {
+  const t = request.toLowerCase();
+  // Only inventory/count questions stay on specialized intents under ACTION/EXECUTIVE.
+  // Judgement / "who/which/what needs…" questions use the operator brief in those modes.
+  return (
+    /\bhow many\b/.test(t) ||
+    /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\bname one company\b/.test(t) ||
+    /\bcontacts? count\b/.test(t) ||
+    (/\b(content).*\b(awaiting|waiting|approval|in review)\b/.test(t) &&
+      !/\b(should i create|what content should)\b/.test(t) &&
+      !/\b(today|prioritis|operator)\b/.test(t)) ||
+    (/\bgoals?\b.{0,40}\bat risk\b/.test(t) && !/\b(today|prioritis|operator|attention|kpi needs)\b/.test(t))
   );
 }
 
 function crmDeskIntentFromRequest(
   request: string,
+  opts?: { preferOperatorBrief?: boolean },
 ):
   | "pipeline_summary"
   | "follow_ups"
@@ -131,6 +162,9 @@ function crmDeskIntentFromRequest(
   | "business_context"
   | "desk_overview" {
   const t = request.toLowerCase();
+  if (opts?.preferOperatorBrief && !isPureDeterministicCrmFact(t)) {
+    return "operator_brief";
+  }
   if (looksLikeOperatorBrief(t)) return "operator_brief";
   if (
     /\bbusiness (profile|context)\b/.test(t) ||
@@ -157,15 +191,16 @@ function crmDeskIntentFromRequest(
     return "follow_ups";
   }
   if (
-    /\bpipeline|stalled|stuck|open deals?|which deal|deals? look|pipeline health\b/.test(t)
+    /\bpipeline|stalled|stuck|open deals?|which deal|deals? look|pipeline health|pipeline looking\b/.test(t)
   ) {
     return "pipeline_summary";
   }
+  if (/\bopportunit/.test(t)) return "operator_brief";
   return "desk_overview";
 }
 
-function planCrmDesk(request: string): PlanResult {
-  const intent = crmDeskIntentFromRequest(request);
+function planCrmDesk(request: string, opts?: { preferOperatorBrief?: boolean }): PlanResult {
+  const intent = crmDeskIntentFromRequest(request, opts);
   return {
     kind: "plan",
     plan: {
@@ -469,9 +504,13 @@ export function planAgentRunDeterministic(
     return clarificationForImagingUpload();
   }
 
+  const modeEarly = org?.answerMode ?? detectAnswerModeFromLanguage(trimmed);
+  const preferOperatorBrief =
+    modeEarly === "ACTION" || modeEarly === "EXECUTIVE";
+
   // Internal CRM / pipeline — before summarise/research so "Summarise my pipeline" uses deals.
-  if (looksLikeCrmInternal(trimmed)) {
-    return planCrmDesk(trimmed);
+  if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) {
+    return planCrmDesk(trimmed, { preferOperatorBrief });
   }
 
   if (looksLikeSocialListening(trimmed)) {
@@ -529,11 +568,22 @@ export function planAgentRunDeterministic(
   }
 
   // When the user already picked Quick / Action / Executive, avoid vague stalls —
-  // but only auto-desk for true workspace questions; otherwise FAST research or clarify.
-  const mode = org?.answerMode ?? detectAnswerModeFromLanguage(trimmed);
+  // prefer workspace CRM/operator answers over clarification for short business asks.
+  const mode = modeEarly;
   if (mode === "QUICK" || mode === "ACTION" || mode === "EXECUTIVE") {
     if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) {
-      return planCrmDesk(trimmed);
+      return planCrmDesk(trimmed, { preferOperatorBrief });
+    }
+    // Short ambiguous-but-normal business questions → answer from CRM state, don't clarify.
+    if (
+      trimmed.split(/\s+/).length <= 12 &&
+      /\b(pipeline|inbox|crm|deal|lead|customer|focus|urgent|risk|overdue|healthy|attention|today|week|status check|fires|pulse|snapshot|blocking progress|waiting on me)\b/i.test(
+        trimmed,
+      )
+    ) {
+      return planCrmDesk(trimmed, {
+        preferOperatorBrief: preferOperatorBrief || mode === "QUICK",
+      });
     }
     if (mode === "QUICK" && trimmed.split(/\s+/).length >= 8 && !isTooVague(trimmed)) {
       return planResearchPipeline(trimmed, { answerMode: mode });
