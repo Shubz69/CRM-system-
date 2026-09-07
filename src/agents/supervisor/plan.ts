@@ -73,8 +73,7 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\b(this|my|our)\s+workspace\b/.test(t) ||
     /\bbusiness (profile|context)\b/.test(t) ||
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
-    /\bwho needs (a )?reply\b/.test(t) ||
-    /\b(automate|prioritis[e]|deprioritis[e]|ignore)\b/.test(t)
+    /\bwho needs (a )?reply\b/.test(t)
   );
 }
 
