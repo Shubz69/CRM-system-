@@ -5,6 +5,13 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    /**
+     * Remote Supabase pooler (connection_limit≈5) cannot sustain Vitest's default
+     * file-parallel Prisma suites — tests hang then hit testTimeout as "timeouts".
+     * Serialise files; keep per-test timeout evidence-based (not inflated).
+     */
+    fileParallelism: false,
+    maxConcurrency: 1,
     /** Remote Supabase integration tests often exceed the 5s default under suite load. */
     testTimeout: 20_000,
   },

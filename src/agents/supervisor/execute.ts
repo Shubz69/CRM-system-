@@ -174,12 +174,36 @@ export async function executeAgentRun(input: {
   const maxSpendCents =
     run.maxSpendCents ?? limits.maxSpendCentsPerRun ?? null;
 
+  const executeWallStart = Date.now();
+  const priorPartial =
+    run.partialResults && typeof run.partialResults === "object" && !Array.isArray(run.partialResults)
+      ? (run.partialResults as Record<string, unknown>)
+      : {};
+  const priorLatency =
+    priorPartial.latencyTrace &&
+    typeof priorPartial.latencyTrace === "object" &&
+    !Array.isArray(priorPartial.latencyTrace)
+      ? (priorPartial.latencyTrace as Record<string, number>)
+      : {};
+  const latencyTrace: Record<string, number> = {
+    ...priorLatency,
+    workerPickupAt: executeWallStart,
+    queueWaitMs:
+      typeof priorLatency.enqueuedAt === "number"
+        ? Math.max(0, executeWallStart - priorLatency.enqueuedAt)
+        : 0,
+  };
+
   const startedAt = run.startedAt ?? new Date();
   await prisma.agentRun.updateMany({
     where: { id: run.id, organisationId: input.organisationId },
     data: {
       status: "PLANNING",
       startedAt,
+      partialResults: {
+        ...priorPartial,
+        latencyTrace,
+      } as Prisma.InputJsonValue,
       maxSteps,
       maxWallClockSeconds,
       maxSpendCents,
@@ -190,13 +214,15 @@ export async function executeAgentRun(input: {
 
   // Understanding / business-context stages (customer-facing only).
   let businessContextKnownFacts: string[] = [];
+  const tBiz0 = Date.now();
+  let askCtxCached: Awaited<ReturnType<typeof resolveAskBusinessContext>> | null = null;
   try {
-    const askCtx = await resolveAskBusinessContext({
+    askCtxCached = await resolveAskBusinessContext({
       organisationId: input.organisationId,
       request: run.request,
     });
-    businessContextKnownFacts = askCtx.knownFacts;
-    if (askCtx.knownFacts.length && !asPlan(run.plan)) {
+    businessContextKnownFacts = askCtxCached.knownFacts;
+    if (askCtxCached.knownFacts.length && !asPlan(run.plan)) {
       await prisma.agentRun.updateMany({
         where: { id: run.id, organisationId: input.organisationId, status: "PLANNING" },
         data: { plainEnglishPlan: CUSTOMER_PROGRESS_STAGES.context },
@@ -208,8 +234,10 @@ export async function executeAgentRun(input: {
       message: error instanceof Error ? error.message : "unknown",
     });
   }
+  latencyTrace.contextLoadMs = Date.now() - tBiz0;
 
   let plan = asPlan(run.plan);
+  const tPlan0 = Date.now();
   if (!plan) {
     const planned = await planAgentRun(run.request, {
       organisationId: input.organisationId,
@@ -222,10 +250,12 @@ export async function executeAgentRun(input: {
       // Suppress business-info clarifications already answered by Context Resolver.
       let suppress = false;
       try {
-        const askCtx = await resolveAskBusinessContext({
-          organisationId: input.organisationId,
-          request: run.request,
-        });
+        const askCtx =
+          askCtxCached ??
+          (await resolveAskBusinessContext({
+            organisationId: input.organisationId,
+            request: run.request,
+          }));
         suppress = shouldSuppressBusinessClarification(planned.question, askCtx);
       } catch {
         suppress = false;
@@ -303,10 +333,12 @@ export async function executeAgentRun(input: {
       },
     });
   }
+  latencyTrace.planMs = Date.now() - tPlan0;
 
   // Map answer mode into Compute Governor (single pipeline) and apply budgets.
   let governedMaxSteps = maxSteps;
   let governedContextChars: number | null = null;
+  const tGov0 = Date.now();
   if (run.answerMode) {
     try {
       const hints = computeHintsForAnswerMode(run.answerMode);
@@ -338,12 +370,18 @@ export async function executeAgentRun(input: {
       });
     }
   }
+  latencyTrace.governorMs = Date.now() - tGov0;
 
   const stepsToRun = plan.steps.slice(0, governedMaxSteps);
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
   let totalCostCents = run.totalCostCents || 0;
   let previousOutput: unknown = null;
+
+  // Pure CRM desk answers already load org state inside crm_desk — skip duplicate
+  // RAG / episodic / CoS assembly that dominated Quick latency on the internal path.
+  const crmDeskOnly =
+    stepsToRun.length === 1 && stepsToRun.every((s) => s.agentName === "crm_desk");
 
   // Phase 2: organisational knowledge as working memory for this mission (never invents facts).
   let knowledgeContext: string | null = null;
@@ -362,6 +400,8 @@ export async function executeAgentRun(input: {
   } | null = null;
   let episodicContext: string | null = null;
 
+  const tCtx0 = Date.now();
+  if (!crmDeskOnly) {
   const knowledgePolicy = evaluateToolPolicy("knowledge.retrieve", {
     organisationId: input.organisationId,
   });
@@ -471,6 +511,11 @@ export async function executeAgentRun(input: {
       message: error instanceof Error ? error.message : "unknown",
     });
   }
+  }
+  latencyTrace.knowledgeContextMs = pendingKnowledgeTool?.durationMs ?? 0;
+  latencyTrace.memoryContextMs = pendingMemoryTool?.durationMs ?? 0;
+  latencyTrace.preStepContextMs = Date.now() - tCtx0;
+  latencyTrace.crmDeskFastPath = crmDeskOnly ? 1 : 0;
 
   for (let i = 0; i < stepsToRun.length; i++) {
     const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
@@ -1014,6 +1059,7 @@ export async function executeAgentRun(input: {
   }
 
   const originalUserPrompt = readOriginalUserPrompt(run);
+  const tPost0 = Date.now();
   const shapedFinal = await finalizeModeOutput({
     organisationId: input.organisationId,
     agentRunId: run.id,
@@ -1021,6 +1067,30 @@ export async function executeAgentRun(input: {
     raw: previousOutput,
     originalUserPrompt,
     request: run.request,
+  });
+  latencyTrace.postProcessMs = Date.now() - tPost0;
+  latencyTrace.toolMs = stepOutputs.reduce((acc, s) => {
+    // Prefer recorded step durations when present on outputs — fall back to wall remainder.
+    return acc;
+  }, latencyTrace.toolMs || 0);
+  if (!latencyTrace.toolMs) {
+    latencyTrace.toolMs = Math.max(
+      0,
+      Date.now() -
+        executeWallStart -
+        (latencyTrace.contextLoadMs || 0) -
+        (latencyTrace.planMs || 0) -
+        (latencyTrace.governorMs || 0) -
+        (latencyTrace.preStepContextMs || 0) -
+        (latencyTrace.postProcessMs || 0),
+    );
+  }
+  latencyTrace.totalMs = Date.now() - executeWallStart;
+  logger.info("Ask latency trace", {
+    runId: run.id,
+    answerMode: run.answerMode,
+    crmDeskFastPath: crmDeskOnly,
+    ...latencyTrace,
   });
 
   return finishRun({
@@ -1030,7 +1100,7 @@ export async function executeAgentRun(input: {
     status: "COMPLETED",
     totalCostCents,
     finalOutput: shapedFinal,
-    partialResults: { steps: stepOutputs },
+    partialResults: { steps: stepOutputs, latencyTrace },
   });
 }
 

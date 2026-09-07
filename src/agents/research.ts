@@ -268,14 +268,18 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const model = resolveModelForTier("cheap");
     let costCents = 0;
 
-    const expanded = await expandResearchQueries({
-      organisationId: ctx.organisationId,
-      topic,
-      nicheHint: parsed.nicheHint,
-      model,
-      knowledgeContext: ctx.knowledgeContext,
-    });
-    costCents += 2;
+    // FAST / Quick research: skip expand LLM — topic + authority queries only.
+    let expanded: string[] = [];
+    if (!fast) {
+      expanded = await expandResearchQueries({
+        organisationId: ctx.organisationId,
+        topic,
+        nicheHint: parsed.nicheHint,
+        model,
+        knowledgeContext: ctx.knowledgeContext,
+      });
+      costCents += 2;
+    }
 
     const queries = [
       ...authorityFirstQueries(topic),

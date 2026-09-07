@@ -115,10 +115,15 @@ function buildOperatorBrief(input: {
   for (const c of input.needingReply.slice(0, 5)) {
     const who = c.contactName || "Unknown contact";
     needsAttention.push(
-      `${who} — unread/handoff (unread ${c.unreadCount}). Reply or assign in Inbox.`,
+      `${who} — unread/handoff (unread ${c.unreadCount}). Urgency: high while unread.`,
     );
     topPriorities.push(
-      `Reply to ${who}: conversation needs a human response. Evidence: unread/handoff flags in Inbox.`,
+      [
+        `Reply to ${who}`,
+        `Why: open conversation needs a human response`,
+        `Evidence: Inbox unread=${c.unreadCount} / handoff flags`,
+        `Next: open Inbox → draft reply → send (human-reviewed)`,
+      ].join(" · "),
     );
   }
   for (const c of input.needingHuman.slice(0, 3)) {
@@ -130,10 +135,15 @@ function buildOperatorBrief(input: {
 
   for (const d of input.stalledDeals.slice(0, 5)) {
     sales.push(
-      `Stuck deal: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) — quiet ≥14 days. Next: reopen with a concrete follow-up.`,
+      `Stuck deal: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) — quiet ≥14 days. Why now: stall risk. Next: reopen with a concrete follow-up.`,
     );
     topPriorities.push(
-      `Unblock ${d.name}: stalled ≥14 days at ${d.stageLabel || "unknown stage"}. Evidence: deal last activity.`,
+      [
+        `Unblock ${d.name}`,
+        `Why: stalled ≥14 days at ${d.stageLabel || "unknown stage"}`,
+        `Evidence: deal last activity quiet ≥14 days (${money(d.amountCents)})`,
+        `Next: message the buyer or schedule a checkpoint this week`,
+      ].join(" · "),
     );
   }
   if (!input.stalledDeals.length && input.dealRows.length) {
@@ -326,7 +336,21 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const orgId = ctx.organisationId;
     const now = Date.now();
 
-    const [deals, conversations, goals, contentPieces, hotLeads, contactCount] =
+    const operatorBriefPromise =
+      parsed.intent === "operator_brief"
+        ? Promise.all([
+            buildChiefOfStaffFacts(orgId).catch(() => null),
+            parsed.request
+              ? retrieveRelevantKnowledge({
+                  organisationId: orgId,
+                  query: parsed.request,
+                  limit: 4,
+                }).catch(() => null)
+              : Promise.resolve(null),
+          ])
+        : null;
+
+    const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals] =
       await Promise.all([
         prisma.deal.findMany({
           where: { organisationId: orgId, deletedAt: null, status: "OPEN" },
@@ -385,16 +409,15 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         prisma.contact.count({
           where: { organisationId: orgId, deletedAt: null },
         }),
+        prisma.approvalRequest
+          .findMany({
+            where: { organisationId: orgId, status: "PENDING" },
+            take: 20,
+            orderBy: { createdAt: "desc" },
+            select: { id: true, kind: true, title: true },
+          })
+          .catch(() => []),
       ]);
-
-    const pendingApprovals = await prisma.approvalRequest
-      .findMany({
-        where: { organisationId: orgId, status: "PENDING" },
-        take: 20,
-        orderBy: { createdAt: "desc" },
-        select: { id: true, kind: true, title: true },
-      })
-      .catch(() => []);
 
     const dealRows = deals.map((d) => {
       const stalled = now - d.updatedAt.getTime() >= STALE_MS;
@@ -451,16 +474,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     }));
 
     if (parsed.intent === "operator_brief") {
-      const [cos, knowledge] = await Promise.all([
-        buildChiefOfStaffFacts(orgId).catch(() => null),
-        parsed.request
-          ? retrieveRelevantKnowledge({
-              organisationId: orgId,
-              query: parsed.request,
-              limit: 4,
-            }).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const [cos, knowledge] = (await operatorBriefPromise) ?? [null, null];
 
       const opportunities = (cos?.sections.OPPORTUNITIES || []).slice(0, 5).map((o) => ({
         title: o.title,

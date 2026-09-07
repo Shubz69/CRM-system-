@@ -85,6 +85,8 @@ export type AgentRunProgress = {
     } | null;
     memoryUsed: { episodeCount: number } | null;
   };
+  /** Wall-clock spans from worker (ms) — for latency diagnosis, not customer copy. */
+  latencyTrace?: Record<string, number> | null;
 };
 
 function parseOptions(value: unknown): string[] | null {
@@ -287,6 +289,9 @@ export async function createAndEnqueueAgentRun(input: {
       triggeredBy: input.triggeredBy ?? "user",
       request,
       status: "PENDING",
+      startedAt: new Date(),
+      // Immediate customer-visible progress (queue acceptance) — not fake completion.
+      plainEnglishPlan: "Queued — preparing your answer…",
       answerMode: answerMode ?? null,
       maxSteps: limits?.maxSteps ?? 8,
       maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
@@ -299,6 +304,9 @@ export async function createAndEnqueueAgentRun(input: {
         answerMode: answerMode ?? null,
         resolvedIntent: null,
         businessContextUsed: [] as string[],
+      } as Prisma.InputJsonValue,
+      partialResults: {
+        latencyTrace: { enqueuedAt: Date.now() },
       } as Prisma.InputJsonValue,
     },
   });
@@ -663,5 +671,16 @@ export async function getAgentRunProgress(input: {
       knowledgeUsed,
       memoryUsed,
     },
+    latencyTrace: (() => {
+      const pr = run.partialResults;
+      if (!pr || typeof pr !== "object" || Array.isArray(pr)) return null;
+      const lt = (pr as { latencyTrace?: unknown }).latencyTrace;
+      if (!lt || typeof lt !== "object" || Array.isArray(lt)) return null;
+      const out: Record<string, number> = {};
+      for (const [k, v] of Object.entries(lt as Record<string, unknown>)) {
+        if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+      }
+      return Object.keys(out).length ? out : null;
+    })(),
   };
 }

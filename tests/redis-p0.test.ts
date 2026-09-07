@@ -75,11 +75,19 @@ describe("Redis P0 guards", () => {
 
     vi.resetModules();
     process.env.APP_RUNTIME_MODE = "production";
+    delete process.env.VERCEL_ENV;
     mod = await import("@/jobs/redis");
     expect(mod.getBullMqPrefix()).toBe("agentdesk-prod");
 
     vi.resetModules();
     process.env.APP_RUNTIME_MODE = "development";
+    process.env.VERCEL_ENV = "preview";
+    mod = await import("@/jobs/redis");
+    expect(mod.getBullMqPrefix()).toBe("agentdesk-preview");
+
+    // Vercel preview ships NODE_ENV/APP_RUNTIME_MODE=production — still isolate queues.
+    vi.resetModules();
+    process.env.APP_RUNTIME_MODE = "production";
     process.env.VERCEL_ENV = "preview";
     mod = await import("@/jobs/redis");
     expect(mod.getBullMqPrefix()).toBe("agentdesk-preview");

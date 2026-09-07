@@ -29,6 +29,7 @@ export type RejectionCode =
   | "NON_PROFILE_URL";
 
 export type ConstraintStatus = "MATCHED" | "NOT_VERIFIED" | "FAILED";
+export type ProspectMatchTier = "EXACT" | "POSSIBLE";
 
 export type ValidationDecision = {
   accepted: boolean;
@@ -43,6 +44,8 @@ export type ValidationDecision = {
   roleConstraint?: ConstraintStatus;
   locationConstraint?: ConstraintStatus;
   sizeConstraint?: ConstraintStatus;
+  /** Exact = all requested constraints MATCHED; Possible = needs verification. */
+  matchTier?: ProspectMatchTier;
   requestedLocation?: string;
   candidateLocation?: string;
   locationConfidence: number;
@@ -654,6 +657,9 @@ export function validateProspectCandidate(
   }
 
   const size = matchCompanySizeIntent(icp.companySize, evidenceText);
+  // Size requested but unverified → possible match only (never exact)
+  let sizeConstraint: ConstraintStatus = size.status;
+  let possibleOnly = false;
   if (icp.companySize && size.status === "FAILED") {
     return {
       ...reject(
@@ -668,20 +674,9 @@ export function validateProspectCandidate(
       locationConstraint,
     };
   }
-  // Size requested but unverified → do not present as an exact match
   if (icp.companySize && size.status === "NOT_VERIFIED") {
-    return {
-      ...reject(
-        "INSUFFICIENT_EVIDENCE",
-        "Company size requested but not verified in evidence",
-        candidate,
-        icp,
-        entityClass,
-      ),
-      sizeConstraint: "NOT_VERIFIED",
-      roleConstraint: role.roleConstraint,
-      locationConstraint,
-    };
+    possibleOnly = true;
+    sizeConstraint = "NOT_VERIFIED";
   }
 
   const industry = matchIndustryIntent(
@@ -750,6 +745,18 @@ export function validateProspectCandidate(
   if (companyConf >= 0.7) fit += 0.07;
   fit = Math.min(0.95, fit);
 
+  const requestedStatuses: ConstraintStatus[] = [];
+  if (icp.role) requestedStatuses.push(role.roleConstraint);
+  if (icp.location) requestedStatuses.push(locationConstraint);
+  if (icp.companySize) requestedStatuses.push(sizeConstraint);
+  const allMatched =
+    requestedStatuses.length === 0 ||
+    requestedStatuses.every((s) => s === "MATCHED");
+  const matchTier: ProspectMatchTier =
+    possibleOnly || !allMatched || requestedStatuses.some((s) => s === "NOT_VERIFIED")
+      ? "POSSIBLE"
+      : "EXACT";
+
   return {
     accepted: true,
     entityClass: entityClass === "UNKNOWN" ? "PERSON" : entityClass,
@@ -759,8 +766,9 @@ export function validateProspectCandidate(
     roleEvidence: role.roleEvidence,
     roleMatchKind: role.roleMatchKind,
     roleConstraint: role.roleConstraint,
-    sizeConstraint: size.status,
+    sizeConstraint,
     locationConstraint,
+    matchTier,
     requestedLocation: icp.location,
     candidateLocation: loc.candidateLocation || candidate.location,
     locationConfidence: loc.locationConfidence,

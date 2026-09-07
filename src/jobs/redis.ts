@@ -76,7 +76,11 @@ export function assertRedisUrlAllowedForRuntime(): void {
  *
  * Resolution:
  * 1. QUEUE_PREFIX if explicitly set (colons normalized to hyphens)
- * 2. otherwise agentdesk-{dev|test|preview|prod}
+ * 2. Vercel preview deployments → agentdesk-preview (even when NODE_ENV=production)
+ * 3. otherwise agentdesk-{dev|test|prod} from runtime mode
+ *
+ * Preview must never share the production BullMQ namespace — otherwise preview
+ * Ask jobs are consumed by the production Railway worker.
  */
 export function getBullMqPrefix(): string {
   const explicit = (process.env.QUEUE_PREFIX || "").trim();
@@ -84,10 +88,11 @@ export function getBullMqPrefix(): string {
     const normalized = explicit.replace(/:/g, "-").replace(/-+$/g, "").replace(/^-+/g, "");
     return normalized || "agentdesk-dev";
   }
+  // Check before getRuntimeMode(): Vercel previews set NODE_ENV=production.
+  if (process.env.VERCEL_ENV === "preview") return "agentdesk-preview";
   const mode = getRuntimeMode();
   if (mode === "production") return "agentdesk-prod";
   if (mode === "test") return "agentdesk-test";
-  if (process.env.VERCEL_ENV === "preview") return "agentdesk-preview";
   return "agentdesk-dev";
 }
 

@@ -28,6 +28,10 @@ export type DiscoveryResult = {
   /** Distinct run id for this discovery (stored as researchJobId) */
   searchRunId: string;
   candidates: SocialProspect[];
+  /** All requested constraints MATCHED */
+  exactCandidates: SocialProspect[];
+  /** Identity OK but one or more constraints NOT_VERIFIED */
+  possibleCandidates: SocialProspect[];
   rejectedCount: number;
   rejectedSample: DiscoveryRejection[];
   requestedCount: number;
@@ -215,23 +219,59 @@ export async function discoverSocialProspects(input: {
     saved.push(row);
   }
 
+  const exactSaved = saved.filter((row) => {
+    const flags = row.uncertaintyFlags;
+    if (Array.isArray(flags) && flags.some((f) => typeof f === "string" && f.includes('"matchTier":"POSSIBLE"'))) {
+      return false;
+    }
+    const qa = Array.isArray(flags)
+      ? flags.find((f) => typeof f === "string" && f.startsWith("qa:"))
+      : null;
+    if (typeof qa === "string") {
+      try {
+        const parsed = JSON.parse(qa.slice(3)) as { matchTier?: string };
+        if (parsed.matchTier === "POSSIBLE") return false;
+      } catch {
+        /* ignore */
+      }
+    }
+    return true;
+  });
+  const possibleSaved = saved.filter((row) => !exactSaved.includes(row));
+
   const requestedCount = icp.desiredCount;
   const returnedCount = saved.length;
-  const qualityNote =
-    returnedCount < requestedCount
-      ? `Only ${returnedCount} sufficiently verified match${returnedCount === 1 ? "" : "es"} found for this search.`
-      : undefined;
+  const qualityNoteParts: string[] = [];
+  if (exactSaved.length === 0 && possibleSaved.length > 0) {
+    qualityNoteParts.push(
+      `No exact matches — ${possibleSaved.length} possible match${possibleSaved.length === 1 ? "" : "es"} need verification.`,
+    );
+  } else if (returnedCount < requestedCount) {
+    qualityNoteParts.push(
+      `Only ${exactSaved.length} exact match${exactSaved.length === 1 ? "" : "es"}` +
+        (possibleSaved.length
+          ? ` and ${possibleSaved.length} possible (needs verification)`
+          : "") +
+        ` found for this search.`,
+    );
+  } else if (possibleSaved.length) {
+    qualityNoteParts.push(
+      `${exactSaved.length} exact · ${possibleSaved.length} possible (needs verification).`,
+    );
+  }
 
   return {
     icp,
     computeMode: plan.executionMode,
     searchRunId,
     candidates: saved,
+    exactCandidates: exactSaved,
+    possibleCandidates: possibleSaved,
     rejectedCount,
     rejectedSample,
     requestedCount,
     returnedCount,
-    qualityNote,
+    qualityNote: qualityNoteParts.length ? qualityNoteParts.join(" ") : undefined,
     liveResearch,
     externalCalls,
     billableCents,

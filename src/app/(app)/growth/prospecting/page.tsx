@@ -29,7 +29,24 @@ type Prospect = {
   uncertaintyFlags?: string[] | null;
   sourceEvidence?: unknown;
   status?: string;
+  matchTier?: "EXACT" | "POSSIBLE";
 };
+
+function prospectMatchTier(p: Prospect): "EXACT" | "POSSIBLE" {
+  if (p.matchTier === "POSSIBLE" || p.matchTier === "EXACT") return p.matchTier;
+  const flags = Array.isArray(p.uncertaintyFlags) ? p.uncertaintyFlags : [];
+  for (const f of flags) {
+    if (typeof f !== "string" || !f.startsWith("qa:")) continue;
+    try {
+      const parsed = JSON.parse(f.slice(3)) as { matchTier?: string };
+      if (parsed.matchTier === "POSSIBLE") return "POSSIBLE";
+      if (parsed.matchTier === "EXACT") return "EXACT";
+    } catch {
+      /* ignore */
+    }
+  }
+  return "EXACT";
+}
 
 type LinkedInSurface = {
   sendConnection: boolean;
@@ -311,12 +328,29 @@ export default function SocialProspectingPage() {
               : "No prospects yet. Run a search to get started."}
           </p>
         ) : (
-          prospects.map((p) => {
+          (() => {
+            const ordered = [
+              ...prospects.filter((p) => prospectMatchTier(p) === "EXACT"),
+              ...prospects.filter((p) => prospectMatchTier(p) === "POSSIBLE"),
+            ];
+            let lastTier: "EXACT" | "POSSIBLE" | null = null;
+            return ordered.map((p) => {
+            const tier = prospectMatchTier(p);
+            const showHeader = tier !== lastTier;
+            lastTier = tier;
             const ids = showableIdentities(p);
             const drafts = draftsByProspect[p.id];
             const verified = profileVerified(p);
             return (
-              <article key={p.id} className="surface p-4">
+              <div key={p.id} className="space-y-2">
+                {showHeader ? (
+                  <h2 className="pt-2 text-sm font-semibold tracking-wide">
+                    {tier === "EXACT"
+                      ? "EXACT MATCHES"
+                      : "POSSIBLE MATCHES — NEEDS VERIFICATION"}
+                  </h2>
+                ) : null}
+              <article className="surface p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <h2 className="card-title">
@@ -325,6 +359,7 @@ export default function SocialProspectingPage() {
                     </h2>
                     <p className="meta mt-1">
                       {[p.role, p.location].filter(Boolean).join(" · ") || "Details from research"}
+                      {tier === "POSSIBLE" ? " · Needs verification" : ""}
                     </p>
                     <p className="mt-2 text-sm">
                       Fit {p.fitScore != null ? Math.round(p.fitScore * 100) : "—"}%
@@ -428,8 +463,10 @@ export default function SocialProspectingPage() {
                   </div>
                 </div>
               </article>
+              </div>
             );
-          })
+            });
+          })()
         )}
       </div>
 
