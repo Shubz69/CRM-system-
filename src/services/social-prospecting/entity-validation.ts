@@ -756,6 +756,16 @@ export function validateProspectCandidate(
   // Soft / unconstrained / location-only queries cannot be EXACT.
   const hasRoleOrSizeOrIndustry =
     Boolean(icp.role) || Boolean(icp.companySize) || Boolean(icp.industry);
+  // Raw-query size mentions that failed to parse still block EXACT.
+  const sizeMentionedInQuery =
+    Boolean(icp.companySize) ||
+    /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}|smes?|employees?|headcount|staff size)\b/i.test(
+      icp.rawQuery || "",
+    );
+  if (sizeMentionedInQuery && (!icp.companySize || size.status === "NOT_VERIFIED")) {
+    possibleOnly = true;
+    sizeConstraint = "NOT_VERIFIED";
+  }
   const evidenceGaps: string[] = [];
   if (icp.role && !(role.roleEvidence && String(role.roleEvidence).trim())) {
     evidenceGaps.push("role");
@@ -764,6 +774,9 @@ export function validateProspectCandidate(
     evidenceGaps.push("location");
   }
   if (icp.companySize && size.status === "MATCHED" && !size.evidence) {
+    evidenceGaps.push("companySize");
+  }
+  if (sizeMentionedInQuery && sizeConstraint !== "MATCHED") {
     evidenceGaps.push("companySize");
   }
   const allMatched =

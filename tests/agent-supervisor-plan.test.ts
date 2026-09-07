@@ -119,6 +119,31 @@ describe("supervisor planning", () => {
     }
   });
 
+  it("routes content waiting phrasing without clarification", () => {
+    const result = planAgentRunDeterministic("Any content waiting for approval?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe(
+        "content_awaiting_approval",
+      );
+    }
+  });
+
+  it("routes who needs a reply to follow_ups not full operator brief", () => {
+    const result = planAgentRunDeterministic("Who needs a reply in Inbox?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("follow_ups");
+    }
+  });
+
   it("routes automate/deprioritise phrasing to operator_brief", () => {
     const auto = planAgentRunDeterministic("What should I automate from my CRM?", {
       organisationId: "org_test",

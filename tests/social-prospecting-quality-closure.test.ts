@@ -575,6 +575,35 @@ describe("Final social prospecting quality closure", () => {
     expect(decision.locationEvidence).toBeTruthy();
   });
 
+  it("size ranges and SMEs force POSSIBLE when size unverified", () => {
+    const icp = parseProspectIntent("COO or operations lead UK professional services 10-50");
+    expect(icp.companySize).toBeTruthy();
+    const decision = validateProspectCandidate(
+      {
+        personName: "Size Gap",
+        role: "COO",
+        location: "UK",
+        linkedinUrl: "https://www.linkedin.com/in/size-gap",
+        sourceEvidence: [
+          evidence("Size Gap is COO in London UK", "https://www.linkedin.com/in/size-gap"),
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/size-gap",
+            confidence: 0.9,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.matchTier).toBe("POSSIBLE");
+  });
+
   it("customer integrations UI does not expose vendor internals", () => {
     const text = readFileSync(
       join(process.cwd(), "src/app/(app)/integrations/integrations-client.tsx"),

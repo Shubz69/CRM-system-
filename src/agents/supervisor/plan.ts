@@ -13,10 +13,10 @@ import {
 } from "@/lib/agent-request-sanitize";
 
 const AMBIGUOUS_MARKERS = [
-  /what (can|should) (you|i)/i,
-  /help me/i,
-  /not sure/i,
-  /\?$/,
+  /what (can|should) (you|i) (do|help)(?!\s+(today|now|next|with my|from))/i,
+  /^help me$/i,
+  /not sure what you mean/i,
+  /\b(something|anything)\b.*\b(idk|not sure)\b/i,
 ];
 
 function extractQuotedOrRemainder(request: string, verbPattern: RegExp): string | null {
@@ -50,11 +50,24 @@ export function looksLikeOperatorBrief(request: string): boolean {
   if (/\bgoals?\b.*\bat risk\b|\bat risk\b.*\bgoals?\b/.test(t) && !/\b(today|prioritis|operator)\b/.test(t)) {
     return false;
   }
+  // Reply/follow-up fact questions → follow_ups intent, not full brief.
+  if (
+    /\b(who needs (a )?reply|customers? need(s)? follow|needing reply)\b/.test(t) &&
+    !/\b(today|prioritis|operator brief|what should i do)\b/.test(t)
+  ) {
+    return false;
+  }
+  // Content approval inventory → content intent.
+  if (
+    /\b(content|drafts?).*\b(awaiting|waiting|approval|in review)\b/.test(t) &&
+    !/\b(should i create|what content should)\b/.test(t)
+  ) {
+    return false;
+  }
   return (
     /\bwhat should i (do today|focus on|prioritis[eo]|work on today)\b/.test(t) ||
     (/\bwhat should i do\b/.test(t) && /\b(today|daily|now|next|priority|operator)\b/.test(t)) ||
     /\b(daily|today'?s?)\s+(brief|priorit|agenda|plan|operator)\b/.test(t) ||
-    /\bwho needs (a )?reply\b/.test(t) ||
     /\bwhich (lead|opportunit|kpi)\b/.test(t) ||
     /\bwhat (should|can) i (automate|ignore|create|deprioritis|improve)\b/.test(t) ||
     /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
@@ -62,6 +75,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bwhat changed recently\b/.test(t) ||
     /\bwhere are we losing momentum\b/.test(t) ||
     /\bbiggest (sales )?risk\b/.test(t) ||
+    /\bare we neglecting\b/.test(t) ||
+    /\bblocking revenue\b|\bwasting time\b|\bhighest-value actions\b/.test(t) ||
     /\boperator brief\b/.test(t) ||
     /\bchief of staff\b/.test(t) ||
     /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t)
@@ -80,10 +95,13 @@ export function looksLikeCrmInternal(request: string): boolean {
   return (
     /\b(my pipeline|our pipeline|pipeline summary|open deals?)\b/.test(t) ||
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
-    /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
+    /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?|customers? need)\b/.test(t) ||
     /\bhow many\s+conversations\b/.test(t) ||
     /\b(goals?\s+(are\s+)?at risk|goals? marked at risk|kpi|goals? need|which goal|any goals?\b.*\bat risk)\b/.test(t) ||
-    /\b(content\s+(is\s+)?awaiting approval|awaiting approval|content in review)\b/.test(t) ||
+    /\b(content\s+(is\s+)?(awaiting|waiting for) approval|awaiting approval|waiting for approval|content in review)\b/.test(
+      t,
+    ) ||
+    /\bany content\b.*\b(approval|review)\b/.test(t) ||
     /\b(my|our)\s+(\w+\s+){0,3}(contacts?|deals?|leads?|crm|compan(?:y|ies)|content|inbox)\b/.test(t) ||
     /\bhow many\s+(contacts?|deals?|leads?|compan(?:y|ies)|conversations)\b/.test(t) ||
     /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
@@ -96,6 +114,7 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bwho (is|are) (our|my) (customer|audience)\b/.test(t) ||
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
     /\bwho needs (a )?reply\b/.test(t) ||
+    /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t)
   );
 }
@@ -124,7 +143,7 @@ function crmDeskIntentFromRequest(
   if (/\bgoals?\b/.test(t) || /\bkpi\b/.test(t)) return "goals_at_risk";
   if (
     /\bcontent\b/.test(t) &&
-    /\b(awaiting|approval|review|create|should i)\b/.test(t)
+    /\b(awaiting|waiting|approval|review|create|should i)\b/.test(t)
   ) {
     return "content_awaiting_approval";
   }

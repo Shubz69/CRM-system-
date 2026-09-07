@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import { getBusinessProfile } from "@/services/digital-twin";
+import { buildBusinessEvidencePack } from "@/services/business-evidence-pack";
 
 export const crmDeskInputSchema = z.object({
   intent: z.enum([
@@ -106,6 +107,7 @@ function buildOperatorBrief(input: {
   knowledgeHits: string[];
   contactCount: number;
   counts: CrmDeskOutput["counts"];
+  request?: string;
 }): { summary: string; shortAnswer: string; sections: NonNullable<CrmDeskOutput["operatorSections"]> } {
   const topPriorities: string[] = [];
   const needsAttention: string[] = [];
@@ -117,6 +119,7 @@ function buildOperatorBrief(input: {
   const ignore: string[] = [];
   const risks: string[] = [];
   const insufficientEvidence: string[] = [];
+  const req = (input.request || "").toLowerCase();
 
   const fmtRec = (parts: {
     what: string;
@@ -132,6 +135,9 @@ function buildOperatorBrief(input: {
       `URGENCY: ${parts.urgency}`,
       `NEXT ACTION: ${parts.next}`,
     ].join(" · ");
+
+  // Score 0 / null leads must never dominate TOP PRIORITIES.
+  const rankedLeads = input.hotLeads.filter((l) => (l.score ?? 0) > 0);
 
   for (const c of input.needingReply.slice(0, 5)) {
     const who = c.contactName || "Unknown contact";
@@ -155,6 +161,25 @@ function buildOperatorBrief(input: {
         urgency: "high",
         next: "Open Inbox and respond as human",
       }),
+    );
+  }
+
+  if (
+    /\b(reply|follow[- ]?up|inbox|customers? need)\b/.test(req) &&
+    !input.needingReply.length &&
+    !input.needingHuman.length
+  ) {
+    const rec = fmtRec({
+      what: "No conversations currently need a reply",
+      why: "Inbox has no unread/handoff queues right now",
+      evidence: "conversationsNeedingReply=0 · conversationsNeedingHuman=0",
+      urgency: "low",
+      next: "Check Inbox later or ask about pipeline/goals instead",
+    });
+    needsAttention.push(rec);
+    topPriorities.push(rec);
+    insufficientEvidence.push(
+      "No unanswered conversations in this workspace — cannot name a person who needs a reply.",
     );
   }
 
@@ -191,19 +216,28 @@ function buildOperatorBrief(input: {
     );
   }
 
-  for (const l of input.hotLeads.slice(0, 3)) {
+  for (const l of rankedLeads.slice(0, 3)) {
     const rec = fmtRec({
       what: `Focus lead ${l.name}`,
       why: "Highest scored open lead in CRM",
-      evidence: l.score != null ? `Lead score ${l.score}` : "Lead present without numeric score",
+      evidence: `Lead score ${l.score}`,
       urgency: "medium",
       next: "Qualify or book from CRM Contacts/Leads",
     });
     sales.push(rec);
-    if (topPriorities.length < 5) topPriorities.push(rec);
+    if (
+      topPriorities.length < 3 &&
+      !input.needingReply.length &&
+      !input.stalledDeals.length &&
+      !input.goalsAtRisk.length
+    ) {
+      topPriorities.push(rec);
+    }
   }
-  if (!input.hotLeads.length && !input.dealRows.length) {
-    insufficientEvidence.push("No scored open leads found — lead focus needs CRM lead data.");
+  if (!rankedLeads.length && !input.dealRows.length) {
+    insufficientEvidence.push(
+      "No positively scored open leads found — lead focus needs CRM lead scores > 0.",
+    );
   }
 
   for (const o of input.opportunities.slice(0, 3)) {
@@ -302,6 +336,19 @@ function buildOperatorBrief(input: {
         next: "Create automation draft: alert owner when quiet ≥14 days",
       }),
     );
+  } else if (/\bautomate\b/.test(req)) {
+    automation.push(
+      fmtRec({
+        what: "No high-confidence automation yet",
+        why: "Not enough repeated friction in inbox or pipeline",
+        evidence: `needingReply=${input.needingReply.length} · stalledDeals=${input.stalledDeals.length}`,
+        urgency: "low",
+        next: "Revisit after 2+ similar handoffs or stalls appear",
+      }),
+    );
+    insufficientEvidence.push(
+      "Not enough repeated friction yet to recommend a high-confidence automation — avoid inventing one.",
+    );
   } else {
     insufficientEvidence.push(
       "Not enough repeated friction yet to recommend a high-confidence automation — avoid inventing one.",
@@ -355,7 +402,7 @@ function buildOperatorBrief(input: {
       fmtRec({
         what: "Add one real pipeline deal or clear Business Profile gaps",
         why: "No urgent CRM fires detected",
-        evidence: "Empty stall/handoff queues",
+        evidence: "Empty stall/handoff queues · no positive lead scores",
         urgency: "low",
         next: "Create one deal or update Business Profile",
       }),
@@ -363,8 +410,18 @@ function buildOperatorBrief(input: {
     insufficientEvidence.push("Sparse operational signal — priorities are provisional.");
   }
 
+  if (/\bautomate\b/.test(req) && automation[0]) {
+    topPriorities.unshift(automation[0]);
+  }
+  if (/\b(kpi|goal)\b/.test(req) && goalsKpi[0]) {
+    topPriorities.unshift(goalsKpi[0]);
+  }
+  if (/\b(content|create|draft)\b/.test(req) && content[0]) {
+    topPriorities.unshift(content[0]);
+  }
+
   const sections = {
-    topPriorities,
+    topPriorities: [...new Set(topPriorities)].slice(0, 6),
     needsAttention,
     sales,
     pipelineRisk,
@@ -373,11 +430,11 @@ function buildOperatorBrief(input: {
     goalsKpi,
     ignore,
     risks,
-    insufficientEvidence,
+    insufficientEvidence: [...new Set(insufficientEvidence)],
   };
 
   const blocks: string[] = ["TOP PRIORITIES"];
-  topPriorities.slice(0, 5).forEach((p, i) => {
+  sections.topPriorities.slice(0, 5).forEach((p, i) => {
     blocks.push(`${i + 1}. ${p}`);
   });
   if (needsAttention.length) {
@@ -413,7 +470,7 @@ function buildOperatorBrief(input: {
   }
 
   const summary = blocks.join("\n");
-  const shortAnswer = topPriorities[0] || summary.slice(0, 280);
+  const shortAnswer = sections.topPriorities[0] || summary.slice(0, 280);
   return { summary, shortAnswer, sections };
 }
 
@@ -575,6 +632,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
                   limit: 4,
                 }).catch(() => null)
               : Promise.resolve(null),
+            buildBusinessEvidencePack(orgId).catch(() => null),
           ])
         : null;
 
@@ -872,7 +930,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     }));
 
     if (parsed.intent === "operator_brief") {
-      const [cos, knowledge] = (await operatorBriefPromise) ?? [null, null];
+      const [cos, knowledge, evidencePack] = (await operatorBriefPromise) ?? [null, null, null];
 
       const opportunities = (cos?.sections.OPPORTUNITIES || []).slice(0, 5).map((o) => ({
         title: o.title,
@@ -909,12 +967,18 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
           .filter(Boolean),
         contactCount,
         counts,
+        request: parsed.request,
       });
+
+      const evidenceFooter =
+        evidencePack?.summaryLines?.length
+          ? `\n\nEVIDENCE PACK\n${evidencePack.summaryLines.join("\n")}`
+          : "";
 
       return {
         output: {
           shortAnswer: brief.shortAnswer,
-          summary: brief.summary,
+          summary: `${brief.summary}${evidenceFooter}`,
           source: "internal_crm" as const,
           organisationId: orgId,
           counts,

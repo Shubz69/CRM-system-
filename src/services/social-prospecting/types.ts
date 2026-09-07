@@ -89,7 +89,7 @@ const ROLE_HINTS =
 const LOCATION_HINTS =
   /\b(uk|united kingdom|london|manchester|birmingham|scotland|wales|england|europe|eu|usa|us|new york|california)\b/i;
 const SIZE_HINTS =
-  /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}\s*(?:employees?|people|staff)|(?:under|fewer than|less than|<)\s*\d{1,4}\s*(?:employees?|people)|(?:small|mid[- ]?size|sme)(?:\s+firms?)?)\b/i;
+  /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}(?:\s*(?:employees?|people|staff|ftes?))?|(?:under|fewer than|less than|<)\s*\d{1,4}\s*(?:employees?|people|staff)?|(?:small|mid[- ]?size|smes?)(?:\s+(?:firms?|companies|businesses?))?)\b/i;
 
 /**
  * Convert natural language prospecting intent into a structured ICP.
@@ -182,6 +182,28 @@ export function parseProspectIntent(raw: string): StructuredIcp {
     desiredCount,
     rawQuery: text,
   };
+}
+
+/** Compile NL prospecting query into mandatory vs optional constraints (QA/debug). */
+export function compileProspectConstraints(raw: string): {
+  mandatory: Record<string, string>;
+  optional: Record<string, string>;
+  icp: StructuredIcp;
+} {
+  const icp = parseProspectIntent(raw);
+  const mandatory: Record<string, string> = {};
+  const optional: Record<string, string> = {};
+  if (icp.role) mandatory.role = icp.role;
+  if (icp.location) mandatory.location = icp.location;
+  if (icp.companySize) mandatory.companySize = icp.companySize;
+  if (icp.industry) mandatory.industry = icp.industry;
+  if (icp.signals.includes("need_signal")) optional.automationPain = "preferred";
+  if (/ai[- ]?readiness|transformation hiring/i.test(raw)) {
+    optional.evidencePreference = /transformation hiring/i.test(raw)
+      ? "transformation_hiring"
+      : "ai_readiness";
+  }
+  return { mandatory, optional, icp };
 }
 
 export function mergeDiscoveryCostLimits(

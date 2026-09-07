@@ -260,13 +260,30 @@ export function qualityCheckProspect(
         roleMatchKind: validation.roleMatchKind,
         roleConstraint: validation.roleConstraint,
         locationConstraint: validation.locationConstraint,
-        sizeConstraint: validation.sizeConstraint,
+        sizeConstraint: icp.companySize ? validation.sizeConstraint : undefined,
         matchTier: validation.matchTier || "POSSIBLE",
         requestedLocation: validation.requestedLocation,
         candidateLocation: validation.candidateLocation,
         locationConfidence: validation.locationConfidence,
         identityConfidence: validation.identityConfidence,
         companyAssociationConfidence: validation.companyAssociationConfidence,
+        matchedConstraints: [
+          validation.requestedRole && validation.roleConstraint === "MATCHED"
+            ? `role:${validation.matchedRole || validation.requestedRole}`
+            : null,
+          validation.requestedLocation && validation.locationConstraint === "MATCHED"
+            ? `location:${validation.candidateLocation || validation.requestedLocation}`
+            : null,
+          icp.companySize && validation.sizeConstraint === "MATCHED"
+            ? `companySize:${icp.companySize}`
+            : null,
+        ].filter(Boolean),
+        evidenceByConstraint: {
+          role: validation.roleEvidence || null,
+          location: validation.locationEvidence || null,
+          companySize:
+            icp.companySize && validation.sizeConstraint === "MATCHED" ? "matched_in_evidence" : null,
+        },
       },
     },
     uncertaintyFlags: [...new Set(uncertaintyFlags)],

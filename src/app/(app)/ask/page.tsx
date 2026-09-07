@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { toast } from "sonner";
@@ -10,6 +11,17 @@ import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
 import { isModeShapedOutput } from "@/services/answer-modes/shape";
 import { getImmutableWorkspaceContext, isWorkspaceContextReady, subscribeWorkspaceContextReady, workspaceFetch } from "@/lib/workspace-client";
+
+function localAckLabel(prompt: string): string {
+  const t = prompt.toLowerCase();
+  if (/\b(pipeline|deal|stalled|stuck)\b/.test(t)) return "Reviewing your pipeline…";
+  if (/\b(inbox|reply|follow[- ]?up|conversation)\b/.test(t)) return "Checking your Inbox…";
+  if (/\b(goal|kpi)\b/.test(t)) return "Checking goals and KPIs…";
+  if (/\b(content|approval|draft)\b/.test(t)) return "Checking Content…";
+  if (/\b(contact|compan(?:y|ies)|crm|workspace|business)\b/.test(t)) return "Checking your CRM…";
+  if (/\b(research|look up|investigate)\b/.test(t)) return "Research required — preparing…";
+  return "Preparing your answer…";
+}
 
 type Progress = {
   runId: string;
@@ -473,31 +485,34 @@ export default function AskPage() {
     }
     // Always read frozen context at execution time (never a stale render snapshot).
     const ctx = getImmutableWorkspaceContext(null);
-    setSubmitting(true);
-    setProgress({
-      runId: "pending",
-      status: "PENDING",
-      request: text,
-      answerMode: null,
-      plainEnglishPlan: "Thinking…",
-      clarificationQuestion: null,
-      clarificationOptions: null,
-      pendingPrompt: null,
-      pendingCostEstimateCents: null,
-      referenceAssetId: null,
-      pendingCostNote: null,
-      remainingAllowanceNote: null,
-      currentStep: null,
-      stepsCompleted: 0,
-      stepsTotal: 0,
-      elapsedMs: 0,
-      totalCostCents: 0,
-      costNote: null,
-      outputSoFar: null,
-      finalOutput: null,
-      userFacingError: null,
-      steps: [],
-      nextActions: ["Sit tight — progress updates as each step finishes"],
+    // Immediate local acknowledgement — do not wait for network/poll.
+    flushSync(() => {
+      setSubmitting(true);
+      setProgress({
+        runId: "pending",
+        status: "PENDING",
+        request: text,
+        answerMode: null,
+        plainEnglishPlan: localAckLabel(text),
+        clarificationQuestion: null,
+        clarificationOptions: null,
+        pendingPrompt: null,
+        pendingCostEstimateCents: null,
+        referenceAssetId: null,
+        pendingCostNote: null,
+        remainingAllowanceNote: null,
+        currentStep: null,
+        stepsCompleted: 0,
+        stepsTotal: 0,
+        elapsedMs: 0,
+        totalCostCents: 0,
+        costNote: null,
+        outputSoFar: null,
+        finalOutput: null,
+        userFacingError: null,
+        steps: [],
+        nextActions: ["Sit tight — progress updates as each step finishes"],
+      });
     });
     stopPolling();
     try {
