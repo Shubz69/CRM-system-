@@ -36,8 +36,26 @@ function looksLikeSummarise(request: string): boolean {
   return /\b(summaris[e]|summarize|summary|tl;?dr|shorten|condense)\b/i.test(request);
 }
 
+function looksLikeOperatorBrief(request: string): boolean {
+  const t = request.toLowerCase();
+  // Require day/operator framing — not bare "what should I do with this?"
+  if (/\bwhat should i do with (this|that|it)\b/.test(t)) return false;
+  return (
+    /\bwhat should i (do today|focus on|prioritis[eo]|work on today)\b/.test(t) ||
+    /\bwhat should i do\b/.test(t) && /\b(today|daily|now|next|priority|operator)\b/.test(t) ||
+    /\b(daily|today'?s?)\s+(brief|priorit|agenda|plan|operator)\b/.test(t) ||
+    /\bwho needs (a )?reply\b/.test(t) ||
+    /\bwhich (lead|deal|opportunit|kpi)\b/.test(t) ||
+    /\bwhat (should|can) i (automate|ignore|create|deprioritis)\b/.test(t) ||
+    /\bwhat changed recently\b/.test(t) ||
+    /\boperator brief\b/.test(t) ||
+    /\bchief of staff\b/.test(t)
+  );
+}
+
 function looksLikeCrmInternal(request: string): boolean {
   const t = request.toLowerCase();
+  if (looksLikeOperatorBrief(t)) return true;
   if (
     /\b(summaris[e]|summarize|summary)\b/.test(t) &&
     /\b(pipeline|deals?|crm|inbox|leads?|follow[- ]?ups?|goals? at risk|awaiting approval)\b/.test(t)
@@ -48,8 +66,12 @@ function looksLikeCrmInternal(request: string): boolean {
     /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
     /\b(goals? at risk|goals? are at risk|content awaiting approval|content is awaiting approval)\b/.test(t) ||
-    /\b(my|our)\s+(contacts|deals|leads|crm)\b/.test(t) ||
-    /\binternal (crm|data)\b/.test(t)
+    /\b(my|our)\s+(contacts|deals|leads|crm|companies|content|inbox)\b/.test(t) ||
+    /\bhow many\s+(contacts|deals|leads|companies|conversations)\b/.test(t) ||
+    /\binternal (crm|data|workspace|knowledge)\b/.test(t) ||
+    /\b(this|my|our)\s+workspace\b/.test(t) ||
+    /\bbusiness (profile|context)\b/.test(t) ||
+    /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t)
   );
 }
 
@@ -61,13 +83,16 @@ function crmDeskIntentFromRequest(
   | "goals_at_risk"
   | "conversations_needing_human"
   | "content_awaiting_approval"
+  | "operator_brief"
   | "desk_overview" {
   const t = request.toLowerCase();
-  if (/\bgoals?\s+(are\s+)?at risk\b/.test(t)) return "goals_at_risk";
-  if (/\bcontent\s+(is\s+)?awaiting approval|awaiting approval\b/.test(t)) return "content_awaiting_approval";
+  if (looksLikeOperatorBrief(t)) return "operator_brief";
+  if (/\bgoals?\s+(are\s+)?at risk\b/.test(t) || /\bwhich kpi\b/.test(t)) return "goals_at_risk";
+  if (/\bcontent\s+(is\s+)?awaiting approval|awaiting approval\b/.test(t) || /\bwhat content\b/.test(t))
+    return "content_awaiting_approval";
   if (/\bneeding (a )?human|handoff|needs? human\b/.test(t)) return "conversations_needing_human";
-  if (/\bfollow[- ]?ups?|needing reply|needs? reply\b/.test(t)) return "follow_ups";
-  if (/\bpipeline|stalled deals?|open deals?\b/.test(t)) return "pipeline_summary";
+  if (/\bfollow[- ]?ups?|needing reply|needs? reply|who needs (a )?reply\b/.test(t)) return "follow_ups";
+  if (/\bpipeline|stalled deals?|open deals?|which deal\b/.test(t)) return "pipeline_summary";
   return "desk_overview";
 }
 
@@ -78,9 +103,11 @@ function planCrmDesk(request: string): PlanResult {
     plan: {
       steps: [{ agentName: "crm_desk", input: { intent, request: request.slice(0, 2000) } }],
       plainEnglishPlan:
-        intent === "pipeline_summary"
-          ? "I'll read your open deals in this workspace and flag anything stalled — no web research."
-          : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
+        intent === "operator_brief"
+          ? "I'll read this workspace's CRM, inbox, goals, content, and opportunities and give you a prioritised operator brief — no web research."
+          : intent === "pipeline_summary"
+            ? "I'll read your open deals in this workspace and flag anything stalled — no web research."
+            : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
     },
   };
 }
@@ -94,8 +121,16 @@ function looksLikeSocialListening(request: string): boolean {
 function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
   if (looksLikeImaging(request)) return false;
-  return /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
-    request,
+  if (looksLikeCrmInternal(request) && !/\b(research|look up|investigate|compare|ico|gdpr|authority)\b/i.test(request)) {
+    return false;
+  }
+  return (
+    /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
+      request,
+    ) ||
+    /\bwhat does the (ico|fca|asa|ofcom|hmrc|gov\.uk)\b/i.test(request) ||
+    /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
+    /\bcompare\b.+\band\b/i.test(request)
   );
 }
 
@@ -108,6 +143,7 @@ function looksLikeImaging(request: string): boolean {
 function isTooVague(request: string): boolean {
   const trimmed = request.trim();
   if (trimmed.length < 8) return true;
+  if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) return false;
   if (
     AMBIGUOUS_MARKERS.some((re) => re.test(trimmed)) &&
     !looksLikeEcho(trimmed) &&
@@ -234,10 +270,29 @@ export function classifyResearchIntent(topic: string): ResearchIntentKind {
   return "business_factual";
 }
 
-function planResearchPipeline(topic: string): PlanResult {
+function planResearchPipeline(
+  topic: string,
+  options?: { answerMode?: string | null },
+): PlanResult {
   const clean = sanitizeResearchTopic(topic) || stripClarificationMetadata(topic).slice(0, 2000);
   const intent = classifyResearchIntent(clean);
   const socialish = intent === "social_content" || intent === "content_gen";
+  const quick = options?.answerMode === "QUICK";
+  // Quick must not silently run the full research→analyst→critic stack.
+  if (quick) {
+    return {
+      kind: "plan",
+      plan: {
+        steps: [
+          {
+            agentName: "research",
+            input: { topic: clean, nicheHint: intent, maxSources: 6, depth: "FAST" },
+          },
+        ],
+        plainEnglishPlan: `I'll do a fast sourced scan of “${clean.slice(0, 80)}” and give you a short answer. For a full research brief, use Deep / Research mode.`,
+      },
+    };
+  }
   return {
     kind: "plan",
     plan: {
@@ -374,7 +429,9 @@ export function planAgentRunDeterministic(
         trimmed,
         /^(please\s+)?(research|look up|find out|investigate|compare|market scan)( (on|for|about))?\s*/i,
       ) || trimmed;
-    return planResearchPipeline(topic);
+    return planResearchPipeline(topic, {
+      answerMode: org?.answerMode ?? detectAnswerModeFromLanguage(trimmed),
+    });
   }
 
   if (looksLikeEcho(trimmed) && looksLikeSummarise(trimmed)) {
@@ -403,6 +460,18 @@ export function planAgentRunDeterministic(
 
   if (trimmed.split(/\s+/).length >= 40) {
     return planSummarise(trimmed);
+  }
+
+  // When the user already picked Quick / Action / Executive, avoid vague stalls —
+  // but only auto-desk for true workspace questions; otherwise FAST research or clarify.
+  const mode = org?.answerMode ?? detectAnswerModeFromLanguage(trimmed);
+  if (mode === "QUICK" || mode === "ACTION" || mode === "EXECUTIVE") {
+    if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) {
+      return planCrmDesk(trimmed);
+    }
+    if (mode === "QUICK" && trimmed.split(/\s+/).length >= 8 && !isTooVague(trimmed)) {
+      return planResearchPipeline(trimmed, { answerMode: mode });
+    }
   }
 
   if (isTooVague(trimmed)) {

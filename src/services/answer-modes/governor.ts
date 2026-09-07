@@ -26,7 +26,8 @@ export function computeHintsForAnswerMode(
         complexity: "LOW",
         consequence: consequence ?? "LOW",
         contextBudget: 1_500,
-        toolBudget: 3,
+        // One step: CRM desk or a single FAST research pass — never full stack.
+        toolBudget: 1,
         preferCache: true,
       };
     case "EXECUTIVE":

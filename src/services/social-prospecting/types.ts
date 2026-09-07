@@ -85,9 +85,11 @@ export type SocialProspectCandidateInput = {
 };
 
 const ROLE_HINTS =
-  /\b(founders?|co-founders?|ceos?|ctos?|owners?|directors?|managers?|head of|vps?|creators?|dentists?|influencers?)\b/i;
+  /\b(founders?|co-founders?|ceos?|ctos?|coos?|owners?|directors?|managers?|head of(?:\s+\w+)?|operations leaders?|vps?|creators?|dentists?|influencers?)\b/i;
 const LOCATION_HINTS =
   /\b(uk|united kingdom|london|manchester|birmingham|scotland|wales|england|europe|eu|usa|us|new york|california)\b/i;
+const SIZE_HINTS =
+  /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}\s*(?:employees?|people|staff)|(?:under|fewer than|less than|<)\s*\d{1,4}\s*(?:employees?|people)|(?:small|mid[- ]?size|sme)(?:\s+firms?)?)\b/i;
 
 /**
  * Convert natural language prospecting intent into a structured ICP.
@@ -116,7 +118,13 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   if (preferredNetworks.length === 0) preferredNetworks.push("any");
 
   const roleRaw = text.match(ROLE_HINTS)?.[1];
-  const role = roleRaw ? roleRaw.replace(/s$/, "").toLowerCase() : undefined;
+  let role = roleRaw ? roleRaw.replace(/s$/, "").toLowerCase() : undefined;
+  if (role) {
+    if (/^coo$|chief operating|operations leader|head of operations/.test(role)) role = "coo";
+    else if (/^ceo$|chief executive/.test(role)) role = "ceo";
+    else if (/co-?founder/.test(role)) role = "founder";
+    else if (/head of/.test(role)) role = roleRaw!.toLowerCase();
+  }
   // Prefer country/region context: "UK" wins over bare city when both present
   let location = text.match(/\b(united kingdom|uk)\b/i)?.[1]?.toLowerCase();
   if (!location) {
@@ -125,6 +133,8 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   // Normalize uk variants
   if (location === "united kingdom") location = "uk";
 
+  const sizeRaw = text.match(SIZE_HINTS)?.[1];
+  const companySize = sizeRaw ? sizeRaw.replace(/\s+/g, " ").trim().toLowerCase() : undefined;
   const exclusions: string[] = [];
   if (/\bnot\s+([a-z0-9 -]{2,40})/i.test(text)) {
     const m = text.match(/\bnot\s+([a-z0-9 -]{2,40})/i);
@@ -164,6 +174,7 @@ export function parseProspectIntent(raw: string): StructuredIcp {
     industry,
     role: role || undefined,
     location: location || undefined,
+    companySize: companySize || undefined,
     signals,
     keywords,
     exclusions,

@@ -448,6 +448,44 @@ describe("Final social prospecting quality closure", () => {
     expect(weak.connectionNote).not.toMatch(/Analytical Engines/);
   });
 
+  it("rejects CEO as adjacent-wrong for COO intent", () => {
+    const icp = parseProspectIntent(
+      "UK professional-services COOs at firms with 10-50 employees",
+    );
+    expect(icp.role).toBe("coo");
+    expect(icp.companySize).toMatch(/10/);
+    const decision = validateProspectCandidate(
+      {
+        personName: "David Bailey",
+        role: "CEO",
+        location: "London, UK",
+        linkedinUrl: "https://www.linkedin.com/in/davidbailey47",
+        sourceEvidence: [
+          {
+            source: "web",
+            url: "https://example.com/david-bailey-ceo",
+            excerpt: "David Bailey is CEO of a professional services firm in London UK",
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/davidbailey47",
+            confidence: 0.9,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(false);
+    expect(decision.rejectionCode).toBe("ROLE_MISMATCH");
+    expect(decision.roleConstraint).toBe("FAILED");
+  });
+
   it("customer integrations UI does not expose vendor internals", () => {
     const text = readFileSync(
       join(process.cwd(), "src/app/(app)/integrations/integrations-client.tsx"),

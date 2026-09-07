@@ -94,6 +94,39 @@ function buildExecutive(raw: Record<string, unknown>): ExecutiveAnswer {
 }
 
 function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
+  // CRM / operator desk — never wrap with research CTAs.
+  if (raw.source === "internal_crm") {
+    const items: ActionItem[] = [];
+    const sections = asRecord(raw.operatorSections);
+    const pushFrom = (list: unknown, capability?: ActionItem["agentDeskCapability"]) => {
+      for (const line of stringList(list).slice(0, 3)) {
+        items.push({
+          what: line,
+          why: "From current workspace CRM / operator evidence",
+          order: items.length + 1,
+          agentDeskCapability: capability,
+        });
+      }
+    };
+    if (sections) {
+      pushFrom(sections.topPriorities);
+      pushFrom(sections.needsAttention, "draft_content");
+      pushFrom(sections.sales);
+      pushFrom(sections.content, "draft_content");
+      pushFrom(sections.automation);
+    }
+    if (!items.length) {
+      const summary =
+        str(raw.shortAnswer) || str(raw.summary) || "Review CRM desk and decide next steps";
+      items.push({
+        what: summary,
+        why: "Primary takeaway from workspace CRM data",
+        order: 1,
+      });
+    }
+    return items.slice(0, 8);
+  }
+
   const items: ActionItem[] = [];
   const hooks = stringList(raw.contentHooks);
   hooks.forEach((hook, i) => {

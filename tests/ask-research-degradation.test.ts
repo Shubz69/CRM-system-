@@ -231,5 +231,6 @@ describe("Ask cost UI copy", () => {
     expect(costNote(0, "RUNNING")).not.toMatch(/No AI charge/i);
     expect(costNote(0, "FAILED")).toMatch(/monthly AI spend/i);
     expect(costNote(12, "COMPLETED")).toMatch(/12¢/);
+    expect(costNote(0, "COMPLETED")).toMatch(/Under 1¢/i);
   });
 });

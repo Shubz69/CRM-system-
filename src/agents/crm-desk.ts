@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { Agent } from "@/agents/types";
 import { prisma } from "@/lib/db";
+import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
+import { retrieveRelevantKnowledge } from "@/services/knowledge";
 
 export const crmDeskInputSchema = z.object({
   intent: z.enum([
@@ -9,6 +11,7 @@ export const crmDeskInputSchema = z.object({
     "goals_at_risk",
     "conversations_needing_human",
     "content_awaiting_approval",
+    "operator_brief",
     "desk_overview",
   ]),
   request: z.string().max(4000).optional(),
@@ -61,6 +64,18 @@ export const crmDeskOutputSchema = z.object({
       status: z.string(),
     }),
   ),
+  operatorSections: z
+    .object({
+      topPriorities: z.array(z.string()),
+      needsAttention: z.array(z.string()),
+      sales: z.array(z.string()),
+      content: z.array(z.string()),
+      automation: z.array(z.string()),
+      ignore: z.array(z.string()),
+      risks: z.array(z.string()),
+      insufficientEvidence: z.array(z.string()),
+    })
+    .optional(),
 });
 
 export type CrmDeskInput = z.infer<typeof crmDeskInputSchema>;
@@ -71,6 +86,207 @@ const STALE_MS = 14 * 24 * 60 * 60 * 1000;
 function money(cents: number | null | undefined): string {
   if (cents == null) return "no amount";
   return `£${(cents / 100).toFixed(0)}`;
+}
+
+function buildOperatorBrief(input: {
+  stalledDeals: Array<{ name: string; stageLabel: string | null; amountCents: number | null }>;
+  dealRows: Array<{ name: string; stageLabel: string | null; amountCents: number | null; stalled: boolean }>;
+  needingReply: Array<{ contactName: string | null; unreadCount: number }>;
+  needingHuman: Array<{ contactName: string | null }>;
+  goalsAtRisk: Array<{ name: string }>;
+  activeGoals: Array<{ name: string; status: string }>;
+  contentRows: Array<{ title: string | null }>;
+  hotLeads: Array<{ name: string; score: number | null }>;
+  opportunities: Array<{ title: string; why?: string }>;
+  cosActions: Array<{ title: string; detail: string; why?: string }>;
+  knowledgeHits: string[];
+  contactCount: number;
+  counts: CrmDeskOutput["counts"];
+}): { summary: string; shortAnswer: string; sections: NonNullable<CrmDeskOutput["operatorSections"]> } {
+  const topPriorities: string[] = [];
+  const needsAttention: string[] = [];
+  const sales: string[] = [];
+  const content: string[] = [];
+  const automation: string[] = [];
+  const ignore: string[] = [];
+  const risks: string[] = [];
+  const insufficientEvidence: string[] = [];
+
+  for (const c of input.needingReply.slice(0, 5)) {
+    const who = c.contactName || "Unknown contact";
+    needsAttention.push(
+      `${who} — unread/handoff (unread ${c.unreadCount}). Reply or assign in Inbox.`,
+    );
+    topPriorities.push(
+      `Reply to ${who}: conversation needs a human response. Evidence: unread/handoff flags in Inbox.`,
+    );
+  }
+  for (const c of input.needingHuman.slice(0, 3)) {
+    if (c.contactName && needsAttention.some((n) => n.includes(c.contactName!))) continue;
+    needsAttention.push(
+      `${c.contactName || "Conversation"} marked needs-human — take over in Inbox.`,
+    );
+  }
+
+  for (const d of input.stalledDeals.slice(0, 5)) {
+    sales.push(
+      `Stuck deal: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) — quiet ≥14 days. Next: reopen with a concrete follow-up.`,
+    );
+    topPriorities.push(
+      `Unblock ${d.name}: stalled ≥14 days at ${d.stageLabel || "unknown stage"}. Evidence: deal last activity.`,
+    );
+  }
+  if (!input.stalledDeals.length && input.dealRows.length) {
+    const top = input.dealRows[0]!;
+    sales.push(
+      `Focus deal: ${top.name} (${top.stageLabel || "no stage"}, ${money(top.amountCents)}). No deals are stalled ≥14 days.`,
+    );
+  }
+  if (!input.dealRows.length) {
+    insufficientEvidence.push("No open deals in this workspace — cannot prioritise a stuck deal.");
+  }
+
+  for (const l of input.hotLeads.slice(0, 3)) {
+    sales.push(
+      `Lead to focus: ${l.name}${l.score != null ? ` (score ${l.score})` : ""}. Next: qualify or book from CRM.`,
+    );
+    if (topPriorities.length < 5) {
+      topPriorities.push(
+        `Focus lead ${l.name}${l.score != null ? ` (score ${l.score})` : ""} — highest scored open lead evidence.`,
+      );
+    }
+  }
+  if (!input.hotLeads.length && !input.dealRows.length) {
+    insufficientEvidence.push("No scored open leads found — lead focus needs CRM lead data.");
+  }
+
+  for (const o of input.opportunities.slice(0, 3)) {
+    sales.push(
+      `Opportunity: ${o.title}${o.why ? ` — ${o.why}` : ""}. Review on Opportunities.`,
+    );
+    if (topPriorities.length < 5) {
+      topPriorities.push(`Review opportunity “${o.title}” — detector/priority evidence attached.`);
+    }
+  }
+
+  for (const g of input.goalsAtRisk) {
+    risks.push(`Goal at risk: ${g.name}. Check KPI targets on Goals.`);
+    topPriorities.push(`Stabilise goal “${g.name}” — status AT_RISK.`);
+  }
+  if (!input.goalsAtRisk.length && input.activeGoals.length) {
+    ignore.push(
+      `Active goals look stable (${input.activeGoals
+        .slice(0, 3)
+        .map((g) => g.name)
+        .join("; ")}) — do not reopen them today unless a KPI alert appears.`,
+    );
+  }
+  if (!input.activeGoals.length && !input.goalsAtRisk.length) {
+    insufficientEvidence.push("No active/at-risk goals — KPI attention not evidenced.");
+  }
+
+  for (const p of input.contentRows.slice(0, 3)) {
+    content.push(
+      `Approve or revise “${p.title || "Untitled draft"}” — currently in review.`,
+    );
+    if (topPriorities.length < 5) {
+      topPriorities.push(
+        `Clear content approval: “${p.title || "Untitled"}” waiting in Content OS.`,
+      );
+    }
+  }
+  if (!input.contentRows.length) {
+    if (input.hotLeads[0] || input.stalledDeals[0]) {
+      content.push(
+        "No drafts awaiting approval. Useful next piece: a short follow-up post aimed at the lead/deal you prioritise today — only if you want outbound content.",
+      );
+    } else {
+      insufficientEvidence.push("No content in review — no evidence-backed content recommendation.");
+    }
+  }
+
+  if (input.needingReply.length >= 2) {
+    automation.push(
+      "Automate: notify + draft reply when unread/handoff rises (keep human review — never auto-send).",
+    );
+  } else if (input.stalledDeals.length >= 2) {
+    automation.push(
+      "Automate: alert when an open deal is quiet ≥14 days so stall does not go unnoticed.",
+    );
+  } else {
+    insufficientEvidence.push(
+      "Not enough repeated friction yet to recommend a high-confidence automation — avoid inventing one.",
+    );
+  }
+
+  for (const a of input.cosActions.slice(0, 3)) {
+    if (topPriorities.length >= 5) break;
+    topPriorities.push(`${a.title}: ${a.detail}${a.why ? ` (${a.why})` : ""}`);
+  }
+
+  if (input.contactCount > 50 && input.counts.conversationsNeedingReply === 0 && !input.stalledDeals.length) {
+    ignore.push(
+      `Do not spend today on bulk contact cleanup (${input.contactCount} contacts, inbox quiet, pipeline not stalled).`,
+    );
+  }
+
+  if (input.knowledgeHits.length) {
+    needsAttention.push(
+      `Workspace knowledge matched this ask: ${input.knowledgeHits.slice(0, 2).join(" | ")}`,
+    );
+  }
+
+  if (!topPriorities.length) {
+    topPriorities.push(
+      "No urgent CRM fires detected. Use the day to add one real pipeline deal or clear Business Profile gaps — evidence: empty stall/handoff queues.",
+    );
+    insufficientEvidence.push("Sparse operational signal — priorities are provisional.");
+  }
+
+  const sections = {
+    topPriorities,
+    needsAttention,
+    sales,
+    content,
+    automation,
+    ignore,
+    risks,
+    insufficientEvidence,
+  };
+
+  const blocks: string[] = ["TOP PRIORITIES"];
+  topPriorities.slice(0, 5).forEach((p, i) => {
+    blocks.push(`${i + 1}. ${p}`);
+  });
+  if (needsAttention.length) {
+    blocks.push("", "NEEDS ATTENTION", ...needsAttention.slice(0, 5).map((x) => `• ${x}`));
+  }
+  if (sales.length) {
+    blocks.push("", "SALES", ...sales.slice(0, 5).map((x) => `• ${x}`));
+  }
+  if (content.length) {
+    blocks.push("", "CONTENT", ...content.slice(0, 3).map((x) => `• ${x}`));
+  }
+  if (automation.length) {
+    blocks.push("", "AUTOMATION", ...automation.slice(0, 2).map((x) => `• ${x}`));
+  }
+  if (ignore.length) {
+    blocks.push("", "IGNORE / DEPRIORITISE", ...ignore.slice(0, 3).map((x) => `• ${x}`));
+  }
+  if (risks.length) {
+    blocks.push("", "RISKS / BLOCKERS", ...risks.slice(0, 3).map((x) => `• ${x}`));
+  }
+  if (insufficientEvidence.length) {
+    blocks.push(
+      "",
+      "INSUFFICIENT EVIDENCE",
+      ...insufficientEvidence.slice(0, 4).map((x) => `• ${x}`),
+    );
+  }
+
+  const summary = blocks.join("\n");
+  const shortAnswer = topPriorities[0] || summary.slice(0, 280);
+  return { summary, shortAnswer, sections };
 }
 
 /**
@@ -96,6 +312,8 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         return "Listing conversations that need a human";
       case "content_awaiting_approval":
         return "Listing content waiting for approval";
+      case "operator_brief":
+        return "Building your prioritised operator brief from workspace data";
       default:
         return "Reading your CRM desk from workspace data";
     }
@@ -108,49 +326,66 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const orgId = ctx.organisationId;
     const now = Date.now();
 
-    const [deals, conversations, goals, contentPieces] = await Promise.all([
-      prisma.deal.findMany({
-        where: { organisationId: orgId, deletedAt: null, status: "OPEN" },
-        orderBy: { updatedAt: "asc" },
-        take: 40,
-        select: {
-          id: true,
-          name: true,
-          status: true,
-          stageLabel: true,
-          amountCents: true,
-          updatedAt: true,
-        },
-      }),
-      prisma.conversation.findMany({
-        where: { organisationId: orgId, deletedAt: null },
-        orderBy: { updatedAt: "desc" },
-        take: 60,
-        select: {
-          id: true,
-          needsHumanReview: true,
-          handlingMode: true,
-          unreadCount: true,
-          lastMessageAt: true,
-          contact: { select: { fullName: true, instagramUsername: true } },
-        },
-      }),
-      prisma.goal.findMany({
-        where: { organisationId: orgId, status: { in: ["AT_RISK", "ACTIVE"] } },
-        orderBy: { updatedAt: "desc" },
-        take: 20,
-        select: { id: true, name: true, status: true },
-      }),
-      prisma.contentPiece.findMany({
-        where: {
-          organisationId: orgId,
-          status: "IN_REVIEW",
-        },
-        orderBy: { updatedAt: "desc" },
-        take: 20,
-        select: { id: true, title: true, status: true },
-      }),
-    ]);
+    const [deals, conversations, goals, contentPieces, hotLeads, contactCount] =
+      await Promise.all([
+        prisma.deal.findMany({
+          where: { organisationId: orgId, deletedAt: null, status: "OPEN" },
+          orderBy: { updatedAt: "asc" },
+          take: 40,
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            stageLabel: true,
+            amountCents: true,
+            updatedAt: true,
+          },
+        }),
+        prisma.conversation.findMany({
+          where: { organisationId: orgId, deletedAt: null },
+          orderBy: { updatedAt: "desc" },
+          take: 60,
+          select: {
+            id: true,
+            needsHumanReview: true,
+            handlingMode: true,
+            unreadCount: true,
+            lastMessageAt: true,
+            contact: { select: { fullName: true, instagramUsername: true } },
+          },
+        }),
+        prisma.goal.findMany({
+          where: { organisationId: orgId, status: { in: ["AT_RISK", "ACTIVE"] } },
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+          select: { id: true, name: true, status: true },
+        }),
+        prisma.contentPiece.findMany({
+          where: {
+            organisationId: orgId,
+            status: "IN_REVIEW",
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 20,
+          select: { id: true, title: true, status: true },
+        }),
+        prisma.lead.findMany({
+          where: {
+            organisationId: orgId,
+            deletedAt: null,
+          },
+          orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
+          take: 8,
+          select: {
+            id: true,
+            score: true,
+            contact: { select: { fullName: true } },
+          },
+        }).catch(() => []),
+        prisma.contact.count({
+          where: { organisationId: orgId, deletedAt: null },
+        }),
+      ]);
 
     const pendingApprovals = await prisma.approvalRequest
       .findMany({
@@ -207,6 +442,80 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       contentAwaitingApproval: contentRows.length,
     };
 
+    const convRows = needingReply.slice(0, 12).map((c) => ({
+      id: c.id,
+      contactName: c.contact?.fullName || c.contact?.instagramUsername || null,
+      needsHumanReview: Boolean(c.needsHumanReview),
+      unreadCount: c.unreadCount ?? 0,
+      lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
+    }));
+
+    if (parsed.intent === "operator_brief") {
+      const [cos, knowledge] = await Promise.all([
+        buildChiefOfStaffFacts(orgId).catch(() => null),
+        parsed.request
+          ? retrieveRelevantKnowledge({
+              organisationId: orgId,
+              query: parsed.request,
+              limit: 4,
+            }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      const opportunities = (cos?.sections.OPPORTUNITIES || []).slice(0, 5).map((o) => ({
+        title: o.title,
+        why: o.why || o.detail,
+      }));
+      const cosActions = [
+        ...(cos?.sections.RECOMMENDED_ACTIONS || []),
+        ...(cos?.sections.WAITING_FOR_YOU || []),
+      ].map((a) => ({
+        title: a.title,
+        detail: a.detail,
+        why: a.why,
+      }));
+
+      const brief = buildOperatorBrief({
+        stalledDeals,
+        dealRows,
+        needingReply: convRows,
+        needingHuman: needingHuman.map((c) => ({
+          contactName: c.contact?.fullName || c.contact?.instagramUsername || null,
+        })),
+        goalsAtRisk,
+        activeGoals: goals.filter((g) => g.status === "ACTIVE"),
+        contentRows,
+        hotLeads: hotLeads.map((l) => ({
+          name: l.contact?.fullName || "Lead",
+          score: l.score,
+        })),
+        opportunities,
+        cosActions,
+        knowledgeHits: (knowledge?.chunks || [])
+          .slice(0, 3)
+          .map((c) => c.replace(/\s+/g, " ").trim().slice(0, 160))
+          .filter(Boolean),
+        contactCount,
+        counts,
+      });
+
+      return {
+        output: {
+          shortAnswer: brief.shortAnswer,
+          summary: brief.summary,
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts,
+          deals: dealRows.slice(0, 12),
+          conversations: convRows,
+          goals: goals.map((g) => ({ id: g.id, name: g.name, status: g.status })),
+          content: contentRows.slice(0, 12),
+          operatorSections: brief.sections,
+        },
+        costCents: 0,
+      };
+    }
+
     const lines: string[] = [];
     if (
       parsed.intent === "pipeline_summary" ||
@@ -247,6 +556,16 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       lines.push(
         `Conversations needing a human: ${counts.conversationsNeedingHuman}. Needing reply (unread or handoff): ${counts.conversationsNeedingReply}.`,
       );
+      if (convRows.length) {
+        lines.push(
+          "Who needs a reply: " +
+            convRows
+              .slice(0, 5)
+              .map((c) => c.contactName || "Unknown")
+              .join("; ") +
+            ".",
+        );
+      }
     }
 
     if (parsed.intent === "goals_at_risk" || parsed.intent === "desk_overview") {
@@ -278,20 +597,10 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         source: "internal_crm" as const,
         organisationId: orgId,
         counts,
-        deals: dealRows,
-        conversations: needingReply.slice(0, 15).map((c) => ({
-          id: c.id,
-          contactName: c.contact.fullName || c.contact.instagramUsername,
-          needsHumanReview: c.needsHumanReview,
-          unreadCount: c.unreadCount ?? 0,
-          lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
-        })),
-        goals: goalsAtRisk.map((g) => ({
-          id: g.id,
-          name: g.name,
-          status: g.status,
-        })),
-        content: contentRows.slice(0, 15),
+        deals: dealRows.slice(0, 12),
+        conversations: convRows,
+        goals: goals.map((g) => ({ id: g.id, name: g.name, status: g.status })),
+        content: contentRows.slice(0, 12),
       },
       costCents: 0,
     };

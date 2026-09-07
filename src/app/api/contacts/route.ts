@@ -40,7 +40,7 @@ export async function GET(req: Request) {
         company: { select: { id: true, name: true } },
         _count: { select: { conversations: true, bookings: true } },
       },
-      orderBy: { lastContactAt: "desc" },
+      orderBy: [{ lastContactAt: "desc" }, { createdAt: "desc" }],
       take: 100,
     });
 
@@ -127,6 +127,7 @@ export async function POST(req: Request) {
         email,
         phone,
         leadSource: body.leadSource?.trim() || "manual",
+        lastContactAt: new Date(),
         metadata: {
           provenance: "manual",
           jobTitle: body.jobTitle?.trim() || null,

@@ -180,6 +180,10 @@ export function costNote(
     if (status === "FAILED" || status === "PARTIAL") {
       return "Usage for this run may still appear in monthly AI spend.";
     }
+    // Completed CRM/internal desk runs often truly cost 0¢ (no model spend).
+    if (status === "COMPLETED") {
+      return "Under 1¢ recorded for this run (internal workspace answer or free-tier tooling).";
+    }
     return "No recorded AI usage for this run yet.";
   }
   if (totalCostCents < 100) {

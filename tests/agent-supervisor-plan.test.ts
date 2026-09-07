@@ -38,4 +38,34 @@ describe("supervisor planning", () => {
     if (result.kind !== "plan") return;
     expect(result.plan.steps[0]?.agentName).toBe("summarise");
   });
+
+  it("QUICK mode skips vague clarification and uses CRM desk", () => {
+    const result = planAgentRunDeterministic("What should I do today?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+    expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("operator_brief");
+  });
+
+  it("QUICK research uses a single FAST research step", () => {
+    const result = planAgentRunDeterministic("Research UK SME AI adoption barriers", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps).toHaveLength(1);
+    expect(result.plan.steps[0]?.agentName).toBe("research");
+    expect((result.plan.steps[0]?.input as { depth?: string }).depth).toBe("FAST");
+  });
+
+  it("routes who needs a reply to CRM follow_ups", () => {
+    const result = planAgentRunDeterministic("Who needs a reply in my CRM?");
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+  });
 });

@@ -28,6 +28,8 @@ export type RejectionCode =
   | "INDUSTRY_MISMATCH"
   | "NON_PROFILE_URL";
 
+export type ConstraintStatus = "MATCHED" | "NOT_VERIFIED" | "FAILED";
+
 export type ValidationDecision = {
   accepted: boolean;
   entityClass: EntityClass;
@@ -37,6 +39,10 @@ export type ValidationDecision = {
   matchedRole?: string;
   roleConfidence: number;
   roleEvidence?: string;
+  roleMatchKind?: "exact" | "adjacent" | "none";
+  roleConstraint?: ConstraintStatus;
+  locationConstraint?: ConstraintStatus;
+  sizeConstraint?: ConstraintStatus;
   requestedLocation?: string;
   candidateLocation?: string;
   locationConfidence: number;
@@ -83,7 +89,15 @@ const ROLE_FAMILIES: Record<string, RegExp[]> = {
     /\bfounder\s*[&/]\s*ceo\b/i,
   ],
   owner: [/\bowners?\b/i, /\bproprietor\b/i, /\bprincipal\b/i, /\bpractice\s+owner\b/i],
-  ceo: [/\bceo\b/i, /\bchief\s+executive\b/i, /\bmanaging\s+director\b/i],
+  // Strict: CEO must not silently accept COO / ops titles
+  ceo: [/\bceo\b/i, /\bchief\s+executive(?:\s+officer)?\b/i],
+  // Strict: COO ≠ CEO / MD / founder
+  coo: [
+    /\bcoo\b/i,
+    /\bchief\s+operating(?:\s+officer)?\b/i,
+    /\bhead\s+of\s+operations\b/i,
+    /\boperations\s+(director|leader|lead)\b/i,
+  ],
   director: [/\bdirectors?\b/i, /\bmanaging\s+director\b/i, /\bnon[- ]executive\b/i],
   creator: [
     /\bcreators?\b/i,
@@ -93,6 +107,12 @@ const ROLE_FAMILIES: Record<string, RegExp[]> = {
   ],
   dentist: [/\bdentists?\b/i, /\bdental\s+(surgeon|practitioner|principal)\b/i],
   recruiter: [/\brecruiters?\b/i, /\brecruitment\s+(consultant|specialist|expert)\b/i],
+};
+
+/** Adjacent titles that must never silently satisfy a stricter requested role. */
+const ROLE_EXCLUSIONS: Record<string, RegExp> = {
+  coo: /\b(ceo|chief\s+executive|founder|co[- ]?founder|managing\s+director)\b/i,
+  ceo: /\b(coo|chief\s+operating|head\s+of\s+operations)\b/i,
 };
 
 /** Roles that must NOT silently satisfy "founder/owner/ceo" intent. */
@@ -270,21 +290,47 @@ export function matchRoleIntent(
   requestedRole: string | undefined,
   evidenceText: string,
   candidateRole?: string,
-): { matchedRole?: string; roleConfidence: number; roleEvidence?: string; ok: boolean } {
+): {
+  matchedRole?: string;
+  roleConfidence: number;
+  roleEvidence?: string;
+  ok: boolean;
+  roleMatchKind: "exact" | "adjacent" | "none";
+  roleConstraint: ConstraintStatus;
+} {
   if (!requestedRole) {
-    return { roleConfidence: 0.5, ok: true, matchedRole: candidateRole };
+    return {
+      roleConfidence: 0.5,
+      ok: true,
+      matchedRole: candidateRole,
+      roleMatchKind: "none",
+      roleConstraint: "NOT_VERIFIED",
+    };
   }
   const familyKey = Object.keys(ROLE_FAMILIES).find((k) =>
-    new RegExp(k, "i").test(requestedRole),
+    new RegExp(`\\b${escapeRe(k)}\\b`, "i").test(requestedRole),
   );
-  const patterns = familyKey ? ROLE_FAMILIES[familyKey]! : [new RegExp(`\\b${escapeRe(requestedRole)}\\b`, "i")];
+  const patterns = familyKey
+    ? ROLE_FAMILIES[familyKey]!
+    : [new RegExp(`\\b${escapeRe(requestedRole)}\\b`, "i")];
   const hay = `${candidateRole || ""}\n${evidenceText}`;
+
+  const exclusion = familyKey ? ROLE_EXCLUSIONS[familyKey] : undefined;
+  if (exclusion && exclusion.test(hay) && !patterns.some((p) => p.test(hay))) {
+    return {
+      ok: false,
+      roleConfidence: 0.1,
+      matchedRole: hay.match(exclusion)?.[0],
+      roleEvidence: "adjacent_or_conflicting_title",
+      roleMatchKind: "adjacent",
+      roleConstraint: "FAILED",
+    };
+  }
 
   for (const p of patterns) {
     const m = hay.match(p);
     if (m) {
-      // Founder intent must not accept plain recruiter/consultant
-      if (familyKey === "founder" && NON_EQUIVALENT_TO_FOUNDER.test(hay) && !patterns.some((x) => x.test(hay))) {
+      if (familyKey === "founder" && NON_EQUIVALENT_TO_FOUNDER.test(hay) && !/\bfounder\b/i.test(hay)) {
         continue;
       }
       if (familyKey === "founder" && NON_EQUIVALENT_TO_FOUNDER.test(m[0]) && !/\bfounder\b/i.test(hay)) {
@@ -293,6 +339,8 @@ export function matchRoleIntent(
           roleConfidence: 0.15,
           matchedRole: m[0],
           roleEvidence: m[0],
+          roleMatchKind: "adjacent",
+          roleConstraint: "FAILED",
         };
       }
       return {
@@ -300,20 +348,79 @@ export function matchRoleIntent(
         matchedRole: m[0],
         roleConfidence: 0.85,
         roleEvidence: m[0],
+        roleMatchKind: "exact",
+        roleConstraint: "MATCHED",
       };
     }
   }
 
-  // Explicit mismatch: recruiter for founder search
   if (familyKey === "founder" && NON_EQUIVALENT_TO_FOUNDER.test(hay) && !/\bfounder\b/i.test(hay)) {
-    return { ok: false, roleConfidence: 0.1, matchedRole: "recruiter", roleEvidence: "role_mismatch" };
+    return {
+      ok: false,
+      roleConfidence: 0.1,
+      matchedRole: "recruiter",
+      roleEvidence: "role_mismatch",
+      roleMatchKind: "adjacent",
+      roleConstraint: "FAILED",
+    };
   }
 
-  return { ok: false, roleConfidence: 0.2, matchedRole: candidateRole };
+  if (familyKey === "coo" && /\b(ceo|chief\s+executive|founder|managing\s+director)\b/i.test(hay)) {
+    return {
+      ok: false,
+      roleConfidence: 0.15,
+      matchedRole: candidateRole,
+      roleEvidence: "adjacent_title_not_coo",
+      roleMatchKind: "adjacent",
+      roleConstraint: "FAILED",
+    };
+  }
+
+  return {
+    ok: false,
+    roleConfidence: 0.2,
+    matchedRole: candidateRole,
+    roleMatchKind: "none",
+    roleConstraint: "FAILED",
+  };
 }
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Company size must be evidenced — unknown size is NOT_VERIFIED, never a silent pass. */
+export function matchCompanySizeIntent(
+  requestedSize: string | undefined,
+  evidenceText: string,
+): { status: ConstraintStatus; evidence?: string } {
+  if (!requestedSize) return { status: "NOT_VERIFIED" };
+  const hay = evidenceText.toLowerCase();
+  const range = requestedSize.match(/(\d{1,4})\s*[-–—to]+\s*(\d{1,4})/);
+  if (range) {
+    const lo = Number(range[1]);
+    const hi = Number(range[2]);
+    const mentioned = [...hay.matchAll(/\b(\d{1,4})\s*(?:[-–—]\s*(\d{1,4})\s*)?(?:employees?|people|staff|ftes?)\b/gi)];
+    for (const m of mentioned) {
+      const a = Number(m[1]);
+      const b = m[2] ? Number(m[2]) : a;
+      const mid = (a + b) / 2;
+      if (mid >= lo && mid <= hi) {
+        return { status: "MATCHED", evidence: m[0] };
+      }
+      if (b < lo || a > hi) {
+        return { status: "FAILED", evidence: m[0] };
+      }
+    }
+    return { status: "NOT_VERIFIED" };
+  }
+  if (/\bsme\b|small[- ]?mid|small team|small firm/i.test(requestedSize)) {
+    if (/\b(\d{1,2}|1\d{2})\s*(?:employees?|people|staff)\b/i.test(hay) || /\bsme\b|small[- ]?(team|firm|business)/i.test(hay)) {
+      return { status: "MATCHED", evidence: "small/SME signal" };
+    }
+    return { status: "NOT_VERIFIED" };
+  }
+  return { status: "NOT_VERIFIED" };
 }
 
 export function matchLocationIntent(
@@ -522,10 +629,17 @@ export function validateProspectCandidate(
       matchedRole: role.matchedRole,
       roleConfidence: role.roleConfidence,
       roleEvidence: role.roleEvidence,
+      roleMatchKind: role.roleMatchKind,
+      roleConstraint: role.roleConstraint,
     };
   }
 
   const loc = matchLocationIntent(icp, evidenceText, candidate.location);
+  const locationConstraint: ConstraintStatus = !icp.location
+    ? "NOT_VERIFIED"
+    : loc.ok
+      ? "MATCHED"
+      : "FAILED";
   if (icp.location && !loc.ok) {
     return {
       ...reject("LOCATION_MISMATCH", "Requested geography not supported", candidate, icp, entityClass),
@@ -533,6 +647,40 @@ export function validateProspectCandidate(
       candidateLocation: loc.candidateLocation,
       locationConfidence: loc.locationConfidence,
       locationEvidence: loc.locationEvidence,
+      locationConstraint,
+      roleConstraint: role.roleConstraint,
+      roleMatchKind: role.roleMatchKind,
+    };
+  }
+
+  const size = matchCompanySizeIntent(icp.companySize, evidenceText);
+  if (icp.companySize && size.status === "FAILED") {
+    return {
+      ...reject(
+        "INSUFFICIENT_EVIDENCE",
+        "Company size constraint failed or contradicted",
+        candidate,
+        icp,
+        entityClass,
+      ),
+      sizeConstraint: size.status,
+      roleConstraint: role.roleConstraint,
+      locationConstraint,
+    };
+  }
+  // Size requested but unverified → do not present as an exact match
+  if (icp.companySize && size.status === "NOT_VERIFIED") {
+    return {
+      ...reject(
+        "INSUFFICIENT_EVIDENCE",
+        "Company size requested but not verified in evidence",
+        candidate,
+        icp,
+        entityClass,
+      ),
+      sizeConstraint: "NOT_VERIFIED",
+      roleConstraint: role.roleConstraint,
+      locationConstraint,
     };
   }
 
@@ -609,6 +757,10 @@ export function validateProspectCandidate(
     matchedRole: role.matchedRole || candidate.role,
     roleConfidence: role.roleConfidence,
     roleEvidence: role.roleEvidence,
+    roleMatchKind: role.roleMatchKind,
+    roleConstraint: role.roleConstraint,
+    sizeConstraint: size.status,
+    locationConstraint,
     requestedLocation: icp.location,
     candidateLocation: loc.candidateLocation || candidate.location,
     locationConfidence: loc.locationConfidence,

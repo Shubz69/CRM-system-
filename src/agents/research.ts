@@ -30,6 +30,8 @@ export const researchInputSchema = z.object({
   /** Optional niche / industry hint — never assumed to be Instagram marketing. */
   nicheHint: z.string().max(200).optional(),
   maxSources: z.number().int().min(5).max(40).optional(),
+  /** FAST = Quick Answer budgeted scan (fewer queries / sources). */
+  depth: z.enum(["FAST", "STANDARD", "DEEP"]).optional(),
   platforms: z
     .array(z.enum(["youtube", "reddit", "web", "instagram", "linkedin", "tiktok"]))
     .optional(),
@@ -258,7 +260,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     if (topic.length < 3) {
       throw new Error("I need a clearer research topic before I can search sources.");
     }
-    const maxSources = parsed.maxSources ?? 28;
+    const fast = parsed.depth === "FAST";
+    const maxSources = parsed.maxSources ?? (fast ? 6 : 28);
     await assertEntitlement(ctx.organisationId, "research");
     await assertWithinSpendCap(ctx.organisationId, researchAgent.estimateCostCents(parsed));
 
@@ -277,7 +280,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const queries = [
       ...authorityFirstQueries(topic),
       ...new Set([topic, ...expanded]),
-    ].slice(0, 10);
+    ].slice(0, fast ? 3 : 10);
 
     const job = await prisma.researchJob.create({
       data: {
@@ -391,10 +394,21 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     }
 
     // Phase 2 — general / secondary queries (no domain filter).
-    for (const query of queries) {
-      await runSearch(query, {
-        limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
-      });
+    // FAST / Quick: run remaining queries in parallel to cut wall-clock.
+    if (fast) {
+      await Promise.all(
+        queries.map((query) =>
+          runSearch(query, {
+            limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+          }),
+        ),
+      );
+    } else {
+      for (const query of queries) {
+        await runSearch(query, {
+          limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+        });
+      }
     }
 
     const deduped = dedupeSourceResults(collected);
