@@ -753,10 +753,10 @@ export function validateProspectCandidate(
     requestedStatuses.push(industry.ok ? "MATCHED" : "FAILED");
   }
 
-  // Soft / unconstrained queries cannot be EXACT — require ≥1 mandatory constraint,
-  // all MATCHED, and non-empty evidence for each requested constraint.
-  const hasMandatory =
-    Boolean(icp.role) || Boolean(icp.location) || Boolean(icp.companySize) || Boolean(icp.industry);
+  // Soft / unconstrained / location-only queries cannot be EXACT.
+  const hasRoleOrSizeOrIndustry =
+    Boolean(icp.role) || Boolean(icp.companySize) || Boolean(icp.industry);
+  const hasMandatory = hasRoleOrSizeOrIndustry || Boolean(icp.location);
   const evidenceGaps: string[] = [];
   if (icp.role && !(role.roleEvidence && String(role.roleEvidence).trim())) {
     evidenceGaps.push("role");
@@ -764,15 +764,17 @@ export function validateProspectCandidate(
   if (icp.location && !(loc.locationEvidence && String(loc.locationEvidence).trim())) {
     evidenceGaps.push("location");
   }
-  if (icp.companySize && size.status === "MATCHED" && !(size.evidence && String(size.evidence).trim())) {
-    // size matchers may not always attach evidence text — treat MATCHED without excerpt as possible
-    if (!size.evidence) evidenceGaps.push("companySize");
+  if (icp.companySize && size.status === "MATCHED" && !size.evidence) {
+    evidenceGaps.push("companySize");
   }
   const allMatched =
-    hasMandatory && requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");
-  // Soft queries (no mandatory constraints) and any unverified/failed gap → POSSIBLE.
+    requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");
+  // EXACT requires role/size/industry (not location alone) + every requested constraint MATCHED + evidence.
   const matchTier: ProspectMatchTier =
-    !hasMandatory || possibleOnly || !allMatched || evidenceGaps.length > 0
+    !hasRoleOrSizeOrIndustry ||
+    possibleOnly ||
+    !allMatched ||
+    evidenceGaps.length > 0
       ? "POSSIBLE"
       : "EXACT";
 

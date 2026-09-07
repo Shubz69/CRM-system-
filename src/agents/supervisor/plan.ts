@@ -40,16 +40,28 @@ export function looksLikeOperatorBrief(request: string): boolean {
   const t = request.toLowerCase();
   // Require day/operator framing — not bare "what should I do with this?"
   if (/\bwhat should i do with (this|that|it)\b/.test(t)) return false;
+  // Concrete CRM facts stay on specialized CRM intents, not the full operator brief.
+  if (
+    /\b(which|what) deals?\b.*\b(stuck|stalled)\b|\bdeals?\b.*\b(stuck|stalled)\b/.test(t) &&
+    !/\b(today|prioritis|operator|automate|ignore)\b/.test(t)
+  ) {
+    return false;
+  }
+  if (/\bgoals?\b.*\bat risk\b|\bat risk\b.*\bgoals?\b/.test(t) && !/\b(today|prioritis|operator)\b/.test(t)) {
+    return false;
+  }
   return (
     /\bwhat should i (do today|focus on|prioritis[eo]|work on today)\b/.test(t) ||
-    /\bwhat should i do\b/.test(t) && /\b(today|daily|now|next|priority|operator)\b/.test(t) ||
+    (/\bwhat should i do\b/.test(t) && /\b(today|daily|now|next|priority|operator)\b/.test(t)) ||
     /\b(daily|today'?s?)\s+(brief|priorit|agenda|plan|operator)\b/.test(t) ||
     /\bwho needs (a )?reply\b/.test(t) ||
-    /\bwhich (lead|deal|opportunit|kpi)\b/.test(t) ||
-    /\bwhat (should|can) i (automate|ignore|create|deprioritis)\b/.test(t) ||
+    /\bwhich (lead|opportunit|kpi)\b/.test(t) ||
+    /\bwhat (should|can) i (automate|ignore|create|deprioritis|improve)\b/.test(t) ||
     /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
     /\b(deprioritis|what can wait|what should i ignore|safely deprioritis)\b/.test(t) ||
     /\bwhat changed recently\b/.test(t) ||
+    /\bwhere are we losing momentum\b/.test(t) ||
+    /\bbiggest (sales )?risk\b/.test(t) ||
     /\boperator brief\b/.test(t) ||
     /\bchief of staff\b/.test(t) ||
     /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t)
@@ -70,11 +82,12 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
     /\bhow many\s+conversations\b/.test(t) ||
-    /\b(goals?\s+(are\s+)?at risk|kpi|goals? need|which goal)\b/.test(t) ||
+    /\b(goals?\s+(are\s+)?at risk|goals? marked at risk|kpi|goals? need|which goal|any goals?\b.*\bat risk)\b/.test(t) ||
     /\b(content\s+(is\s+)?awaiting approval|awaiting approval|content in review)\b/.test(t) ||
     /\b(my|our)\s+(\w+\s+){0,3}(contacts?|deals?|leads?|crm|compan(?:y|ies)|content|inbox)\b/.test(t) ||
     /\bhow many\s+(contacts?|deals?|leads?|compan(?:y|ies)|conversations)\b/.test(t) ||
     /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\bare any goals\b/.test(t) ||
     /\binternal (crm|data|workspace|knowledge)\b/.test(t) ||
     /\b(this|my|our)\s+workspace\b/.test(t) ||
     /\bbusiness (profile|context)\b/.test(t) ||
@@ -121,11 +134,11 @@ function crmDeskIntentFromRequest(
   ) {
     return "conversations_needing_human";
   }
-  if (/\bfollow[- ]?ups?|needing reply|needs? reply|who needs (a )?reply\b/.test(t)) {
+  if (/\bfollow[- ]?ups?|needing reply|needs? reply|who needs (a )?reply|customers? need(s)? follow\b/.test(t)) {
     return "follow_ups";
   }
   if (
-    /\bpipeline|stalled|open deals?|which deal|deals? look|pipeline health\b/.test(t)
+    /\bpipeline|stalled|stuck|open deals?|which deal|deals? look|pipeline health\b/.test(t)
   ) {
     return "pipeline_summary";
   }

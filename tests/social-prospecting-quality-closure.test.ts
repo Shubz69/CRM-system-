@@ -514,6 +514,34 @@ describe("Final social prospecting quality closure", () => {
     expect(decision.matchTier).toBe("POSSIBLE");
   });
 
+  it("location-only matches stay POSSIBLE even when geo is verified", () => {
+    const icp = parseProspectIntent("find me some prospects roughly in London");
+    const decision = validateProspectCandidate(
+      {
+        personName: "Carolyn Dawson",
+        role: "CEO",
+        location: "London",
+        linkedinUrl: "https://www.linkedin.com/in/carolyn-dawson",
+        sourceEvidence: [
+          evidence("Carolyn Dawson CEO in London UK", "https://www.linkedin.com/in/carolyn-dawson"),
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/carolyn-dawson",
+            confidence: 0.9,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.matchTier).toBe("POSSIBLE");
+  });
+
   it("EXACT requires verified mandatory constraints with evidence", () => {
     const icp = parseProspectIntent("UK founders in London");
     const decision = validateProspectCandidate(

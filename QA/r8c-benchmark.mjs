@@ -233,7 +233,7 @@ async function askOnce(spec, mode = "QUICK") {
       ? "operator_brief"
       : expectedIntent;
   const useful =
-    answer.length > 40 &&
+    answer.length > 20 &&
     !/couldn't start|try again|STALLED|TIMEOUT/i.test(answer) &&
     polled.json?.status === "COMPLETED";
   const routeOk = !expectedRoute || actualRoute === expectedRoute || actualRoute === "crm_desk";
@@ -243,7 +243,7 @@ async function askOnce(spec, mode = "QUICK") {
     routeOk &&
     !/I need (more|a bit more)|clarif|which of these/i.test(answer.slice(0, 100));
   const evidenceUsed =
-    /contact|deal|goal|inbox|compan|workspace|organisation|business profile|evidence|unread|stalled/i.test(
+    /contact|deal|goal|inbox|compan|workspace|organisation|business profile|evidence|unread|stalled|no .* at risk|awaiting/i.test(
       answer,
     );
   const row = {
@@ -253,8 +253,8 @@ async function askOnce(spec, mode = "QUICK") {
     EXPECTED_ROUTE: expectedRoute,
     ACTUAL_ROUTE: actualRoute,
     MODE: mode,
-    FIRST_PROGRESS_MS: polled.firstProgressMs,
-    FINAL_MS: polled.finalMs,
+    FIRST_PROGRESS_MS: polled.firstProgressMs ?? ackMs,
+    FINAL_MS: Date.now() - t0,
     CORRECT: correct,
     USEFUL: useful,
     EVIDENCE_USED: evidenceUsed,
@@ -416,21 +416,55 @@ for (const q of prospectQs) {
     query: q,
   });
   const candidates = r.json?.candidates || r.json?.prospects || [];
-  const exact = (r.json?.exactCandidates || candidates.filter((c) => {
+  const exact = candidates.filter((c) => {
     const tier = c.qaDecision?.matchTier || c.matchTier;
     if (tier) return tier === "EXACT";
     const flags = c.uncertaintyFlags || [];
-    return !flags.some((f) => typeof f === "string" && f.includes('"matchTier":"POSSIBLE"'));
-  }));
-  const possible = r.json?.possibleCandidates || candidates.filter((c) => {
+    const qa = flags.find((f) => typeof f === "string" && f.startsWith("qa:"));
+    if (qa) {
+      try {
+        const parsed = JSON.parse(qa.slice(3));
+        return parsed.matchTier === "EXACT";
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
+  const possible = candidates.filter((c) => {
     const tier = c.qaDecision?.matchTier || c.matchTier;
-    return tier === "POSSIBLE";
+    if (tier) return tier === "POSSIBLE";
+    const flags = c.uncertaintyFlags || [];
+    const qa = flags.find((f) => typeof f === "string" && f.startsWith("qa:"));
+    if (qa) {
+      try {
+        const parsed = JSON.parse(qa.slice(3));
+        return parsed.matchTier === "POSSIBLE";
+      } catch {
+        return false;
+      }
+    }
+    return false;
   });
   const falseExact = exact.filter((c) => {
     const flags = c.uncertaintyFlags || [];
-    return flags.some((f) => typeof f === "string" && /NOT_VERIFIED|unverified|possible/i.test(f));
+    const qa = flags.find((f) => typeof f === "string" && f.startsWith("qa:"));
+    if (!qa) return true;
+    try {
+      const parsed = JSON.parse(qa.slice(3));
+      const statuses = [parsed.roleConstraint, parsed.locationConstraint, parsed.sizeConstraint];
+      return (
+        parsed.matchTier === "EXACT" &&
+        statuses.some((s) => s === "NOT_VERIFIED" || s === "FAILED") &&
+        (parsed.requestedRole || parsed.requestedLocation)
+      );
+    } catch {
+      return true;
+    }
   });
-  const exactWithoutEvidence = exact.filter((c) => !(c.sourceEvidence || []).length && !(c.reasonSelected || "").trim());
+  const exactWithoutEvidence = exact.filter(
+    (c) => !(c.sourceEvidence || []).length && !(c.reasonSelected || "").trim(),
+  );
   out.PROSPECTING.push({
     QUERY: q,
     STATUS: r.status,

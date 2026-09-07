@@ -334,51 +334,73 @@ export async function createAndEnqueueAgentRun(input: {
   });
 
   if (crmQuickSync) {
-    try {
-      const { executeAgentRun } = await import("@/agents/supervisor/execute");
-      await executeAgentRun({
-        organisationId: input.organisationId,
-        runId: run.id,
-      });
-      await prisma.agentRun.updateMany({
-        where: { id: run.id, organisationId: input.organisationId },
-        data: { bullJobId: `sync-quick-crm:${run.id}` },
-      });
-      logger.info("Agent run completed via Quick CRM sync fast-path", {
-        runId: run.id,
-        organisationId: input.organisationId,
-        answerMode,
-      });
-      return {
-        runId: run.id,
-        jobId: `sync-quick-crm:${run.id}`,
-        plainEnglishPlan: initialPlan,
-        syncFastPath: true,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Sync execute failed";
-      logger.warn("Quick CRM sync fast-path failed; falling back to queue", {
-        runId: run.id,
-        message,
-      });
-      // Fall through to queue if sync path fails mid-flight and run is still pending.
-      const stillOpen = await prisma.agentRun.findFirst({
-        where: {
-          id: run.id,
+    // Return immediately with a visible plan; finish execution after the response
+    // so first-progress is not blocked by tool work (Deep/Research stay queued).
+    const { after } = await import("next/server");
+    after(async () => {
+      try {
+        const { executeAgentRun } = await import("@/agents/supervisor/execute");
+        await executeAgentRun({
           organisationId: input.organisationId,
-          status: { in: ["PENDING", "PLANNING", "RUNNING"] },
-        },
-        select: { id: true },
-      });
-      if (!stillOpen) {
-        return {
           runId: run.id,
-          jobId: `sync-quick-crm:${run.id}`,
-          plainEnglishPlan: initialPlan,
-          syncFastPath: true,
-        };
+        });
+        await prisma.agentRun.updateMany({
+          where: { id: run.id, organisationId: input.organisationId },
+          data: { bullJobId: `sync-quick-crm:${run.id}` },
+        });
+        logger.info("Agent run completed via Quick CRM sync fast-path", {
+          runId: run.id,
+          organisationId: input.organisationId,
+          answerMode,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Sync execute failed";
+        logger.warn("Quick CRM sync fast-path failed; falling back to queue", {
+          runId: run.id,
+          message,
+        });
+        try {
+          const stillOpen = await prisma.agentRun.findFirst({
+            where: {
+              id: run.id,
+              organisationId: input.organisationId,
+              status: { in: ["PENDING", "PLANNING", "RUNNING"] },
+            },
+            select: { id: true },
+          });
+          if (stillOpen) {
+            const { jobId } = await enqueueAgentRunJob({
+              name: "agent-framework-run",
+              organisationId: input.organisationId,
+              payload: { agentRunId: run.id },
+            });
+            await prisma.agentRun.updateMany({
+              where: { id: run.id, organisationId: input.organisationId },
+              data: { bullJobId: jobId },
+            });
+          }
+        } catch (fallbackError) {
+          const fallbackMessage =
+            fallbackError instanceof Error ? fallbackError.message : "Enqueue failed";
+          await prisma.agentRun.updateMany({
+            where: { id: run.id, organisationId: input.organisationId },
+            data: {
+              status: "FAILED",
+              finishedAt: new Date(),
+              error: fallbackMessage,
+              userFacingError:
+                "I couldn't finish that request. Please try again in a moment.",
+            },
+          });
+        }
       }
-    }
+    });
+    return {
+      runId: run.id,
+      jobId: `sync-quick-crm:${run.id}`,
+      plainEnglishPlan: initialPlan,
+      syncFastPath: true,
+    };
   }
 
   try {
