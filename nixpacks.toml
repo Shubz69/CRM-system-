@@ -1,0 +1,5 @@
+# Force worker start when Railway Railpack/Nixpacks auto-detects Next.js.
+# Production also uses railway.toml startCommand = npm run worker:prod.
+
+[start]
+cmd = "npm run worker:prod"
