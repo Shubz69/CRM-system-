@@ -100,21 +100,20 @@ async function finishRun(input: {
     input.request &&
     (input.status === "COMPLETED" || input.status === "PARTIAL")
   ) {
-    try {
-      await recordEpisodeFromAgentRun({
-        organisationId: input.organisationId,
-        agentRunId: input.runId,
-        request: input.request,
-        status: input.status,
-        finalOutput: input.finalOutput,
-      });
-    } catch (error) {
+    // Do not block customer-visible completion on episodic memory write.
+    void recordEpisodeFromAgentRun({
+      organisationId: input.organisationId,
+      agentRunId: input.runId,
+      request: input.request,
+      status: input.status,
+      finalOutput: input.finalOutput,
+    }).catch((error) => {
       logger.warn("Episodic memory write skipped", {
         runId: input.runId,
         organisationId: input.organisationId,
         message: error instanceof Error ? error.message : "unknown",
       });
-    }
+    });
   }
 
   return {

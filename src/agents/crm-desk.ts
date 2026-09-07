@@ -336,24 +336,46 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const orgId = ctx.organisationId;
     const now = Date.now();
     const intent = parsed.intent;
+    const req = (parsed.request || "").toLowerCase();
+    const contactFocused =
+      /\bhow many\s+contacts?\b/.test(req) ||
+      /\b(list|show|newest)\s+.*\bcontacts?\b/.test(req) ||
+      /\bmy\s+(\w+\s+){0,2}contacts?\b/.test(req);
+    const companyFocused =
+      /\bhow many\s+companies\b/.test(req) ||
+      /\b(list|name|show)\s+.*\bcompan(y|ies)\b/.test(req);
     const needDeals =
-      intent === "pipeline_summary" ||
-      intent === "desk_overview" ||
-      intent === "operator_brief";
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "pipeline_summary" ||
+        intent === "desk_overview" ||
+        intent === "operator_brief");
     const needConversations =
-      intent === "follow_ups" ||
-      intent === "conversations_needing_human" ||
-      intent === "desk_overview" ||
-      intent === "operator_brief";
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "follow_ups" ||
+        intent === "conversations_needing_human" ||
+        intent === "desk_overview" ||
+        intent === "operator_brief");
     const needGoals =
-      intent === "goals_at_risk" || intent === "desk_overview" || intent === "operator_brief";
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "goals_at_risk" || intent === "desk_overview" || intent === "operator_brief");
     const needContent =
-      intent === "content_awaiting_approval" ||
-      intent === "desk_overview" ||
-      intent === "operator_brief";
-    const needLeads = intent === "operator_brief" || intent === "desk_overview";
-    const needContacts = intent === "desk_overview" || intent === "operator_brief";
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "content_awaiting_approval" ||
+        intent === "desk_overview" ||
+        intent === "operator_brief");
+    const needLeads =
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "operator_brief" || intent === "desk_overview");
+    const needContacts = contactFocused || intent === "desk_overview" || intent === "operator_brief";
     const needApprovals = needContent;
+    const companyCountPromise = companyFocused
+      ? prisma.company.count({ where: { organisationId: orgId, deletedAt: null } }).catch(() => 0)
+      : Promise.resolve(null as number | null);
 
     const operatorBriefPromise =
       intent === "operator_brief"
@@ -401,7 +423,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const emptyLeads: LeadRow[] = [];
     const emptyApprovals: ApprovalRow[] = [];
 
-    const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals] =
+    const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals, companyCount] =
       await Promise.all([
         needDeals
           ? prisma.deal.findMany({
@@ -484,7 +506,58 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
               })
               .catch(() => emptyApprovals)
           : Promise.resolve(emptyApprovals),
+        companyCountPromise,
       ]);
+
+    if (contactFocused) {
+      const summary = `This workspace has ${contactCount} contact${contactCount === 1 ? "" : "s"} (organisation-scoped count).`;
+      return {
+        output: {
+          shortAnswer: summary,
+          summary,
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts: {
+            openDeals: 0,
+            stalledDeals: 0,
+            conversationsNeedingHuman: 0,
+            conversationsNeedingReply: 0,
+            goalsAtRisk: 0,
+            contentAwaitingApproval: 0,
+          },
+          deals: [],
+          conversations: [],
+          goals: [],
+          content: [],
+        },
+        costCents: 0,
+      };
+    }
+    if (companyFocused) {
+      const n = companyCount ?? 0;
+      const summary = `This workspace has ${n} compan${n === 1 ? "y" : "ies"} (organisation-scoped count).`;
+      return {
+        output: {
+          shortAnswer: summary,
+          summary,
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts: {
+            openDeals: 0,
+            stalledDeals: 0,
+            conversationsNeedingHuman: 0,
+            conversationsNeedingReply: 0,
+            goalsAtRisk: 0,
+            contentAwaitingApproval: 0,
+          },
+          deals: [],
+          conversations: [],
+          goals: [],
+          content: [],
+        },
+        costCents: 0,
+      };
+    }
 
     const dealRows = deals.map((d) => {
       const stalled = now - d.updatedAt.getTime() >= STALE_MS;
