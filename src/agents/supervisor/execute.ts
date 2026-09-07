@@ -213,9 +213,16 @@ export async function executeAgentRun(input: {
   });
 
   // Understanding / business-context stages (customer-facing only).
+  // QUICK/ACTION CRM desk answers do not need Context Resolver + full Business Profile
+  // (was ~9s of the wall clock on preview traces).
   let businessContextKnownFacts: string[] = [];
   const tBiz0 = Date.now();
   let askCtxCached: Awaited<ReturnType<typeof resolveAskBusinessContext>> | null = null;
+  const { looksLikeCrmInternal } = await import("@/agents/supervisor/plan");
+  const skipHeavyBizContext =
+    (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
+    looksLikeCrmInternal(run.request);
+  if (!skipHeavyBizContext) {
   try {
     askCtxCached = await resolveAskBusinessContext({
       organisationId: input.organisationId,
@@ -234,7 +241,9 @@ export async function executeAgentRun(input: {
       message: error instanceof Error ? error.message : "unknown",
     });
   }
+  }
   latencyTrace.contextLoadMs = Date.now() - tBiz0;
+  latencyTrace.contextSkipped = skipHeavyBizContext ? 1 : 0;
 
   let plan = asPlan(run.plan);
   const tPlan0 = Date.now();
@@ -335,11 +344,16 @@ export async function executeAgentRun(input: {
   }
   latencyTrace.planMs = Date.now() - tPlan0;
 
+  const provisionalSteps = plan.steps;
+  const crmDeskOnlyEarly =
+    provisionalSteps.length === 1 && provisionalSteps.every((s) => s.agentName === "crm_desk");
+
   // Map answer mode into Compute Governor (single pipeline) and apply budgets.
+  // Skip governor DB round-trip for pure CRM desk Quick/Action — budgets already fixed.
   let governedMaxSteps = maxSteps;
   let governedContextChars: number | null = null;
   const tGov0 = Date.now();
-  if (run.answerMode) {
+  if (run.answerMode && !crmDeskOnlyEarly) {
     try {
       const hints = computeHintsForAnswerMode(run.answerMode);
       const computePlan = await planCompute({
@@ -369,6 +383,8 @@ export async function executeAgentRun(input: {
         message: error instanceof Error ? error.message : "unknown",
       });
     }
+  } else if (run.answerMode === "QUICK" || run.answerMode === "ACTION") {
+    governedMaxSteps = Math.min(maxSteps, 1);
   }
   latencyTrace.governorMs = Date.now() - tGov0;
 

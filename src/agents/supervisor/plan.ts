@@ -53,7 +53,7 @@ function looksLikeOperatorBrief(request: string): boolean {
   );
 }
 
-function looksLikeCrmInternal(request: string): boolean {
+export function looksLikeCrmInternal(request: string): boolean {
   const t = request.toLowerCase();
   if (looksLikeOperatorBrief(t)) return true;
   if (
@@ -66,12 +66,15 @@ function looksLikeCrmInternal(request: string): boolean {
     /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
     /\b(goals? at risk|goals? are at risk|content awaiting approval|content is awaiting approval)\b/.test(t) ||
-    /\b(my|our)\s+(contacts|deals|leads|crm|companies|content|inbox)\b/.test(t) ||
+    /\b(my|our)\s+(\w+\s+){0,3}(contacts|deals|leads|crm|companies|content|inbox)\b/.test(t) ||
     /\bhow many\s+(contacts|deals|leads|companies|conversations)\b/.test(t) ||
+    /\b(list|name|show)\s+(my|our|one)?\s*(newest\s+)?(contacts?|companies|deals)\b/.test(t) ||
     /\binternal (crm|data|workspace|knowledge)\b/.test(t) ||
     /\b(this|my|our)\s+workspace\b/.test(t) ||
     /\bbusiness (profile|context)\b/.test(t) ||
-    /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t)
+    /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
+    /\bwho needs (a )?reply\b/.test(t) ||
+    /\b(automate|prioritis[e]|deprioritis[e]|ignore)\b/.test(t)
   );
 }
 

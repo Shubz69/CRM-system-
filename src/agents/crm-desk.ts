@@ -335,9 +335,28 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     });
     const orgId = ctx.organisationId;
     const now = Date.now();
+    const intent = parsed.intent;
+    const needDeals =
+      intent === "pipeline_summary" ||
+      intent === "desk_overview" ||
+      intent === "operator_brief";
+    const needConversations =
+      intent === "follow_ups" ||
+      intent === "conversations_needing_human" ||
+      intent === "desk_overview" ||
+      intent === "operator_brief";
+    const needGoals =
+      intent === "goals_at_risk" || intent === "desk_overview" || intent === "operator_brief";
+    const needContent =
+      intent === "content_awaiting_approval" ||
+      intent === "desk_overview" ||
+      intent === "operator_brief";
+    const needLeads = intent === "operator_brief" || intent === "desk_overview";
+    const needContacts = intent === "desk_overview" || intent === "operator_brief";
+    const needApprovals = needContent;
 
     const operatorBriefPromise =
-      parsed.intent === "operator_brief"
+      intent === "operator_brief"
         ? Promise.all([
             buildChiefOfStaffFacts(orgId).catch(() => null),
             parsed.request
@@ -350,73 +369,121 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
           ])
         : null;
 
+    type DealRow = {
+      id: string;
+      name: string;
+      status: string;
+      stageLabel: string | null;
+      amountCents: number | null;
+      updatedAt: Date;
+    };
+    type ConvRow = {
+      id: string;
+      needsHumanReview: boolean;
+      handlingMode: string;
+      unreadCount: number | null;
+      lastMessageAt: Date | null;
+      contact: { fullName: string | null; instagramUsername: string | null } | null;
+    };
+    type GoalRow = { id: string; name: string; status: string };
+    type ContentRow = { id: string; title: string | null; status: string };
+    type LeadRow = {
+      id: string;
+      score: number | null;
+      contact: { fullName: string | null } | null;
+    };
+    type ApprovalRow = { id: string; kind: string; title: string | null };
+
+    const emptyDeals: DealRow[] = [];
+    const emptyConv: ConvRow[] = [];
+    const emptyGoals: GoalRow[] = [];
+    const emptyContent: ContentRow[] = [];
+    const emptyLeads: LeadRow[] = [];
+    const emptyApprovals: ApprovalRow[] = [];
+
     const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals] =
       await Promise.all([
-        prisma.deal.findMany({
-          where: { organisationId: orgId, deletedAt: null, status: "OPEN" },
-          orderBy: { updatedAt: "asc" },
-          take: 40,
-          select: {
-            id: true,
-            name: true,
-            status: true,
-            stageLabel: true,
-            amountCents: true,
-            updatedAt: true,
-          },
-        }),
-        prisma.conversation.findMany({
-          where: { organisationId: orgId, deletedAt: null },
-          orderBy: { updatedAt: "desc" },
-          take: 60,
-          select: {
-            id: true,
-            needsHumanReview: true,
-            handlingMode: true,
-            unreadCount: true,
-            lastMessageAt: true,
-            contact: { select: { fullName: true, instagramUsername: true } },
-          },
-        }),
-        prisma.goal.findMany({
-          where: { organisationId: orgId, status: { in: ["AT_RISK", "ACTIVE"] } },
-          orderBy: { updatedAt: "desc" },
-          take: 20,
-          select: { id: true, name: true, status: true },
-        }),
-        prisma.contentPiece.findMany({
-          where: {
-            organisationId: orgId,
-            status: "IN_REVIEW",
-          },
-          orderBy: { updatedAt: "desc" },
-          take: 20,
-          select: { id: true, title: true, status: true },
-        }),
-        prisma.lead.findMany({
-          where: {
-            organisationId: orgId,
-            deletedAt: null,
-          },
-          orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
-          take: 8,
-          select: {
-            id: true,
-            score: true,
-            contact: { select: { fullName: true } },
-          },
-        }).catch(() => []),
-        prisma.contact.count({
-          where: { organisationId: orgId, deletedAt: null },
-        }),
-        prisma.approvalRequest
-          .findMany({
-            where: { organisationId: orgId, status: "PENDING" },
-            take: 20,
-            orderBy: { createdAt: "desc" },
-            select: { id: true, kind: true, title: true },
-          })
-          .catch(() => []),
+        needDeals
+          ? prisma.deal.findMany({
+              where: { organisationId: orgId, deletedAt: null, status: "OPEN" },
+              orderBy: { updatedAt: "asc" },
+              take: 40,
+              select: {
+                id: true,
+                name: true,
+                status: true,
+                stageLabel: true,
+                amountCents: true,
+                updatedAt: true,
+              },
+            })
+          : Promise.resolve(emptyDeals),
+        needConversations
+          ? prisma.conversation.findMany({
+              where: { organisationId: orgId, deletedAt: null },
+              orderBy: { updatedAt: "desc" },
+              take: intent === "operator_brief" ? 60 : 40,
+              select: {
+                id: true,
+                needsHumanReview: true,
+                handlingMode: true,
+                unreadCount: true,
+                lastMessageAt: true,
+                contact: { select: { fullName: true, instagramUsername: true } },
+              },
+            })
+          : Promise.resolve(emptyConv),
+        needGoals
+          ? prisma.goal.findMany({
+              where: { organisationId: orgId, status: { in: ["AT_RISK", "ACTIVE"] } },
+              orderBy: { updatedAt: "desc" },
+              take: 20,
+              select: { id: true, name: true, status: true },
+            })
+          : Promise.resolve(emptyGoals),
+        needContent
+          ? prisma.contentPiece.findMany({
+              where: {
+                organisationId: orgId,
+                status: "IN_REVIEW",
+              },
+              orderBy: { updatedAt: "desc" },
+              take: 20,
+              select: { id: true, title: true, status: true },
+            })
+          : Promise.resolve(emptyContent),
+        needLeads
+          ? prisma.lead
+              .findMany({
+                where: {
+                  organisationId: orgId,
+                  deletedAt: null,
+                },
+                orderBy: [{ score: "desc" }, { updatedAt: "desc" }],
+                take: 8,
+                select: {
+                  id: true,
+                  score: true,
+                  contact: { select: { fullName: true } },
+                },
+              })
+              .catch(() => emptyLeads)
+          : Promise.resolve(emptyLeads),
+        needContacts
+          ? prisma.contact.count({
+              where: { organisationId: orgId, deletedAt: null },
+            })
+          : Promise.resolve(0),
+        needApprovals
+          ? prisma.approvalRequest
+              .findMany({
+                where: { organisationId: orgId, status: "PENDING" },
+                take: 20,
+                orderBy: { createdAt: "desc" },
+                select: { id: true, kind: true, title: true },
+              })
+              .catch(() => emptyApprovals)
+          : Promise.resolve(emptyApprovals),
       ]);
 
     const dealRows = deals.map((d) => {
