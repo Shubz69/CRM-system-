@@ -19,6 +19,9 @@ import {
   toUserFacingAskError,
 } from "@/services/workspace-access";
 
+/** Sync Quick CRM path may run executeAgentRun in-request — allow headroom. */
+export const maxDuration = 60;
+
 const createSchema = z.object({
   request: z.string().min(1).max(20_000),
   referenceAssetId: z.string().min(1).optional(),
@@ -65,7 +68,7 @@ export async function POST(req: NextRequest) {
     });
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(raw);
-    const { runId, jobId } = await createAndEnqueueAgentRun({
+    const { runId, jobId, plainEnglishPlan, syncFastPath } = await createAndEnqueueAgentRun({
       organisationId: session.organisationId,
       userId: session.userId,
       request: body.request,
@@ -77,7 +80,9 @@ export async function POST(req: NextRequest) {
       runId,
       jobId,
       answerMode: body.answerMode ?? null,
-      message: "Started — you'll see progress as each step finishes.",
+      plainEnglishPlan,
+      syncFastPath,
+      message: plainEnglishPlan || "Started — you'll see progress as each step finishes.",
     });
   } catch (error) {
     return askErrorResponse(error, 503);

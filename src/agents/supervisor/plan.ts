@@ -36,7 +36,7 @@ function looksLikeSummarise(request: string): boolean {
   return /\b(summaris[e]|summarize|summary|tl;?dr|shorten|condense)\b/i.test(request);
 }
 
-function looksLikeOperatorBrief(request: string): boolean {
+export function looksLikeOperatorBrief(request: string): boolean {
   const t = request.toLowerCase();
   // Require day/operator framing — not bare "what should I do with this?"
   if (/\bwhat should i do with (this|that|it)\b/.test(t)) return false;
@@ -47,9 +47,12 @@ function looksLikeOperatorBrief(request: string): boolean {
     /\bwho needs (a )?reply\b/.test(t) ||
     /\bwhich (lead|deal|opportunit|kpi)\b/.test(t) ||
     /\bwhat (should|can) i (automate|ignore|create|deprioritis)\b/.test(t) ||
+    /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
+    /\b(deprioritis|what can wait|what should i ignore|safely deprioritis)\b/.test(t) ||
     /\bwhat changed recently\b/.test(t) ||
     /\boperator brief\b/.test(t) ||
-    /\bchief of staff\b/.test(t)
+    /\bchief of staff\b/.test(t) ||
+    /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t)
   );
 }
 
@@ -58,22 +61,29 @@ export function looksLikeCrmInternal(request: string): boolean {
   if (looksLikeOperatorBrief(t)) return true;
   if (
     /\b(summaris[e]|summarize|summary)\b/.test(t) &&
-    /\b(pipeline|deals?|crm|inbox|leads?|follow[- ]?ups?|goals? at risk|awaiting approval)\b/.test(t)
+    /\b(pipeline|deals?|crm|inbox|leads?|follow[- ]?ups?|goals? at risk|awaiting approval|content)\b/.test(t)
   ) {
     return true;
   }
   return (
-    /\b(my pipeline|our pipeline|pipeline summary|stalled deals?|open deals?)\b/.test(t) ||
+    /\b(my pipeline|our pipeline|pipeline summary|open deals?)\b/.test(t) ||
+    /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?)\b/.test(t) ||
-    /\b(goals? at risk|goals? are at risk|content awaiting approval|content is awaiting approval)\b/.test(t) ||
-    /\b(my|our)\s+(\w+\s+){0,3}(contacts|deals|leads|crm|companies|content|inbox)\b/.test(t) ||
-    /\bhow many\s+(contacts|deals|leads|companies|conversations)\b/.test(t) ||
-    /\b(list|name|show)\s+(my|our|one)?\s*(newest\s+)?(contacts?|companies|deals)\b/.test(t) ||
+    /\bhow many\s+conversations\b/.test(t) ||
+    /\b(goals?\s+(are\s+)?at risk|kpi|goals? need|which goal)\b/.test(t) ||
+    /\b(content\s+(is\s+)?awaiting approval|awaiting approval|content in review)\b/.test(t) ||
+    /\b(my|our)\s+(\w+\s+){0,3}(contacts?|deals?|leads?|crm|compan(?:y|ies)|content|inbox)\b/.test(t) ||
+    /\bhow many\s+(contacts?|deals?|leads?|compan(?:y|ies)|conversations)\b/.test(t) ||
+    /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
     /\binternal (crm|data|workspace|knowledge)\b/.test(t) ||
     /\b(this|my|our)\s+workspace\b/.test(t) ||
     /\bbusiness (profile|context)\b/.test(t) ||
+    /\bwhat (do|does) (we|our(?:\s+(?:business|company))?|the business|the company) sell\b/.test(t) ||
+    /\bwhat industry\b/.test(t) ||
+    /\bwho (is|are) (our|my) (customer|audience)\b/.test(t) ||
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
-    /\bwho needs (a )?reply\b/.test(t)
+    /\bwho needs (a )?reply\b/.test(t) ||
+    /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t)
   );
 }
 
@@ -86,15 +96,39 @@ function crmDeskIntentFromRequest(
   | "conversations_needing_human"
   | "content_awaiting_approval"
   | "operator_brief"
+  | "business_context"
   | "desk_overview" {
   const t = request.toLowerCase();
   if (looksLikeOperatorBrief(t)) return "operator_brief";
-  if (/\bgoals?\s+(are\s+)?at risk\b/.test(t) || /\bwhich kpi\b/.test(t)) return "goals_at_risk";
-  if (/\bcontent\s+(is\s+)?awaiting approval|awaiting approval\b/.test(t) || /\bwhat content\b/.test(t))
+  if (
+    /\bbusiness (profile|context)\b/.test(t) ||
+    /\bwhat (do|does) (we|our(?:\s+(?:business|company))?|the business|the company) sell\b/.test(t) ||
+    /\bwhat industry\b/.test(t) ||
+    /\bwho (is|are) (our|my) (customer|audience)\b/.test(t)
+  ) {
+    return "business_context";
+  }
+  if (/\bgoals?\b/.test(t) || /\bkpi\b/.test(t)) return "goals_at_risk";
+  if (
+    /\bcontent\b/.test(t) &&
+    /\b(awaiting|approval|review|create|should i)\b/.test(t)
+  ) {
     return "content_awaiting_approval";
-  if (/\bneeding (a )?human|handoff|needs? human\b/.test(t)) return "conversations_needing_human";
-  if (/\bfollow[- ]?ups?|needing reply|needs? reply|who needs (a )?reply\b/.test(t)) return "follow_ups";
-  if (/\bpipeline|stalled deals?|open deals?|which deal\b/.test(t)) return "pipeline_summary";
+  }
+  if (
+    /\bneeding (a )?human|handoff|needs? human\b/.test(t) ||
+    /\bhow many\s+conversations\b/.test(t)
+  ) {
+    return "conversations_needing_human";
+  }
+  if (/\bfollow[- ]?ups?|needing reply|needs? reply|who needs (a )?reply\b/.test(t)) {
+    return "follow_ups";
+  }
+  if (
+    /\bpipeline|stalled|open deals?|which deal|deals? look|pipeline health\b/.test(t)
+  ) {
+    return "pipeline_summary";
+  }
   return "desk_overview";
 }
 
@@ -109,7 +143,15 @@ function planCrmDesk(request: string): PlanResult {
           ? "I'll read this workspace's CRM, inbox, goals, content, and opportunities and give you a prioritised operator brief — no web research."
           : intent === "pipeline_summary"
             ? "I'll read your open deals in this workspace and flag anything stalled — no web research."
-            : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
+            : intent === "business_context"
+              ? "I'll read your Business Profile / business context for this workspace — no web research."
+              : intent === "goals_at_risk"
+                ? "I'll check goals and KPIs marked at risk in this workspace — no web research."
+                : intent === "follow_ups" || intent === "conversations_needing_human"
+                  ? "I'll check Inbox conversations that need a reply or human handoff — no web research."
+                  : intent === "content_awaiting_approval"
+                    ? "I'll list content waiting for approval in this workspace — no web research."
+                    : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
     },
   };
 }
@@ -146,27 +188,17 @@ function isTooVague(request: string): boolean {
   const trimmed = request.trim();
   if (trimmed.length < 8) return true;
   if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) return false;
-  if (
-    AMBIGUOUS_MARKERS.some((re) => re.test(trimmed)) &&
-    !looksLikeEcho(trimmed) &&
-    !looksLikeSummarise(trimmed) &&
-    !looksLikeResearch(trimmed) &&
-    !looksLikeSocialListening(trimmed) &&
-    !looksLikeImaging(trimmed)
-  ) {
+  if (looksLikeResearch(trimmed) || looksLikeEcho(trimmed) || looksLikeSummarise(trimmed)) {
+    return false;
+  }
+  if (looksLikeSocialListening(trimmed) || looksLikeImaging(trimmed)) return false;
+  // Ambiguous markers without a concrete object → clarify.
+  if (AMBIGUOUS_MARKERS.some((re) => re.test(trimmed))) {
     return true;
   }
-  if (
-    !looksLikeEcho(trimmed) &&
-    !looksLikeSummarise(trimmed) &&
-    !looksLikeResearch(trimmed) &&
-    !looksLikeSocialListening(trimmed) &&
-    !looksLikeImaging(trimmed)
-  ) {
-    if (trimmed.split(/\s+/).length >= 40) return false;
-    return true;
-  }
-  return false;
+  // Short non-CRM prompts without a clear verb stay vague; longer ones can research.
+  if (trimmed.split(/\s+/).length >= 12) return false;
+  return true;
 }
 
 function clarificationFor(request: string): Clarification {

@@ -261,7 +261,7 @@ export function qualityCheckProspect(
         roleConstraint: validation.roleConstraint,
         locationConstraint: validation.locationConstraint,
         sizeConstraint: validation.sizeConstraint,
-        matchTier: validation.matchTier || "EXACT",
+        matchTier: validation.matchTier || "POSSIBLE",
         requestedLocation: validation.requestedLocation,
         candidateLocation: validation.candidateLocation,
         locationConfidence: validation.locationConfidence,

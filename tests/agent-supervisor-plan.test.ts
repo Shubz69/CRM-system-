@@ -68,4 +68,65 @@ describe("supervisor planning", () => {
     if (result.kind !== "plan") return;
     expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
   });
+
+  it("routes company list and goals/KPI to CRM desk with correct intents", () => {
+    const company = planAgentRunDeterministic("List my companies", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(company.kind).toBe("plan");
+    if (company.kind === "plan") {
+      expect(company.plan.steps[0]?.agentName).toBe("crm_desk");
+    }
+
+    const goals = planAgentRunDeterministic("Which goals are at risk in my CRM?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(goals.kind).toBe("plan");
+    if (goals.kind === "plan") {
+      expect(goals.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((goals.plan.steps[0]?.input as { intent?: string }).intent).toBe("goals_at_risk");
+    }
+
+    const kpiOperator = planAgentRunDeterministic("Which KPI needs attention?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(kpiOperator.kind).toBe("plan");
+    if (kpiOperator.kind === "plan") {
+      expect((kpiOperator.plan.steps[0]?.input as { intent?: string }).intent).toBe(
+        "operator_brief",
+      );
+    }
+
+    const bp = planAgentRunDeterministic("What does our business sell?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(bp.kind).toBe("plan");
+    if (bp.kind === "plan") {
+      expect((bp.plan.steps[0]?.input as { intent?: string }).intent).toBe("business_context");
+    }
+
+    const stalled = planAgentRunDeterministic("Which deals look stalled?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(stalled.kind).toBe("plan");
+    if (stalled.kind === "plan") {
+      expect((stalled.plan.steps[0]?.input as { intent?: string }).intent).toBe("pipeline_summary");
+    }
+  });
+
+  it("routes automate/deprioritise phrasing to operator_brief", () => {
+    const auto = planAgentRunDeterministic("What should I automate from my CRM?", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(auto.kind).toBe("plan");
+    if (auto.kind === "plan") {
+      expect((auto.plan.steps[0]?.input as { intent?: string }).intent).toBe("operator_brief");
+    }
+  });
 });

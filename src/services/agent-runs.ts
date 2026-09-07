@@ -228,6 +228,10 @@ function remainingAllowanceNote(spentCents: number, capCents: number | null): st
 
 /**
  * Create an AgentRun and enqueue execution on agent-runs. Returns immediately.
+ *
+ * QUICK + internal CRM desk requests use an in-process sync fast-path (same
+ * executeAgentRun) to avoid BullMQ queue wait dominating first-progress/final latency.
+ * Deep / Research / imaging remain queued.
  */
 export async function createAndEnqueueAgentRun(input: {
   organisationId: string;
@@ -236,7 +240,7 @@ export async function createAndEnqueueAgentRun(input: {
   triggeredBy?: "user" | "system" | "schedule";
   referenceAssetId?: string | null;
   answerMode?: AgentAnswerMode | string | null;
-}): Promise<{ runId: string; jobId: string }> {
+}): Promise<{ runId: string; jobId: string; plainEnglishPlan: string; syncFastPath: boolean }> {
   ensureAgentsRegistered();
   const request = input.request.trim();
   if (!request) {
@@ -282,6 +286,21 @@ export async function createAndEnqueueAgentRun(input: {
   const answerMode =
     parseAnswerMode(input.answerMode) ?? detectAnswerModeFromLanguage(request);
 
+  const { looksLikeCrmInternal, looksLikeOperatorBrief } = await import(
+    "@/agents/supervisor/plan"
+  );
+  const crmQuickSync =
+    (answerMode === AgentAnswerMode.QUICK || answerMode === AgentAnswerMode.ACTION) &&
+    !input.referenceAssetId &&
+    (looksLikeCrmInternal(request) || looksLikeOperatorBrief(request)) &&
+    !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request);
+
+  const initialPlan = crmQuickSync
+    ? looksLikeOperatorBrief(request)
+      ? "Checking your CRM — building a prioritised operator brief…"
+      : "Checking your CRM…"
+    : "Thinking — preparing your answer…";
+
   const run = await prisma.agentRun.create({
     data: {
       organisationId: input.organisationId,
@@ -291,7 +310,7 @@ export async function createAndEnqueueAgentRun(input: {
       status: "PENDING",
       startedAt: new Date(),
       // Immediate customer-visible progress (queue acceptance) — not fake completion.
-      plainEnglishPlan: "Queued — preparing your answer…",
+      plainEnglishPlan: initialPlan,
       answerMode: answerMode ?? null,
       maxSteps: limits?.maxSteps ?? 8,
       maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
@@ -306,10 +325,61 @@ export async function createAndEnqueueAgentRun(input: {
         businessContextUsed: [] as string[],
       } as Prisma.InputJsonValue,
       partialResults: {
-        latencyTrace: { enqueuedAt: Date.now() },
+        latencyTrace: {
+          enqueuedAt: Date.now(),
+          syncFastPath: crmQuickSync ? 1 : 0,
+        },
       } as Prisma.InputJsonValue,
     },
   });
+
+  if (crmQuickSync) {
+    try {
+      const { executeAgentRun } = await import("@/agents/supervisor/execute");
+      await executeAgentRun({
+        organisationId: input.organisationId,
+        runId: run.id,
+      });
+      await prisma.agentRun.updateMany({
+        where: { id: run.id, organisationId: input.organisationId },
+        data: { bullJobId: `sync-quick-crm:${run.id}` },
+      });
+      logger.info("Agent run completed via Quick CRM sync fast-path", {
+        runId: run.id,
+        organisationId: input.organisationId,
+        answerMode,
+      });
+      return {
+        runId: run.id,
+        jobId: `sync-quick-crm:${run.id}`,
+        plainEnglishPlan: initialPlan,
+        syncFastPath: true,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Sync execute failed";
+      logger.warn("Quick CRM sync fast-path failed; falling back to queue", {
+        runId: run.id,
+        message,
+      });
+      // Fall through to queue if sync path fails mid-flight and run is still pending.
+      const stillOpen = await prisma.agentRun.findFirst({
+        where: {
+          id: run.id,
+          organisationId: input.organisationId,
+          status: { in: ["PENDING", "PLANNING", "RUNNING"] },
+        },
+        select: { id: true },
+      });
+      if (!stillOpen) {
+        return {
+          runId: run.id,
+          jobId: `sync-quick-crm:${run.id}`,
+          plainEnglishPlan: initialPlan,
+          syncFastPath: true,
+        };
+      }
+    }
+  }
 
   try {
     const { jobId } = await enqueueAgentRunJob({
@@ -323,7 +393,12 @@ export async function createAndEnqueueAgentRun(input: {
       data: { bullJobId: jobId },
     });
 
-    return { runId: run.id, jobId };
+    return {
+      runId: run.id,
+      jobId,
+      plainEnglishPlan: initialPlan,
+      syncFastPath: false,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Enqueue failed";
     await prisma.agentRun.updateMany({

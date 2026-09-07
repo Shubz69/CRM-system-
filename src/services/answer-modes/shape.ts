@@ -53,7 +53,9 @@ function gapsAndRisks(raw: Record<string, unknown>): string[] {
 }
 
 function buildQuick(raw: Record<string, unknown>): QuickAnswer {
+  const sections = asRecord(raw.operatorSections);
   const answer =
+    (sections && str(raw.summary)) ||
     str(raw.shortAnswer) ||
     str(raw.summary) ||
     str(raw.answer) ||
@@ -112,8 +114,10 @@ function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
       pushFrom(sections.topPriorities);
       pushFrom(sections.needsAttention, "draft_content");
       pushFrom(sections.sales);
+      pushFrom(sections.pipelineRisk);
       pushFrom(sections.content, "draft_content");
       pushFrom(sections.automation);
+      pushFrom(sections.goalsKpi);
     }
     if (!items.length) {
       const summary =
@@ -180,11 +184,16 @@ function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
 }
 
 function buildAction(raw: Record<string, unknown>): ActionAnswer {
+  const sections = asRecord(raw.operatorSections);
   return {
     mode: "action",
     actions: buildActionItems(raw),
     researchJobId: researchJobIdOf(raw),
-    summary: str(raw.shortAnswer) || str(raw.summary) || undefined,
+    summary:
+      (sections && str(raw.summary)) ||
+      str(raw.shortAnswer) ||
+      str(raw.summary) ||
+      undefined,
   };
 }
 

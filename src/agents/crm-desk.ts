@@ -3,6 +3,7 @@ import type { Agent } from "@/agents/types";
 import { prisma } from "@/lib/db";
 import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
+import { getBusinessProfile } from "@/services/digital-twin";
 
 export const crmDeskInputSchema = z.object({
   intent: z.enum([
@@ -12,6 +13,7 @@ export const crmDeskInputSchema = z.object({
     "conversations_needing_human",
     "content_awaiting_approval",
     "operator_brief",
+    "business_context",
     "desk_overview",
   ]),
   request: z.string().max(4000).optional(),
@@ -69,8 +71,10 @@ export const crmDeskOutputSchema = z.object({
       topPriorities: z.array(z.string()),
       needsAttention: z.array(z.string()),
       sales: z.array(z.string()),
+      pipelineRisk: z.array(z.string()),
       content: z.array(z.string()),
       automation: z.array(z.string()),
+      goalsKpi: z.array(z.string()),
       ignore: z.array(z.string()),
       risks: z.array(z.string()),
       insufficientEvidence: z.array(z.string()),
@@ -106,84 +110,139 @@ function buildOperatorBrief(input: {
   const topPriorities: string[] = [];
   const needsAttention: string[] = [];
   const sales: string[] = [];
+  const pipelineRisk: string[] = [];
   const content: string[] = [];
   const automation: string[] = [];
+  const goalsKpi: string[] = [];
   const ignore: string[] = [];
   const risks: string[] = [];
   const insufficientEvidence: string[] = [];
 
+  const fmtRec = (parts: {
+    what: string;
+    why: string;
+    evidence: string;
+    urgency: string;
+    next: string;
+  }) =>
+    [
+      `WHAT: ${parts.what}`,
+      `WHY: ${parts.why}`,
+      `EVIDENCE: ${parts.evidence}`,
+      `URGENCY: ${parts.urgency}`,
+      `NEXT ACTION: ${parts.next}`,
+    ].join(" · ");
+
   for (const c of input.needingReply.slice(0, 5)) {
     const who = c.contactName || "Unknown contact";
-    needsAttention.push(
-      `${who} — unread/handoff (unread ${c.unreadCount}). Urgency: high while unread.`,
-    );
-    topPriorities.push(
-      [
-        `Reply to ${who}`,
-        `Why: open conversation needs a human response`,
-        `Evidence: Inbox unread=${c.unreadCount} / handoff flags`,
-        `Next: open Inbox → draft reply → send (human-reviewed)`,
-      ].join(" · "),
-    );
+    const rec = fmtRec({
+      what: `Reply to ${who}`,
+      why: "Open conversation needs a human response",
+      evidence: `Inbox unread=${c.unreadCount} / handoff flags`,
+      urgency: "high",
+      next: "Open Inbox → draft reply → send (human-reviewed)",
+    });
+    needsAttention.push(rec);
+    topPriorities.push(rec);
   }
   for (const c of input.needingHuman.slice(0, 3)) {
     if (c.contactName && needsAttention.some((n) => n.includes(c.contactName!))) continue;
     needsAttention.push(
-      `${c.contactName || "Conversation"} marked needs-human — take over in Inbox.`,
+      fmtRec({
+        what: `Take over conversation with ${c.contactName || "Unknown"}`,
+        why: "Conversation marked needs-human",
+        evidence: "needsHumanReview / HUMAN handling mode",
+        urgency: "high",
+        next: "Open Inbox and respond as human",
+      }),
     );
   }
 
   for (const d of input.stalledDeals.slice(0, 5)) {
-    sales.push(
-      `Stuck deal: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) — quiet ≥14 days. Why now: stall risk. Next: reopen with a concrete follow-up.`,
-    );
-    topPriorities.push(
-      [
-        `Unblock ${d.name}`,
-        `Why: stalled ≥14 days at ${d.stageLabel || "unknown stage"}`,
-        `Evidence: deal last activity quiet ≥14 days (${money(d.amountCents)})`,
-        `Next: message the buyer or schedule a checkpoint this week`,
-      ].join(" · "),
-    );
+    const rec = fmtRec({
+      what: `Unblock deal “${d.name}”`,
+      why: `Stalled ≥14 days at ${d.stageLabel || "unknown stage"}`,
+      evidence: `Quiet ≥14 days · ${money(d.amountCents)}`,
+      urgency: "high",
+      next: "Message the buyer or schedule a checkpoint this week",
+    });
+    sales.push(rec);
+    pipelineRisk.push(rec);
+    topPriorities.push(rec);
   }
   if (!input.stalledDeals.length && input.dealRows.length) {
     const top = input.dealRows[0]!;
     sales.push(
-      `Focus deal: ${top.name} (${top.stageLabel || "no stage"}, ${money(top.amountCents)}). No deals are stalled ≥14 days.`,
+      fmtRec({
+        what: `Advance “${top.name}”`,
+        why: "Highest-urgency open deal (no ≥14-day stalls detected)",
+        evidence: `${top.stageLabel || "no stage"} · ${money(top.amountCents)}`,
+        urgency: "medium",
+        next: "Confirm next stage action with the buyer",
+      }),
     );
   }
   if (!input.dealRows.length) {
     insufficientEvidence.push("No open deals in this workspace — cannot prioritise a stuck deal.");
+    pipelineRisk.push("INSUFFICIENT EVIDENCE: no open deals to score pipeline risk.");
+  } else if (!input.stalledDeals.length) {
+    pipelineRisk.push(
+      "No deals quiet ≥14 days — pipeline stall risk currently low on workspace evidence.",
+    );
   }
 
   for (const l of input.hotLeads.slice(0, 3)) {
-    sales.push(
-      `Lead to focus: ${l.name}${l.score != null ? ` (score ${l.score})` : ""}. Next: qualify or book from CRM.`,
-    );
-    if (topPriorities.length < 5) {
-      topPriorities.push(
-        `Focus lead ${l.name}${l.score != null ? ` (score ${l.score})` : ""} — highest scored open lead evidence.`,
-      );
-    }
+    const rec = fmtRec({
+      what: `Focus lead ${l.name}`,
+      why: "Highest scored open lead in CRM",
+      evidence: l.score != null ? `Lead score ${l.score}` : "Lead present without numeric score",
+      urgency: "medium",
+      next: "Qualify or book from CRM Contacts/Leads",
+    });
+    sales.push(rec);
+    if (topPriorities.length < 5) topPriorities.push(rec);
   }
   if (!input.hotLeads.length && !input.dealRows.length) {
     insufficientEvidence.push("No scored open leads found — lead focus needs CRM lead data.");
   }
 
   for (const o of input.opportunities.slice(0, 3)) {
-    sales.push(
-      `Opportunity: ${o.title}${o.why ? ` — ${o.why}` : ""}. Review on Opportunities.`,
-    );
-    if (topPriorities.length < 5) {
-      topPriorities.push(`Review opportunity “${o.title}” — detector/priority evidence attached.`);
-    }
+    const rec = fmtRec({
+      what: `Review opportunity “${o.title}”`,
+      why: o.why || "Detector/priority signal in Opportunities",
+      evidence: "Chief-of-staff / opportunity detector",
+      urgency: "medium",
+      next: "Open Opportunities and decide pursue / defer",
+    });
+    sales.push(rec);
+    if (topPriorities.length < 5) topPriorities.push(rec);
   }
 
   for (const g of input.goalsAtRisk) {
-    risks.push(`Goal at risk: ${g.name}. Check KPI targets on Goals.`);
-    topPriorities.push(`Stabilise goal “${g.name}” — status AT_RISK.`);
+    const rec = fmtRec({
+      what: `Stabilise goal “${g.name}”`,
+      why: "Goal status is AT_RISK",
+      evidence: "Goals table status=AT_RISK",
+      urgency: "high",
+      next: "Check KPI targets on Goals and assign an owner action",
+    });
+    risks.push(rec);
+    goalsKpi.push(rec);
+    topPriorities.push(rec);
   }
   if (!input.goalsAtRisk.length && input.activeGoals.length) {
+    goalsKpi.push(
+      fmtRec({
+        what: "Keep active goals on watch-only",
+        why: "No AT_RISK goals in workspace",
+        evidence: `Active: ${input.activeGoals
+          .slice(0, 3)
+          .map((g) => g.name)
+          .join("; ")}`,
+        urgency: "low",
+        next: "Do not reopen unless a KPI alert appears",
+      }),
+    );
     ignore.push(
       `Active goals look stable (${input.activeGoals
         .slice(0, 3)
@@ -193,22 +252,30 @@ function buildOperatorBrief(input: {
   }
   if (!input.activeGoals.length && !input.goalsAtRisk.length) {
     insufficientEvidence.push("No active/at-risk goals — KPI attention not evidenced.");
+    goalsKpi.push("INSUFFICIENT EVIDENCE: no active/at-risk goals or KPI rows to prioritise.");
   }
 
   for (const p of input.contentRows.slice(0, 3)) {
-    content.push(
-      `Approve or revise “${p.title || "Untitled draft"}” — currently in review.`,
-    );
-    if (topPriorities.length < 5) {
-      topPriorities.push(
-        `Clear content approval: “${p.title || "Untitled"}” waiting in Content OS.`,
-      );
-    }
+    const rec = fmtRec({
+      what: `Approve or revise “${p.title || "Untitled draft"}”`,
+      why: "Content currently in review / awaiting approval",
+      evidence: "Content OS status IN_REVIEW or pending approval",
+      urgency: "medium",
+      next: "Open Content → approve, revise, or reject",
+    });
+    content.push(rec);
+    if (topPriorities.length < 5) topPriorities.push(rec);
   }
   if (!input.contentRows.length) {
     if (input.hotLeads[0] || input.stalledDeals[0]) {
       content.push(
-        "No drafts awaiting approval. Useful next piece: a short follow-up post aimed at the lead/deal you prioritise today — only if you want outbound content.",
+        fmtRec({
+          what: "Optional: short follow-up post for today's priority lead/deal",
+          why: "No drafts awaiting approval; outbound content is optional",
+          evidence: "Content queue empty",
+          urgency: "low",
+          next: "Only create if you want outbound content today",
+        }),
       );
     } else {
       insufficientEvidence.push("No content in review — no evidence-backed content recommendation.");
@@ -217,11 +284,23 @@ function buildOperatorBrief(input: {
 
   if (input.needingReply.length >= 2) {
     automation.push(
-      "Automate: notify + draft reply when unread/handoff rises (keep human review — never auto-send).",
+      fmtRec({
+        what: "Automate notify + draft reply on unread/handoff rise",
+        why: "Repeated inbox friction (≥2 needing reply)",
+        evidence: `${input.needingReply.length} conversations needing reply`,
+        urgency: "medium",
+        next: "Create automation draft with human-review gate (never auto-send)",
+      }),
     );
   } else if (input.stalledDeals.length >= 2) {
     automation.push(
-      "Automate: alert when an open deal is quiet ≥14 days so stall does not go unnoticed.",
+      fmtRec({
+        what: "Automate stall alert for open deals quiet ≥14 days",
+        why: "Repeated pipeline stall pattern",
+        evidence: `${input.stalledDeals.length} stalled deals`,
+        urgency: "medium",
+        next: "Create automation draft: alert owner when quiet ≥14 days",
+      }),
     );
   } else {
     insufficientEvidence.push(
@@ -231,12 +310,37 @@ function buildOperatorBrief(input: {
 
   for (const a of input.cosActions.slice(0, 3)) {
     if (topPriorities.length >= 5) break;
-    topPriorities.push(`${a.title}: ${a.detail}${a.why ? ` (${a.why})` : ""}`);
+    topPriorities.push(
+      fmtRec({
+        what: a.title,
+        why: a.why || "Chief-of-staff recommended action",
+        evidence: a.detail,
+        urgency: "medium",
+        next: a.detail,
+      }),
+    );
   }
 
   if (input.contactCount > 50 && input.counts.conversationsNeedingReply === 0 && !input.stalledDeals.length) {
     ignore.push(
-      `Do not spend today on bulk contact cleanup (${input.contactCount} contacts, inbox quiet, pipeline not stalled).`,
+      fmtRec({
+        what: "Skip bulk contact cleanup today",
+        why: "Inbox quiet and pipeline not stalled",
+        evidence: `${input.contactCount} contacts · 0 needing reply · 0 stalls`,
+        urgency: "low",
+        next: "Deprioritise CRM hygiene work today",
+      }),
+    );
+  }
+  if (!ignore.length) {
+    ignore.push(
+      fmtRec({
+        what: "Deprioritise speculative busywork",
+        why: "No evidence it moves pipeline, inbox, or goals today",
+        evidence: "Operator brief scan",
+        urgency: "low",
+        next: "Stay on TOP PRIORITIES only",
+      }),
     );
   }
 
@@ -248,7 +352,13 @@ function buildOperatorBrief(input: {
 
   if (!topPriorities.length) {
     topPriorities.push(
-      "No urgent CRM fires detected. Use the day to add one real pipeline deal or clear Business Profile gaps — evidence: empty stall/handoff queues.",
+      fmtRec({
+        what: "Add one real pipeline deal or clear Business Profile gaps",
+        why: "No urgent CRM fires detected",
+        evidence: "Empty stall/handoff queues",
+        urgency: "low",
+        next: "Create one deal or update Business Profile",
+      }),
     );
     insufficientEvidence.push("Sparse operational signal — priorities are provisional.");
   }
@@ -257,8 +367,10 @@ function buildOperatorBrief(input: {
     topPriorities,
     needsAttention,
     sales,
+    pipelineRisk,
     content,
     automation,
+    goalsKpi,
     ignore,
     risks,
     insufficientEvidence,
@@ -274,11 +386,17 @@ function buildOperatorBrief(input: {
   if (sales.length) {
     blocks.push("", "SALES", ...sales.slice(0, 5).map((x) => `• ${x}`));
   }
+  if (pipelineRisk.length) {
+    blocks.push("", "PIPELINE RISK", ...pipelineRisk.slice(0, 5).map((x) => `• ${x}`));
+  }
   if (content.length) {
     blocks.push("", "CONTENT", ...content.slice(0, 3).map((x) => `• ${x}`));
   }
   if (automation.length) {
     blocks.push("", "AUTOMATION", ...automation.slice(0, 2).map((x) => `• ${x}`));
+  }
+  if (goalsKpi.length) {
+    blocks.push("", "GOALS/KPI", ...goalsKpi.slice(0, 4).map((x) => `• ${x}`));
   }
   if (ignore.length) {
     blocks.push("", "IGNORE / DEPRIORITISE", ...ignore.slice(0, 3).map((x) => `• ${x}`));
@@ -324,6 +442,8 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         return "Listing content waiting for approval";
       case "operator_brief":
         return "Building your prioritised operator brief from workspace data";
+      case "business_context":
+        return "Reading your Business Profile / business context";
       default:
         return "Reading your CRM desk from workspace data";
     }
@@ -337,13 +457,80 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const now = Date.now();
     const intent = parsed.intent;
     const req = (parsed.request || "").toLowerCase();
+
+    if (intent === "business_context") {
+      const profile = await getBusinessProfile(orgId).catch(() => null);
+      const products = (profile?.products || [])
+        .slice(0, 5)
+        .map((p: { name?: string | null }) => p.name)
+        .filter(Boolean) as string[];
+      const audiences = (profile?.audiences || [])
+        .slice(0, 5)
+        .map((a: { name?: string | null }) => a.name)
+        .filter(Boolean) as string[];
+      const claims = (profile?.claims || [])
+        .slice(0, 6)
+        .map((c: { predicate?: string | null; valueText?: string | null }) => {
+          const pred = c.predicate?.trim();
+          const val = c.valueText?.replace(/\s+/g, " ").trim();
+          if (pred && val) return `${pred}: ${val}`.slice(0, 160);
+          return (val || pred || "").slice(0, 160);
+        })
+        .filter(Boolean);
+      const orgName = profile?.organisation?.name || "This workspace";
+      const lines: string[] = [
+        `Business context for ${orgName} (organisation-scoped Business Profile).`,
+      ];
+      if (products.length) lines.push(`What we sell / offer: ${products.join("; ")}.`);
+      else lines.push("No active product offerings recorded in Business Profile yet.");
+      if (audiences.length) lines.push(`Audiences: ${audiences.join("; ")}.`);
+      if (claims.length) lines.push(`Known claims: ${claims.join(" | ")}.`);
+      if (!products.length && !audiences.length && !claims.length) {
+        lines.push(
+          "INSUFFICIENT EVIDENCE: Business Profile is sparse — fill Business Context before answering external positioning questions.",
+        );
+      }
+      const summary = lines.join(" ");
+      return {
+        output: {
+          shortAnswer: products.length
+            ? `${orgName} offers: ${products.slice(0, 3).join("; ")}.`
+            : summary.slice(0, 280),
+          summary,
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts: {
+            openDeals: 0,
+            stalledDeals: 0,
+            conversationsNeedingHuman: 0,
+            conversationsNeedingReply: 0,
+            goalsAtRisk: 0,
+            contentAwaitingApproval: 0,
+          },
+          deals: [],
+          conversations: [],
+          goals: [],
+          content: [],
+        },
+        costCents: 0,
+      };
+    }
+
     const contactFocused =
       /\bhow many\s+contacts?\b/.test(req) ||
-      /\b(list|show|newest)\s+.*\bcontacts?\b/.test(req) ||
+      /\b(list|show|newest|name)\b.*\bcontacts?\b/.test(req) ||
       /\bmy\s+(\w+\s+){0,2}contacts?\b/.test(req);
+    const contactList =
+      contactFocused &&
+      /\b(list|show|newest|name)\b/.test(req) &&
+      !/\bhow many\b/.test(req);
     const companyFocused =
-      /\bhow many\s+companies\b/.test(req) ||
-      /\b(list|name|show)\s+.*\bcompan(y|ies)\b/.test(req);
+      /\bhow many\s+compan(?:y|ies)\b/.test(req) ||
+      /\b(list|name|show)\b.*\bcompan(?:y|ies)\b/.test(req);
+    const companyList =
+      companyFocused &&
+      /\b(list|show|newest|name)\b/.test(req) &&
+      !/\bhow many\b/.test(req);
     const needDeals =
       !contactFocused &&
       !companyFocused &&
@@ -510,6 +697,42 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       ]);
 
     if (contactFocused) {
+      if (contactList) {
+        const newest = await prisma.contact.findMany({
+          where: { organisationId: orgId, deletedAt: null },
+          orderBy: { createdAt: "desc" },
+          take: 8,
+          select: { fullName: true, email: true, createdAt: true },
+        });
+        const names = newest
+          .map((c) => c.fullName || c.email || "Unnamed contact")
+          .filter(Boolean);
+        const summary =
+          names.length === 0
+            ? `This workspace has ${contactCount} contacts, but none are listable yet.`
+            : `Newest contacts (${contactCount} total): ${names.join("; ")}.`;
+        return {
+          output: {
+            shortAnswer: summary.slice(0, 280),
+            summary,
+            source: "internal_crm" as const,
+            organisationId: orgId,
+            counts: {
+              openDeals: 0,
+              stalledDeals: 0,
+              conversationsNeedingHuman: 0,
+              conversationsNeedingReply: 0,
+              goalsAtRisk: 0,
+              contentAwaitingApproval: 0,
+            },
+            deals: [],
+            conversations: [],
+            goals: [],
+            content: [],
+          },
+          costCents: 0,
+        };
+      }
       const summary = `This workspace has ${contactCount} contact${contactCount === 1 ? "" : "s"} (organisation-scoped count).`;
       return {
         output: {
@@ -534,6 +757,41 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       };
     }
     if (companyFocused) {
+      if (companyList) {
+        const newest = await prisma.company.findMany({
+          where: { organisationId: orgId, deletedAt: null },
+          orderBy: { createdAt: "desc" },
+          take: 8,
+          select: { name: true, createdAt: true },
+        });
+        const n = companyCount ?? newest.length;
+        const names = newest.map((c) => c.name).filter(Boolean);
+        const summary =
+          names.length === 0
+            ? `This workspace has ${n} companies, but none are listable yet.`
+            : `Companies (${n} total): ${names.join("; ")}.`;
+        return {
+          output: {
+            shortAnswer: summary.slice(0, 280),
+            summary,
+            source: "internal_crm" as const,
+            organisationId: orgId,
+            counts: {
+              openDeals: 0,
+              stalledDeals: 0,
+              conversationsNeedingHuman: 0,
+              conversationsNeedingReply: 0,
+              goalsAtRisk: 0,
+              contentAwaitingApproval: 0,
+            },
+            deals: [],
+            conversations: [],
+            goals: [],
+            content: [],
+          },
+          costCents: 0,
+        };
+      }
       const n = companyCount ?? 0;
       const summary = `This workspace has ${n} compan${n === 1 ? "y" : "ies"} (organisation-scoped count).`;
       return {

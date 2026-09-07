@@ -749,11 +749,30 @@ export function validateProspectCandidate(
   if (icp.role) requestedStatuses.push(role.roleConstraint);
   if (icp.location) requestedStatuses.push(locationConstraint);
   if (icp.companySize) requestedStatuses.push(sizeConstraint);
+  if (icp.industry) {
+    requestedStatuses.push(industry.ok ? "MATCHED" : "FAILED");
+  }
+
+  // Soft / unconstrained queries cannot be EXACT — require ≥1 mandatory constraint,
+  // all MATCHED, and non-empty evidence for each requested constraint.
+  const hasMandatory =
+    Boolean(icp.role) || Boolean(icp.location) || Boolean(icp.companySize) || Boolean(icp.industry);
+  const evidenceGaps: string[] = [];
+  if (icp.role && !(role.roleEvidence && String(role.roleEvidence).trim())) {
+    evidenceGaps.push("role");
+  }
+  if (icp.location && !(loc.locationEvidence && String(loc.locationEvidence).trim())) {
+    evidenceGaps.push("location");
+  }
+  if (icp.companySize && size.status === "MATCHED" && !(size.evidence && String(size.evidence).trim())) {
+    // size matchers may not always attach evidence text — treat MATCHED without excerpt as possible
+    if (!size.evidence) evidenceGaps.push("companySize");
+  }
   const allMatched =
-    requestedStatuses.length === 0 ||
-    requestedStatuses.every((s) => s === "MATCHED");
+    hasMandatory && requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");
+  // Soft queries (no mandatory constraints) and any unverified/failed gap → POSSIBLE.
   const matchTier: ProspectMatchTier =
-    possibleOnly || !allMatched || requestedStatuses.some((s) => s === "NOT_VERIFIED")
+    !hasMandatory || possibleOnly || !allMatched || evidenceGaps.length > 0
       ? "POSSIBLE"
       : "EXACT";
 

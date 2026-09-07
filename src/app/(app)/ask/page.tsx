@@ -474,7 +474,31 @@ export default function AskPage() {
     // Always read frozen context at execution time (never a stale render snapshot).
     const ctx = getImmutableWorkspaceContext(null);
     setSubmitting(true);
-    setProgress(null);
+    setProgress({
+      runId: "pending",
+      status: "PENDING",
+      request: text,
+      answerMode: null,
+      plainEnglishPlan: "Thinking…",
+      clarificationQuestion: null,
+      clarificationOptions: null,
+      pendingPrompt: null,
+      pendingCostEstimateCents: null,
+      referenceAssetId: null,
+      pendingCostNote: null,
+      remainingAllowanceNote: null,
+      currentStep: null,
+      stepsCompleted: 0,
+      stepsTotal: 0,
+      elapsedMs: 0,
+      totalCostCents: 0,
+      costNote: null,
+      outputSoFar: null,
+      finalOutput: null,
+      userFacingError: null,
+      steps: [],
+      nextActions: ["Sit tight — progress updates as each step finishes"],
+    });
     stopPolling();
     try {
       const res = await workspaceFetch(ctx.loadedOrganisationId, ctx.workspaceRevision, "/api/ask", {
@@ -491,6 +515,17 @@ export default function AskPage() {
         return;
       }
       setRunId(json.runId);
+      if (json.plainEnglishPlan || json.message) {
+        setProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                runId: json.runId,
+                plainEnglishPlan: json.plainEnglishPlan || json.message || prev.plainEnglishPlan,
+              }
+            : prev,
+        );
+      }
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 2500);
     } catch (err) {

@@ -486,6 +486,67 @@ describe("Final social prospecting quality closure", () => {
     expect(decision.roleConstraint).toBe("FAILED");
   });
 
+  it("soft unconstrained queries cannot label EXACT", () => {
+    const icp = parseProspectIntent("interesting people in tech");
+    const decision = validateProspectCandidate(
+      {
+        personName: "Alex Soft",
+        role: "Engineer",
+        location: "Remote",
+        linkedinUrl: "https://www.linkedin.com/in/alex-soft",
+        sourceEvidence: [
+          evidence("Alex Soft is an engineer", "https://www.linkedin.com/in/alex-soft"),
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/alex-soft",
+            confidence: 0.9,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.matchTier).toBe("POSSIBLE");
+  });
+
+  it("EXACT requires verified mandatory constraints with evidence", () => {
+    const icp = parseProspectIntent("UK founders in London");
+    const decision = validateProspectCandidate(
+      {
+        personName: "Jordan Exact",
+        role: "Founder",
+        location: "London, UK",
+        linkedinUrl: "https://www.linkedin.com/in/jordan-exact",
+        sourceEvidence: [
+          evidence(
+            "Jordan Exact is Founder of ExactCo based in London UK",
+            "https://www.linkedin.com/in/jordan-exact",
+          ),
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/jordan-exact",
+            confidence: 0.92,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.matchTier).toBe("EXACT");
+    expect(decision.roleEvidence).toBeTruthy();
+    expect(decision.locationEvidence).toBeTruthy();
+  });
+
   it("customer integrations UI does not expose vendor internals", () => {
     const text = readFileSync(
       join(process.cwd(), "src/app/(app)/integrations/integrations-client.tsx"),
