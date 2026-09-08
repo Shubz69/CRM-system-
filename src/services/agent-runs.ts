@@ -355,6 +355,8 @@ export async function createAndEnqueueAgentRun(input: {
       } as Prisma.InputJsonValue,
     },
   });
+  // Accept clock stops when the run is persisted with a customer-visible plan.
+  const acceptMs = Date.now() - acceptStarted;
 
   if (crmQuickSync) {
     // Operator briefs can take several seconds — accept fast via after() keepalive.
@@ -431,7 +433,7 @@ export async function createAndEnqueueAgentRun(input: {
         jobId: `sync-quick-crm:${run.id}`,
         plainEnglishPlan: initialPlan,
         syncFastPath: true,
-        acceptMs: Date.now() - acceptStarted,
+        acceptMs,
       };
     }
 
@@ -445,7 +447,7 @@ export async function createAndEnqueueAgentRun(input: {
       jobId: `sync-quick-crm:${run.id}`,
       plainEnglishPlan: done?.plainEnglishPlan || initialPlan,
       syncFastPath: true,
-      acceptMs: Date.now() - acceptStarted,
+      acceptMs,
       status: done?.status,
       finalOutput: done?.finalOutput ?? undefined,
     };
@@ -468,7 +470,7 @@ export async function createAndEnqueueAgentRun(input: {
       jobId,
       plainEnglishPlan: initialPlan,
       syncFastPath: false,
-      acceptMs: Date.now() - acceptStarted,
+      acceptMs,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Enqueue failed";
