@@ -24,6 +24,8 @@ import {
   looksLikeCrmInternal,
   looksLikeOperatorBrief,
 } from "@/agents/supervisor/plan";
+import { executeAgentRun } from "@/agents/supervisor/execute";
+import { after } from "next/server";
 
 export type AgentRunProgress = {
   runId: string;
@@ -252,6 +254,8 @@ export async function createAndEnqueueAgentRun(input: {
   plainEnglishPlan: string;
   syncFastPath: boolean;
   acceptMs: number;
+  status?: AgentRun["status"];
+  finalOutput?: unknown;
 }> {
   const acceptStarted = Date.now();
   ensureAgentsRegistered();
@@ -353,8 +357,6 @@ export async function createAndEnqueueAgentRun(input: {
   });
 
   if (crmQuickSync) {
-    const { after } = await import("next/server");
-    const { executeAgentRun } = await import("@/agents/supervisor/execute");
     // Operator briefs can take several seconds — accept fast via after() keepalive.
     // Light CRM facts finish in <1s of tool time; awaiting them removes the multi-second
     // after() scheduling delay that previously dominated Quick P50 (~6s with ~400ms tool).
@@ -424,16 +426,28 @@ export async function createAndEnqueueAgentRun(input: {
       after(async () => {
         await execPromise;
       });
-    } else {
-      await runExecute();
+      return {
+        runId: run.id,
+        jobId: `sync-quick-crm:${run.id}`,
+        plainEnglishPlan: initialPlan,
+        syncFastPath: true,
+        acceptMs: Date.now() - acceptStarted,
+      };
     }
 
+    await runExecute();
+    const done = await prisma.agentRun.findFirst({
+      where: { id: run.id, organisationId: input.organisationId },
+      select: { status: true, finalOutput: true, plainEnglishPlan: true },
+    });
     return {
       runId: run.id,
       jobId: `sync-quick-crm:${run.id}`,
-      plainEnglishPlan: initialPlan,
+      plainEnglishPlan: done?.plainEnglishPlan || initialPlan,
       syncFastPath: true,
       acceptMs: Date.now() - acceptStarted,
+      status: done?.status,
+      finalOutput: done?.finalOutput ?? undefined,
     };
   }
 

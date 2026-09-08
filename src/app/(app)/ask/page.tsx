@@ -573,6 +573,28 @@ export default function AskPage() {
             : prev,
         );
       }
+      // Sync light CRM may already be COMPLETED — apply answer without waiting for poll RTT.
+      if (
+        json.status &&
+        ["COMPLETED", "PARTIAL", "FAILED", "AWAITING_CLARIFICATION"].includes(json.status) &&
+        (json.finalOutput != null || json.status !== "COMPLETED")
+      ) {
+        setProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                runId: json.runId,
+                status: json.status,
+                finalOutput: json.finalOutput ?? prev.finalOutput,
+                plainEnglishPlan: json.plainEnglishPlan || prev.plainEnglishPlan,
+              }
+            : prev,
+        );
+        setSubmitting(false);
+        if (json.status === "COMPLETED" || json.status === "PARTIAL") {
+          return;
+        }
+      }
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 200);
     } catch (err) {

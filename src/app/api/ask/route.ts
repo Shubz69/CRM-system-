@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
     });
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(raw);
-    const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs } =
+    const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs, status, finalOutput } =
       await createAndEnqueueAgentRun({
         organisationId: session.organisationId,
         userId: session.userId,
@@ -86,6 +86,8 @@ export async function POST(req: NextRequest) {
       plainEnglishPlan,
       syncFastPath,
       acceptMs,
+      ...(status ? { status } : {}),
+      ...(finalOutput !== undefined ? { finalOutput } : {}),
       message: plainEnglishPlan || "Started — you'll see progress as each step finishes.",
     });
   } catch (error) {
