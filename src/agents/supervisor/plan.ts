@@ -105,6 +105,7 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\b(my pipeline|our pipeline|the pipeline|pipeline summary|pipeline looking|open deals?)\b/.test(t) ||
     /\bhow is (my |our |the )?pipeline\b/.test(t) ||
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
+    /\bdeals?\b.{0,40}\b(quiet|went quiet|ages|stale)\b|\b(quiet|stale)\b.{0,40}\bdeals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?|customers? need)\b/.test(t) ||
     /\bhow many\s+conversations\b/.test(t) ||
     /\b(goals?\b.{0,40}\bat risk|at risk\b.{0,40}\bgoals?|goals? marked at risk|kpi|goals? need|which goal)\b/.test(
@@ -114,13 +115,19 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\b(content\s+(is\s+)?(awaiting|waiting for) approval|awaiting approval|waiting for approval|content in review)\b/.test(
       t,
     ) ||
+    /\b(in review|pending).{0,24}\bcontent\b|\bcontent\b.{0,24}\b(in review|approval|approvals?)\b/.test(t) ||
+    /\bapprovals?\b.{0,30}\b(pending|content)\b/.test(t) ||
     /\bany content\b.*\b(approval|review)\b/.test(t) ||
     /\b(my|our)\s+(\w+\s+){0,3}(contacts?|deals?|leads?|crm|compan(?:y|ies)|content|inbox)\b/.test(t) ||
     /\bhow many\s+(contacts?|deals?|leads?|compan(?:y|ies)|conversations)\b/.test(t) ||
-    /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\b(contact|contacts|deal|deals)\s+(count|total|inventory|size)\b/.test(t) ||
+    /\b(contacts? total|total contacts?|inventory size)\b/.test(t) ||
+    /\b(list|name|show|give me|newest)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\bnewest contacts?\b/.test(t) ||
     /\bare any goals\b/.test(t) ||
     /\binternal (crm|data|workspace|knowledge)\b/.test(t) ||
     /\b(this|my|our)\s+workspace\b/.test(t) ||
+    /\bworkspace[- ]only\b/.test(t) ||
     /\bbusiness (profile|context)\b/.test(t) ||
     /\bwhat (do|does) (we|our(?:\s+(?:business|company))?|the business|the company) sell\b/.test(t) ||
     /\bwhat industry\b/.test(t) ||
@@ -130,7 +137,8 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
     /\bopportunit(y|ies)\b/.test(t) ||
-    /\b(crm pulse|status check|inbox snapshot|what needs me|what'?s urgent|any fires|top risk)\b/.test(t)
+    /\b(crm pulse|status check|inbox snapshot|what needs me|what'?s urgent|any fires|top risk)\b/.test(t) ||
+    /\b(how many open|don'?t invent deals|crm contacts?)\b/.test(t)
   );
 }
 
@@ -140,7 +148,10 @@ function isPureDeterministicCrmFact(request: string): boolean {
   // Judgement / "who/which/what needs…" questions use the operator brief in those modes.
   return (
     /\bhow many\b/.test(t) ||
-    /\b(list|name|show)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\b(contact|contacts|deal|deals)\s+(count|total|inventory|size)\b/.test(t) ||
+    /\b(contacts? total|total contacts?)\b/.test(t) ||
+    /\b(list|name|show|give me|newest)\b.*\b(contacts?|compan(?:y|ies)|deals?)\b/.test(t) ||
+    /\bnewest contacts?\b/.test(t) ||
     /\bname one company\b/.test(t) ||
     /\bcontacts? count\b/.test(t) ||
     (/\b(content).*\b(awaiting|waiting|approval|in review)\b/.test(t) &&
@@ -233,6 +244,12 @@ function looksLikeSocialListening(request: string): boolean {
 function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
   if (looksLikeImaging(request)) return false;
+  // Negated research / CRM-only instructions must not force the research pipeline.
+  if (/\b(not|without|no)\s+(web\s+)?research\b/i.test(request) || /\binternal only\b/i.test(request)) {
+    if (looksLikeCrmInternal(request) || /\b(crm|contacts?|deals?|pipeline|inbox|workspace)\b/i.test(request)) {
+      return false;
+    }
+  }
   if (looksLikeCrmInternal(request) && !/\b(research|look up|investigate|compare|ico|gdpr|authority)\b/i.test(request)) {
     return false;
   }

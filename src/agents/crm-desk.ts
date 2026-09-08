@@ -604,7 +604,10 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
 
     const contactFocused =
       /\bhow many\s+contacts?\b/.test(req) ||
-      /\b(list|show|newest|name)\b.*\bcontacts?\b/.test(req) ||
+      /\b(contact|contacts)\s+(count|total|inventory|size)\b/.test(req) ||
+      /\b(contacts? total|total contacts?)\b/.test(req) ||
+      /\b(list|show|newest|name|give me)\b.*\bcontacts?\b/.test(req) ||
+      /\bnewest contacts?\b/.test(req) ||
       /\bmy\s+(\w+\s+){0,2}contacts?\b/.test(req);
     const contactList =
       contactFocused &&

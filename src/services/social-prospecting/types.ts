@@ -330,8 +330,9 @@ export function buildResearchQueries(icp: StructuredIcp): string[] {
   if (icp.preferredNetworks.includes("youtube")) {
     queries.push(`${primary} site:youtube.com/@`);
   }
-  if (icp.location && icp.industry) {
-    queries.push(`${icp.industry} ${icp.role || "founder"} ${geo}`);
+  if (icp.companySize) {
+    queries.push(`${primary} ${icp.companySize} employees`);
+    queries.push(`${icp.industry || icp.role || "company"} ${geo || ""} ${icp.companySize} staff headcount`.trim());
   }
-  return [...new Set(queries)].slice(0, 6);
+  return [...new Set(queries)].slice(0, 8);
 }

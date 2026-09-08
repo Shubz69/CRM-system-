@@ -161,10 +161,21 @@ export async function discoverSocialProspects(input: {
   const saved: SocialProspect[] = [];
   for (const q of quality) {
     const dedupeKey = buildProspectDedupeKey(q.candidate);
+    const qa = q.candidate.qaDecision as
+      | { matchTier?: string; sizeConstraint?: string; roleConstraint?: string; locationConstraint?: string }
+      | undefined;
     const uncertainty = [
       ...(q.uncertaintyFlags || []),
-      ...(q.candidate.qaDecision
-        ? [`qa:${JSON.stringify(q.candidate.qaDecision).slice(0, 400)}`]
+      ...(qa?.matchTier ? [`matchTier:${qa.matchTier}`] : []),
+      ...(qa
+        ? [
+            `qa:${JSON.stringify({
+              matchTier: qa.matchTier,
+              sizeConstraint: qa.sizeConstraint,
+              roleConstraint: qa.roleConstraint,
+              locationConstraint: qa.locationConstraint,
+            })}`,
+          ]
         : []),
     ];
     const row = await prisma.socialProspect.upsert({
