@@ -353,12 +353,13 @@ export async function createAndEnqueueAgentRun(input: {
   });
 
   if (crmQuickSync) {
-    // Return immediately with a visible plan; finish execution after the response
-    // so first-progress is not blocked by tool work (Deep/Research stay queued).
+    // Start execute immediately in this invocation (avoid multi-second `after()` delay).
+    // Race a short accept budget so SERVER_ACCEPT stays under gate; finish via after if needed.
     const { after } = await import("next/server");
-    after(async () => {
+    const { executeAgentRun } = await import("@/agents/supervisor/execute");
+    const ACCEPT_BUDGET_MS = 1200;
+    const execPromise = (async () => {
       try {
-        const { executeAgentRun } = await import("@/agents/supervisor/execute");
         await executeAgentRun({
           organisationId: input.organisationId,
           runId: run.id,
@@ -413,7 +414,18 @@ export async function createAndEnqueueAgentRun(input: {
           });
         }
       }
-    });
+    })();
+
+    const finishedWithinBudget = await Promise.race([
+      execPromise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ACCEPT_BUDGET_MS)),
+    ]);
+    if (!finishedWithinBudget) {
+      after(async () => {
+        await execPromise;
+      });
+    }
+
     return {
       runId: run.id,
       jobId: `sync-quick-crm:${run.id}`,

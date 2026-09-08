@@ -1066,8 +1066,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const lines: string[] = [];
     if (
       parsed.intent === "pipeline_summary" ||
-      parsed.intent === "desk_overview" ||
-      parsed.intent === "follow_ups"
+      parsed.intent === "desk_overview"
     ) {
       lines.push(
         `Open deals: ${counts.openDeals}. Stalled (≥14 days quiet): ${counts.stalledDeals}.`,
