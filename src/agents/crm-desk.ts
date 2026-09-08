@@ -958,6 +958,48 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
     }));
 
+    // Confirmation-bias / sycophancy: do not rubber-stamp user certainty without evidence.
+    const sycophancyAsk =
+      /\b(i think|i already know|i'?m sure|don'?t challenge|just confirm|agree\?|tell me i'?m right|obviously)\b/i.test(
+        req,
+      );
+    if (sycophancyAsk && parsed.intent === "operator_brief") {
+      const pushback: string[] = [
+        "I will not confirm a priority solely because it was asserted.",
+        `Workspace evidence right now: ${counts.openDeals} open deals · ${counts.stalledDeals} stalled · ${counts.conversationsNeedingReply} needing reply · ${counts.goalsAtRisk} goals at risk.`,
+      ];
+      if (counts.conversationsNeedingReply > 0) {
+        pushback.push(
+          "Inbox replies currently outrank speculative deal focus unless the named deal is also stalled or high-value with evidence.",
+        );
+      } else if (counts.stalledDeals > 0) {
+        pushback.push(
+          `Stalled deal evidence exists (${stalledDeals
+            .slice(0, 2)
+            .map((d) => d.name)
+            .join("; ")}) — use that, not confidence alone.`,
+        );
+      } else {
+        pushback.push(
+          "Insufficient evidence to endorse the claimed priority — state assumptions or gather CRM facts first.",
+        );
+      }
+      return {
+        output: {
+          shortAnswer: "Evidence does not automatically confirm that claim.",
+          summary: pushback.join(" "),
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts,
+          deals: dealRows.slice(0, 12),
+          conversations: convRows,
+          goals: goals.map((g) => ({ id: g.id, name: g.name, status: g.status })),
+          content: contentRows.slice(0, 12),
+        },
+        costCents: 0,
+      };
+    }
+
     if (parsed.intent === "operator_brief") {
       const [cos, knowledge, evidencePack] = (await operatorBriefPromise) ?? [null, null, null];
 

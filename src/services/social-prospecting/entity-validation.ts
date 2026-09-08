@@ -518,19 +518,25 @@ export function matchIndustryIntent(
   evidenceText: string,
   candidateRole?: string,
   companyName?: string,
-): { ok: boolean; confidence: number; evidence?: string } {
-  if (!industry?.trim()) return { ok: true, confidence: 0.5 };
+): { status: "MATCHED" | "NOT_VERIFIED" | "FAILED"; confidence: number; evidence?: string; ok: boolean } {
+  if (!industry?.trim()) return { status: "MATCHED", ok: true, confidence: 0.5 };
   const token = industry.trim().toLowerCase();
   const hay = `${candidateRole || ""}\n${companyName || ""}\n${evidenceText}`.toLowerCase();
   const synonyms: Record<string, RegExp> = {
     dental: /\b(dental|dentist|dentistry|orthodont|oral\s+health|teeth|tooth)\b/i,
     recruitment: /\b(recruit(?:ment|er|ing)?|talent\s+acquisition|staffing|headhunt)\b/i,
     fitness: /\b(fitness|gym|personal\s+train|workout|crossfit|wellness)\b/i,
+    "professional services":
+      /\b(professional\s+services|consulting|consultancy|advisory|accountancy|accounting|law\s+firm|legal\s+services)\b/i,
+    saas: /\b(saas|software[- ]as[- ]a[- ]service|b2b\s+software|cloud\s+software)\b/i,
+    fintech: /\b(fintech|financial\s+tech|payments?\s+company|neobank)\b/i,
+    agency: /\b(agency|marketing\s+agency|creative\s+agency|growth\s+agency)\b/i,
   };
   const re = synonyms[token] || new RegExp(`\\b${escapeRe(token)}\\b`, "i");
   const m = hay.match(re);
-  if (m) return { ok: true, confidence: 0.8, evidence: m[0] };
-  return { ok: false, confidence: 0.1 };
+  if (m) return { status: "MATCHED", ok: true, confidence: 0.8, evidence: m[0] };
+  // Absence of industry signal is unknown — never invent a contradiction from silence.
+  return { status: "NOT_VERIFIED", ok: false, confidence: 0.1 };
 }
 
 export function companyAssociationConfidence(input: {
@@ -697,14 +703,20 @@ export function validateProspectCandidate(
     candidate.role,
     candidate.companyName,
   );
-  if (icp.industry && !industry.ok) {
+  let industryConstraint: ConstraintStatus = !icp.industry
+    ? "NOT_VERIFIED"
+    : industry.status;
+  if (icp.industry && industry.status === "FAILED") {
     return reject(
       "INDUSTRY_MISMATCH",
-      "Requested sector not supported by evidence",
+      "Requested sector contradicted by evidence",
       candidate,
       icp,
       entityClass,
     );
+  }
+  if (icp.industry && industry.status === "NOT_VERIFIED") {
+    possibleOnly = true;
   }
 
   const idConf = identityConfidenceOf(candidate);
@@ -762,7 +774,7 @@ export function validateProspectCandidate(
   if (icp.location) requestedStatuses.push(locationConstraint);
   if (icp.companySize) requestedStatuses.push(sizeConstraint);
   if (icp.industry) {
-    requestedStatuses.push(industry.ok ? "MATCHED" : "FAILED");
+    requestedStatuses.push(industryConstraint);
   }
 
   // Soft / unconstrained / location-only queries cannot be EXACT.
@@ -790,6 +802,12 @@ export function validateProspectCandidate(
   }
   if (sizeMentionedInQuery && sizeConstraint !== "MATCHED") {
     evidenceGaps.push("companySize");
+  }
+  if (icp.industry && industry.status === "MATCHED" && !industry.evidence) {
+    evidenceGaps.push("industry");
+  }
+  if (icp.industry && industryConstraint !== "MATCHED") {
+    evidenceGaps.push("industry");
   }
   const allMatched =
     requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");

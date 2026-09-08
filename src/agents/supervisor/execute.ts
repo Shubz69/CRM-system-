@@ -1,7 +1,7 @@
 import { Prisma, type AgentRunStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ensureAgentsRegistered, getAgent } from "@/agents";
-import { planAgentRun } from "@/agents/supervisor/plan";
+import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal } from "@/agents/supervisor/plan";
 import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
 import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 import { logger } from "@/lib/logger";
@@ -162,6 +162,74 @@ export async function executeAgentRun(input: {
     };
   }
 
+  // Ultra-fast path: QUICK/ACTION internal CRM — deterministic plan + crm_desk only.
+  // Avoids governor/RAG/CoS/memory and collapses intermediate run writes.
+  if (
+    (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
+    looksLikeCrmInternal(run.request) &&
+    !run.referenceAssetId
+  ) {
+    const executeWallStart = Date.now();
+    const planned = planAgentRunDeterministic(run.request, {
+      organisationId: input.organisationId,
+      answerMode: run.answerMode,
+    });
+    if (
+      planned.kind === "plan" &&
+      planned.plan.steps.length === 1 &&
+      planned.plan.steps[0]?.agentName === "crm_desk"
+    ) {
+      const step = planned.plan.steps[0]!;
+      ensureAgentsRegistered();
+      const agent = getAgent("crm_desk");
+      const parsedInput = agent.inputSchema.safeParse(step.input);
+      if (parsedInput.success) {
+        const tTool0 = Date.now();
+        const result = await agent.execute(parsedInput.data as never, {
+          organisationId: input.organisationId,
+          agentRunId: run.id,
+          agentStepId: `ultra-crm:${run.id}`,
+          knowledgeContext: null,
+        });
+        const toolMs = Date.now() - tTool0;
+        const shaped = shapeFinalOutputForMode(run.answerMode, result.output) ?? result.output;
+        const latencyTrace = {
+          workerPickupAt: executeWallStart,
+          queueWaitMs: 0,
+          contextLoadMs: 0,
+          contextSkipped: 1,
+          planMs: 0,
+          governorMs: 0,
+          preStepContextMs: 0,
+          knowledgeContextMs: 0,
+          memoryContextMs: 0,
+          crmDeskFastPath: 1,
+          toolMs,
+          postProcessMs: 0,
+          totalMs: Date.now() - executeWallStart,
+          ultraFastCrm: 1,
+        };
+        logger.info("Ask latency trace", {
+          runId: run.id,
+          answerMode: run.answerMode,
+          ...latencyTrace,
+        });
+        return finishRun({
+          organisationId: input.organisationId,
+          request: run.request,
+          runId: run.id,
+          status: "COMPLETED",
+          totalCostCents: result.costCents ?? 0,
+          partialResults: {
+            steps: [{ agentName: "crm_desk", userFacingLabel: "CRM desk", output: result.output }],
+            latencyTrace,
+          },
+          finalOutput: shaped,
+        });
+      }
+    }
+  }
+
   const org = await prisma.organisation.findFirst({
     where: { id: input.organisationId, deletedAt: null },
     select: { id: true, name: true },
@@ -195,7 +263,6 @@ export async function executeAgentRun(input: {
 
   const startedAt = run.startedAt ?? new Date();
   // CRM Quick/Action sync already set a customer-facing plan — avoid an extra PLANNING write.
-  const { looksLikeCrmInternal } = await import("@/agents/supervisor/plan");
   const skipHeavyBizContext =
     (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
     looksLikeCrmInternal(run.request);
