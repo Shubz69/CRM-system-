@@ -460,100 +460,82 @@ export async function createAndEnqueueAgentRun(input: {
   }
 
   try {
-    // Prefer in-process execution with after() keepalive on serverless preview so
-    // DEEP/research does not stall forever if the worker is lagging. Still enqueue
-    // as a secondary path only when we cannot schedule after()/local execute.
-    const preferLocalExecute =
-      process.env.VERCEL_ENV === "preview" ||
+    // DEEP/research: enqueue the Railway worker as the durable primary path and
+    // return immediately (SERVER_ACCEPT). Awaiting execute in-request previously
+    // exceeded client/fetch + route maxDuration and left clients stuck without a
+    // runId to poll. after() local execute is only a fallback when enqueue fails.
+    const preferDurableWorker =
       answerMode === AgentAnswerMode.DEEP ||
-      /\b(research|gdpr|investigate|compare)\b/i.test(request);
+      /\b(research|gdpr|investigate|compare)\b/i.test(request) ||
+      process.env.VERCEL_ENV === "preview";
 
-    if (preferLocalExecute) {
-      const runLocal = async () => {
-        try {
-          await executeAgentRun({
-            organisationId: input.organisationId,
-            runId: run.id,
-          });
-          await prisma.agentRun.updateMany({
-            where: { id: run.id, organisationId: input.organisationId, bullJobId: null },
-            data: { bullJobId: `sync-deep-local:${run.id}` },
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Execute failed";
-          logger.error("Local deep/research execute failed", {
-            runId: run.id,
-            organisationId: input.organisationId,
-            error: message,
-          });
+    if (preferDurableWorker) {
+      try {
+        const { jobId } = await enqueueAgentRunJob({
+          name: "agent-framework-run",
+          organisationId: input.organisationId,
+          payload: { agentRunId: run.id },
+        });
+        await prisma.agentRun.updateMany({
+          where: { id: run.id, organisationId: input.organisationId },
+          data: { bullJobId: jobId },
+        });
+        return {
+          runId: run.id,
+          jobId,
+          plainEnglishPlan: initialPlan,
+          syncFastPath: false,
+          acceptMs,
+        };
+      } catch (enqueueError) {
+        const enqueueMessage =
+          enqueueError instanceof Error ? enqueueError.message : "Enqueue failed";
+        logger.warn("Durable worker enqueue failed — falling back to local after()", {
+          runId: run.id,
+          organisationId: input.organisationId,
+          error: enqueueMessage,
+        });
+        const runLocal = async () => {
           try {
-            const { jobId } = await enqueueAgentRunJob({
-              name: "agent-framework-run",
+            await executeAgentRun({
               organisationId: input.organisationId,
-              payload: { agentRunId: run.id },
+              runId: run.id,
             });
             await prisma.agentRun.updateMany({
-              where: { id: run.id, organisationId: input.organisationId },
-              data: { bullJobId: jobId },
+              where: { id: run.id, organisationId: input.organisationId, bullJobId: null },
+              data: { bullJobId: `sync-deep-local:${run.id}` },
             });
-          } catch (fallbackError) {
-            const fallbackMessage =
-              fallbackError instanceof Error ? fallbackError.message : "Enqueue failed";
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Execute failed";
+            logger.error("Local deep/research execute failed", {
+              runId: run.id,
+              organisationId: input.organisationId,
+              error: message,
+            });
             await prisma.agentRun.updateMany({
               where: { id: run.id, organisationId: input.organisationId },
               data: {
                 status: "FAILED",
                 finishedAt: new Date(),
-                error: fallbackMessage,
+                error: message,
                 userFacingError:
                   "I couldn't finish that request. Please try again in a moment.",
               },
             });
           }
-        }
-      };
-
-      const mustAwait =
-        answerMode === AgentAnswerMode.DEEP ||
-        /\b(research|gdpr|investigate|compare)\b/i.test(request);
-
-      if (mustAwait) {
-        // Keep the serverless invocation alive for DEEP/research — after()-only
-        // previously left runs stranded in RUNNING when the isolate froze.
-        try {
-          await Promise.race([
-            runLocal(),
-            new Promise<void>((resolve) => setTimeout(resolve, 95_000)),
-          ]);
-        } catch {
-          /* runLocal already records failure / enqueue fallback */
-        }
-        const done = await prisma.agentRun.findFirst({
-          where: { id: run.id, organisationId: input.organisationId },
-          select: { status: true, finalOutput: true, plainEnglishPlan: true },
+        };
+        const execPromise = runLocal();
+        after(async () => {
+          await execPromise;
         });
         return {
           runId: run.id,
           jobId: `sync-deep-local:${run.id}`,
-          plainEnglishPlan: done?.plainEnglishPlan || initialPlan,
+          plainEnglishPlan: initialPlan,
           syncFastPath: true,
           acceptMs,
-          status: done?.status,
-          finalOutput: done?.finalOutput ?? undefined,
         };
       }
-
-      const execPromise = runLocal();
-      after(async () => {
-        await execPromise;
-      });
-      return {
-        runId: run.id,
-        jobId: `sync-deep-local:${run.id}`,
-        plainEnglishPlan: initialPlan,
-        syncFastPath: true,
-        acceptMs,
-      };
     }
 
     const { jobId } = await enqueueAgentRunJob({
