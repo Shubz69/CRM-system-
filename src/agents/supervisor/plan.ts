@@ -548,7 +548,23 @@ export function planAgentRunDeterministic(
   const preferOperatorBrief =
     modeEarly === "ACTION" || modeEarly === "EXECUTIVE";
 
-  // Internal CRM / pipeline — before summarise/research so "Summarise my pipeline" uses deals.
+  // Research / DEEP evidence asks must win over CRM substring collisions
+  // (e.g. "Research … CRM follow-up timing … cite sources" must not become Inbox).
+  if (looksLikeResearch(trimmed) || (modeEarly === "DEEP" && /\b(research|investigate|cite sources|external sources)\b/i.test(trimmed))) {
+    if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
+      return formatClarification();
+    }
+    const topic =
+      extractQuotedOrRemainder(
+        trimmed,
+        /^(please\s+)?(research|look up|find out|investigate|compare|market scan)( (on|for|about))?\s*/i,
+      ) || trimmed;
+    return planResearchPipeline(topic, {
+      answerMode: org?.answerMode ?? detectAnswerModeFromLanguage(trimmed),
+    });
+  }
+
+  // Internal CRM / pipeline — before summarise so "Summarise my pipeline" uses deals.
   if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) {
     return planCrmDesk(trimmed, { preferOperatorBrief });
   }
@@ -588,19 +604,7 @@ export function planAgentRunDeterministic(
     return planSocialListeningPipeline(topic);
   }
 
-  if (looksLikeResearch(trimmed)) {
-    if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
-      return formatClarification();
-    }
-    const topic =
-      extractQuotedOrRemainder(
-        trimmed,
-        /^(please\s+)?(research|look up|find out|investigate|compare|market scan)( (on|for|about))?\s*/i,
-      ) || trimmed;
-    return planResearchPipeline(topic, {
-      answerMode: org?.answerMode ?? detectAnswerModeFromLanguage(trimmed),
-    });
-  }
+  // Research already handled above (before CRM) to avoid follow-up/CRM collisions.
 
   if (looksLikeEcho(trimmed) && looksLikeSummarise(trimmed)) {
     const text =

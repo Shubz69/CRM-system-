@@ -62,6 +62,17 @@ describe("supervisor planning", () => {
     expect((result.plan.steps[0]?.input as { depth?: string }).depth).toBe("FAST");
   });
 
+  it("routes research about CRM topics to research, not Inbox/CRM desk", () => {
+    const result = planAgentRunDeterministic(
+      "Research competing views on CRM follow-up timing for B2B SMEs using external sources only. Cite sources. Do not use my Inbox or CRM records.",
+      { organisationId: "org_test", answerMode: "DEEP" },
+    );
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps.some((s) => s.agentName === "research")).toBe(true);
+    expect(result.plan.steps.some((s) => s.agentName === "crm_desk")).toBe(false);
+  });
+
   it("routes who needs a reply to CRM follow_ups", () => {
     const result = planAgentRunDeterministic("Who needs a reply in my CRM?");
     expect(result.kind).toBe("plan");
