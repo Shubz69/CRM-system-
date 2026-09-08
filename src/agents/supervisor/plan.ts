@@ -53,7 +53,9 @@ export function looksLikeOperatorBrief(request: string): boolean {
   // Reply/follow-up fact questions → follow_ups intent, not full brief (Quick path).
   // ACTION/EXECUTIVE forces operator_brief later via preferOperatorBriefForMode.
   if (
-    /\b(who needs (a )?reply|customers? need(s)? follow|needing reply)\b/.test(t) &&
+    /\b(who needs (a )?reply|customers? need(s)? follow|needing reply|needing (a )?human|needs? human|waiting on me|inbox.{0,40}(waiting|human|reply))\b/.test(
+      t,
+    ) &&
     !/\b(today|prioritis|operator brief|what should i do)\b/.test(t)
   ) {
     return false;
