@@ -559,13 +559,18 @@ export function planAgentRunDeterministic(
     /\bdo not browse\b/i.test(trimmed) ||
     /\bno live web\b/i.test(trimmed)
   ) {
-    const base = planSummarise(
-      `Answer using only the evidence stated below. Prefer primary/authoritative filings and company careers/LinkedIn over blogs or paid directories. Acknowledge conflicts and uncertainty. Do not invent live web results.\n\n${trimmed}`,
-    );
     return {
       kind: "plan",
       plan: {
-        ...base.plan,
+        steps: [
+          {
+            agentName: "summarise",
+            input: {
+              text: `Answer using only the evidence stated below. Prefer primary/authoritative filings and company careers/LinkedIn over blogs or paid directories. Acknowledge conflicts and uncertainty. Do not invent live web results.\n\n${trimmed}`,
+              maxSentences: 5,
+            },
+          },
+        ],
         plainEnglishPlan: "Evaluating the stated evidence without live web search…",
       },
     };
