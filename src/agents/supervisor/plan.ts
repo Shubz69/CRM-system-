@@ -136,6 +136,7 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bwho (is|are) (our|my) (customer|audience)\b/.test(t) ||
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
     /\bwho needs (a )?reply\b/.test(t) ||
+    /\b(waiting on me|inbox.{0,40}(waiting|human|reply)|needing (a )?human|needs? human)\b/.test(t) ||
     /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
     /\bopportunit(y|ies)\b/.test(t) ||
