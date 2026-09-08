@@ -574,7 +574,7 @@ export default function AskPage() {
         );
       }
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 500);
+      pollRef.current = setInterval(() => void poll(json.runId), 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
@@ -620,7 +620,7 @@ export default function AskPage() {
       }
       stopPolling();
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 500);
+      pollRef.current = setInterval(() => void poll(json.runId), 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
@@ -654,7 +654,7 @@ export default function AskPage() {
       }
       stopPolling();
       await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 500);
+      pollRef.current = setInterval(() => void poll(json.runId), 200);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(

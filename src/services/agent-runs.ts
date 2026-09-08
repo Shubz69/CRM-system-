@@ -353,11 +353,14 @@ export async function createAndEnqueueAgentRun(input: {
   });
 
   if (crmQuickSync) {
-    // Fire execute immediately; `after()` only keeps the isolate alive until it finishes.
-    // Do not await execute before accepting — that inflates SERVER_ACCEPT without helping final.
     const { after } = await import("next/server");
     const { executeAgentRun } = await import("@/agents/supervisor/execute");
-    const execPromise = (async () => {
+    // Operator briefs can take several seconds — accept fast via after() keepalive.
+    // Light CRM facts finish in <1s of tool time; awaiting them removes the multi-second
+    // after() scheduling delay that previously dominated Quick P50 (~6s with ~400ms tool).
+    const deferHeavyBrief = looksLikeOperatorBrief(request);
+
+    const runExecute = async () => {
       try {
         await executeAgentRun({
           organisationId: input.organisationId,
@@ -371,6 +374,7 @@ export async function createAndEnqueueAgentRun(input: {
           runId: run.id,
           organisationId: input.organisationId,
           answerMode,
+          deferred: deferHeavyBrief ? 1 : 0,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Sync execute failed";
@@ -413,10 +417,16 @@ export async function createAndEnqueueAgentRun(input: {
           });
         }
       }
-    })();
-    after(async () => {
-      await execPromise;
-    });
+    };
+
+    if (deferHeavyBrief) {
+      const execPromise = runExecute();
+      after(async () => {
+        await execPromise;
+      });
+    } else {
+      await runExecute();
+    }
 
     return {
       runId: run.id,
