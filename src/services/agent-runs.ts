@@ -353,11 +353,10 @@ export async function createAndEnqueueAgentRun(input: {
   });
 
   if (crmQuickSync) {
-    // Start execute immediately in this invocation (avoid multi-second `after()` delay).
-    // Race a short accept budget so SERVER_ACCEPT stays under gate; finish via after if needed.
+    // Fire execute immediately; `after()` only keeps the isolate alive until it finishes.
+    // Do not await execute before accepting — that inflates SERVER_ACCEPT without helping final.
     const { after } = await import("next/server");
     const { executeAgentRun } = await import("@/agents/supervisor/execute");
-    const ACCEPT_BUDGET_MS = 1200;
     const execPromise = (async () => {
       try {
         await executeAgentRun({
@@ -415,16 +414,9 @@ export async function createAndEnqueueAgentRun(input: {
         }
       }
     })();
-
-    const finishedWithinBudget = await Promise.race([
-      execPromise.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ACCEPT_BUDGET_MS)),
-    ]);
-    if (!finishedWithinBudget) {
-      after(async () => {
-        await execPromise;
-      });
-    }
+    after(async () => {
+      await execPromise;
+    });
 
     return {
       runId: run.id,
