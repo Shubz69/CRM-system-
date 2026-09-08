@@ -301,11 +301,17 @@ export async function createAndEnqueueAgentRun(input: {
   const answerMode =
     parseAnswerMode(input.answerMode) ?? detectAnswerModeFromLanguage(request);
 
+  const syntheticJudgment =
+    /\bsynthetic qa\b/i.test(request) ||
+    /\bdo not browse\b/i.test(request) ||
+    /\bno live web\b/i.test(request);
+
   const crmQuickSync =
     (answerMode === AgentAnswerMode.QUICK || answerMode === AgentAnswerMode.ACTION) &&
     !input.referenceAssetId &&
-    (looksLikeCrmInternal(request) || looksLikeOperatorBrief(request)) &&
-    !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request);
+    (looksLikeCrmInternal(request) || looksLikeOperatorBrief(request) || syntheticJudgment) &&
+    (syntheticJudgment ||
+      !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
 
   // Hot path: skip OrganisationAgentLimits round-trip for CRM Quick/Action sync.
   const limits = crmQuickSync

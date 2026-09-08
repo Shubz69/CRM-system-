@@ -248,9 +248,27 @@ function looksLikeSocialListening(request: string): boolean {
 function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
   if (looksLikeImaging(request)) return false;
+  // Synthetic / offline judgment prompts must never enter live research.
+  if (
+    /\bsynthetic qa\b/i.test(request) ||
+    /\bdo not browse\b/i.test(request) ||
+    /\bno live web\b/i.test(request) ||
+    /\bwithout (any )?(live )?web\b/i.test(request)
+  ) {
+    return false;
+  }
   // Negated research / CRM-only instructions must not force the research pipeline.
-  if (/\b(not|without|no)\s+(web\s+)?research\b/i.test(request) || /\binternal only\b/i.test(request)) {
-    if (looksLikeCrmInternal(request) || /\b(crm|contacts?|deals?|pipeline|inbox|workspace)\b/i.test(request)) {
+  if (
+    /\b(not|without|no)\s+(web\s+)?research\b/i.test(request) ||
+    /\binternal only\b/i.test(request) ||
+    /\bdo not browse\b/i.test(request)
+  ) {
+    if (
+      looksLikeCrmInternal(request) ||
+      /\b(crm|contacts?|deals?|pipeline|inbox|workspace|companies house|source|evidence|conflict)\b/i.test(
+        request,
+      )
+    ) {
       return false;
     }
   }
@@ -533,6 +551,24 @@ export function planAgentRunDeterministic(
   // Internal CRM / pipeline — before summarise/research so "Summarise my pipeline" uses deals.
   if (looksLikeCrmInternal(trimmed) || looksLikeOperatorBrief(trimmed)) {
     return planCrmDesk(trimmed, { preferOperatorBrief });
+  }
+
+  // Offline / synthetic fairness judgment — answer from stated evidence only (no live research).
+  if (
+    /\bsynthetic qa\b/i.test(trimmed) ||
+    /\bdo not browse\b/i.test(trimmed) ||
+    /\bno live web\b/i.test(trimmed)
+  ) {
+    const base = planSummarise(
+      `Answer using only the evidence stated below. Prefer primary/authoritative filings and company careers/LinkedIn over blogs or paid directories. Acknowledge conflicts and uncertainty. Do not invent live web results.\n\n${trimmed}`,
+    );
+    return {
+      kind: "plan",
+      plan: {
+        ...base.plan,
+        plainEnglishPlan: "Evaluating the stated evidence without live web search…",
+      },
+    };
   }
 
   if (looksLikeSocialListening(trimmed)) {
