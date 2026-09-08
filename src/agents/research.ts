@@ -309,6 +309,16 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
     /** Reserve evidence budget for primary authorities before secondary fill. */
     const primaryReserve = isHighStakes ? Math.min(12, Math.max(6, Math.floor(maxSources / 2))) : 0;
+    /** Platforms that failed hard this run — do not re-hit on later queries. */
+    const coldPlatforms = new Set<SourcePlatform>();
+    let activePlatforms = [...platforms];
+    const COLD_CODES = new Set([
+      "SOURCE_UNAVAILABLE",
+      "SOURCE_RATE_LIMITED",
+      "SOURCE_NOT_CONFIGURED",
+      "APIFY_DENIED",
+      "APIFY_RUN_FAILED",
+    ]);
 
     async function runSearch(
       query: string,
@@ -316,12 +326,19 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         limit: number;
         includeDomains?: string[];
       },
-    ) {
+    ): Promise<{ resultCount: number; allPlatformsFailed: boolean }> {
       const started = Date.now();
+      const requested = searchOptions.includeDomains?.length
+        ? (["web"] as SourcePlatform[])
+        : activePlatforms;
+      const usePlatforms = requested.filter((p) => !coldPlatforms.has(p));
+      if (usePlatforms.length === 0) {
+        return { resultCount: 0, allPlatformsFailed: true };
+      }
       try {
         const { results, errors, billableCents } = await searchConfiguredSources({
           query,
-          platforms: searchOptions.includeDomains?.length ? (["web"] as SourcePlatform[]) : platforms,
+          platforms: usePlatforms,
           concurrency,
           options: {
             organisationId: ctx.organisationId,
@@ -329,20 +346,25 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             recent: true,
             nicheHint: parsed.nicheHint,
             includeDomains: searchOptions.includeDomains,
+            qualityBudget: fast ? "FAST" : "STANDARD",
           },
         });
         collected.push(...results);
         costCents += billableCents;
         for (const err of errors) {
           adapterErrors.push({ platform: err.platform, message: err.message });
+          if (COLD_CODES.has(err.code)) {
+            coldPlatforms.add(err.platform);
+          }
         }
+        activePlatforms = activePlatforms.filter((p) => !coldPlatforms.has(p));
         await recordResearchToolCall({
           organisationId: ctx.organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
           args: {
             query,
-            platforms: searchOptions.includeDomains?.length ? ["web"] : platforms,
+            platforms: usePlatforms,
             organisationId: ctx.organisationId,
             includeDomains: searchOptions.includeDomains ?? null,
           },
@@ -351,25 +373,33 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             urls: results.map((r) => r.url).slice(0, 40),
             primaryCount: results.filter((r) => isPrimaryAuthorityUrl(r.url)).length,
             errors: errors.map((e) => ({ platform: e.platform, code: e.code })),
+            coldPlatforms: [...coldPlatforms],
           },
           durationMs: Date.now() - started,
         });
+        const errored = new Set(errors.map((e) => e.platform));
+        const allPlatformsFailed =
+          results.length === 0 && usePlatforms.every((p) => errored.has(p));
+        return { resultCount: results.length, allPlatformsFailed };
       } catch (error) {
         const message = error instanceof Error ? error.message : "search failed";
         adapterErrors.push({ platform: "web", message });
+        coldPlatforms.add("web");
+        activePlatforms = activePlatforms.filter((p) => !coldPlatforms.has(p));
         await recordResearchToolCall({
           organisationId: ctx.organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
           args: {
             query,
-            platforms,
+            platforms: usePlatforms,
             organisationId: ctx.organisationId,
             includeDomains: searchOptions.includeDomains ?? null,
           },
           error: message,
           durationMs: Date.now() - started,
         });
+        return { resultCount: 0, allPlatformsFailed: true };
       }
     }
 
@@ -377,6 +407,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     if (authorityDomains.length) {
       const authorityQueries = authorityFirstQueries(topic);
       for (const domain of authorityDomains) {
+        if (coldPlatforms.has("web")) break;
         const q =
           authorityQueries[0] ||
           `UK GDPR personal data storage guidance`;
@@ -387,8 +418,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       }
       // Bounded second attempt per domain if still empty for that host class.
       const havePrimary = collected.some((r) => isPrimaryAuthorityUrl(r.url));
-      if (!havePrimary) {
+      if (!havePrimary && !coldPlatforms.has("web")) {
         for (const domain of authorityDomains) {
+          if (coldPlatforms.has("web")) break;
           await runSearch(`UK GDPR data protection`, {
             limit: 5,
             includeDomains: [domain],
@@ -399,6 +431,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     // Phase 2 — general / secondary queries (no domain filter).
     // FAST / Quick: run remaining queries in parallel to cut wall-clock.
+    // Non-FAST: sequential with circuit-breaker — one all-platform failure wave stops
+    // further query fan-out (avoids 150s+ RUNNING while every Apify/Tavily call fails).
     if (fast) {
       await Promise.all(
         queries.map((query) =>
@@ -409,9 +443,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       );
     } else {
       for (const query of queries) {
-        await runSearch(query, {
+        if (activePlatforms.length === 0) break;
+        if (collected.length >= maxSources) break;
+        const wave = await runSearch(query, {
           limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
         });
+        if (wave.allPlatformsFailed && wave.resultCount === 0) {
+          break;
+        }
       }
     }
 
