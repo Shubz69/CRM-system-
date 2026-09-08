@@ -65,15 +65,28 @@ function resultToCandidate(r: SourceResult, icp: StructuredIcp): SocialProspectC
     return null;
   }
 
-  const personName = r.author?.trim() || guessPersonName(blob);
-  const companyName = guessCompany(blob, icp);
+  // LinkedIn profile titles often look like: "Jane Doe - COO at Acme | LinkedIn"
+  const linkedInTitle = r.title.match(
+    /^([A-Z][A-Za-z'.\-]+(?:\s+[A-Z][A-Za-z'.\-]+){1,3})\s*[-–|]\s*(.+?)(?:\s*[|]\s*LinkedIn)?$/i,
+  );
+  const personName =
+    r.author?.trim() ||
+    linkedInTitle?.[1]?.trim() ||
+    guessPersonName(blob);
+  const companyName =
+    guessCompany(blob, icp) ||
+    linkedInTitle?.[2]?.match(/\bat\s+([A-Z][A-Za-z0-9&'.\-\s]{2,40})/i)?.[1]?.trim();
   if (!personName && !companyName) return null;
 
   // Extract role/location from evidence — never stamp ICP onto every candidate.
   // Include ops/C-suite titles commonly requested in ICP queries (COO was previously missed).
-  const roleFromEvidence = blob.match(
-    /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|chief operating officer|chief executive officer|coo|ceo|cto|cfo|cmo|owner|managing director|operations (?:director|lead|manager)|head of operations|director|creator|dentist|influencer)s?\b/i,
-  )?.[1];
+  const roleFromEvidence =
+    linkedInTitle?.[2]?.match(
+      /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|chief operating officer|chief executive officer|coo|ceo|cto|cfo|cmo|owner|managing director|operations (?:director|lead|manager)|head of operations|director|creator|dentist|influencer)s?\b/i,
+    )?.[1] ||
+    blob.match(
+      /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|chief operating officer|chief executive officer|coo|ceo|cto|cfo|cmo|owner|managing director|operations (?:director|lead|manager)|head of operations|director|creator|dentist|influencer)s?\b/i,
+    )?.[1];
   const locFromEvidence = blob.match(
     /\b(london|manchester|birmingham|edinburgh|glasgow|bristol|leeds|uk|united kingdom|england|scotland|wales)\b/i,
   )?.[1];
@@ -218,7 +231,8 @@ export async function gatherProspectCandidatesFromResearch(input: {
         fetch: async () => {
           tiersTried.push("tavily_http");
           const items: SourceResult[] = [];
-          for (const q of orderedQueries.slice(0, wantsInstagram ? 4 : 2)) {
+          // Prefer enough LinkedIn/site queries to surface verifiable people; still hard-capped by limits.
+          for (const q of orderedQueries.slice(0, wantsInstagram ? 4 : 4)) {
             if (externalCalls >= limits.maxExternalCalls) break;
             if (billableCents >= limits.maxEstimatedCostCents) break;
             externalCalls += 1;
