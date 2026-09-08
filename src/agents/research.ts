@@ -298,15 +298,28 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       },
     });
 
-    const platforms = (parsed.platforms as SourcePlatform[] | undefined)?.length
+    const configuredPlatforms = listConfiguredSourcePlatforms();
+    const explicitPlatforms = (parsed.platforms as SourcePlatform[] | undefined)?.length
       ? (parsed.platforms as SourcePlatform[])
-      : listConfiguredSourcePlatforms();
+      : null;
+    const authorityDomains = ukPrimaryAuthorityDomains(topic);
+    const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
+    // Desk research defaults to evidence platforms — not every social scraper.
+    // Apify LinkedIn/TikTok/etc. are for social listening / prospecting, and their
+    // long timeouts previously stranded DEEP GDPR runs in RUNNING for minutes.
+    const defaultResearchPlatforms = (
+      isHighStakes ||
+      /\b(gdpr|ico|regulation|lawful|compliance|ofcom|gov\.uk)\b/i.test(topic)
+        ? (["web"] as SourcePlatform[])
+        : (["web", "reddit", "youtube"] as SourcePlatform[])
+    ).filter((p) => configuredPlatforms.includes(p));
+    const platforms =
+      explicitPlatforms ??
+      (defaultResearchPlatforms.length ? defaultResearchPlatforms : configuredPlatforms);
 
     const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
     const collected: SourceResult[] = [];
     const adapterErrors: Array<{ platform: string; message: string }> = [];
-    const authorityDomains = ukPrimaryAuthorityDomains(topic);
-    const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
     /** Reserve evidence budget for primary authorities before secondary fill. */
     const primaryReserve = isHighStakes ? Math.min(12, Math.max(6, Math.floor(maxSources / 2))) : 0;
     /** Platforms that failed hard this run — do not re-hit on later queries. */
@@ -448,7 +461,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         const wave = await runSearch(query, {
           limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
         });
-        if (wave.allPlatformsFailed && wave.resultCount === 0) {
+        if (wave.allPlatformsFailed || wave.resultCount === 0) {
           break;
         }
       }
