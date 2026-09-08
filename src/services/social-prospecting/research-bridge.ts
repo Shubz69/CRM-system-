@@ -69,12 +69,13 @@ function resultToCandidate(r: SourceResult, icp: StructuredIcp): SocialProspectC
   const companyName = guessCompany(blob, icp);
   if (!personName && !companyName) return null;
 
-  // Extract role/location from evidence — never stamp ICP onto every candidate
+  // Extract role/location from evidence — never stamp ICP onto every candidate.
+  // Include ops/C-suite titles commonly requested in ICP queries (COO was previously missed).
   const roleFromEvidence = blob.match(
-    /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|ceo|owner|director|creator|dentist|influencer)s?\b/i,
+    /\b((?:co[- ]?)?founder(?:\s*[&/]\s*ceo)?|chief operating officer|chief executive officer|coo|ceo|cto|cfo|cmo|owner|managing director|operations (?:director|lead|manager)|head of operations|director|creator|dentist|influencer)s?\b/i,
   )?.[1];
   const locFromEvidence = blob.match(
-    /\b(london|manchester|birmingham|edinburgh|glasgow|uk|united kingdom|england|scotland|wales)\b/i,
+    /\b(london|manchester|birmingham|edinburgh|glasgow|bristol|leeds|uk|united kingdom|england|scotland|wales)\b/i,
   )?.[1];
 
   if (/^https?:\/\/(www\.)?(bbc|reuters|wikipedia|gov\.uk)\./i.test(r.url) && !personName) {
