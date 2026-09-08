@@ -68,13 +68,16 @@ export async function POST(req: NextRequest) {
     });
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(raw);
-    const { runId, jobId, plainEnglishPlan, syncFastPath } = await createAndEnqueueAgentRun({
-      organisationId: session.organisationId,
-      userId: session.userId,
-      request: body.request,
-      referenceAssetId: body.referenceAssetId ?? null,
-      answerMode: body.answerMode ?? null,
-    });
+    const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs } =
+      await createAndEnqueueAgentRun({
+        organisationId: session.organisationId,
+        userId: session.userId,
+        request: body.request,
+        referenceAssetId: body.referenceAssetId ?? null,
+        answerMode: body.answerMode ?? null,
+        // Route already asserted workspace access — avoid a second membership round-trip.
+        accessAlreadyVerified: true,
+      });
     return Response.json({
       ok: true,
       runId,
@@ -82,6 +85,7 @@ export async function POST(req: NextRequest) {
       answerMode: body.answerMode ?? null,
       plainEnglishPlan,
       syncFastPath,
+      acceptMs,
       message: plainEnglishPlan || "Started — you'll see progress as each step finishes.",
     });
   } catch (error) {

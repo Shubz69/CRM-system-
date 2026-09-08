@@ -162,9 +162,18 @@ export function parseProspectIntent(raw: string): StructuredIcp {
     "coaching",
     "recruitment",
     "recruiting",
+    "professional services",
+    "professional-services",
+    "accountancy",
+    "accounting",
+    "law",
+    "legal",
+    "logistics",
+    "property",
+    "property-management",
   ]) {
     if (lower.includes(token)) {
-      industry = token;
+      industry = token.replace(/-/g, " ");
       break;
     }
   }

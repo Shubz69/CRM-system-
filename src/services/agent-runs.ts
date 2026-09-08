@@ -20,6 +20,10 @@ import {
   parseAnswerMode,
 } from "@/services/answer-modes";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
+import {
+  looksLikeCrmInternal,
+  looksLikeOperatorBrief,
+} from "@/agents/supervisor/plan";
 
 export type AgentRunProgress = {
   runId: string;
@@ -240,7 +244,16 @@ export async function createAndEnqueueAgentRun(input: {
   triggeredBy?: "user" | "system" | "schedule";
   referenceAssetId?: string | null;
   answerMode?: AgentAnswerMode | string | null;
-}): Promise<{ runId: string; jobId: string; plainEnglishPlan: string; syncFastPath: boolean }> {
+  /** When the HTTP layer already asserted membership, skip a second DB round-trip. */
+  accessAlreadyVerified?: boolean;
+}): Promise<{
+  runId: string;
+  jobId: string;
+  plainEnglishPlan: string;
+  syncFastPath: boolean;
+  acceptMs: number;
+}> {
+  const acceptStarted = Date.now();
   ensureAgentsRegistered();
   const request = input.request.trim();
   if (!request) {
@@ -248,21 +261,23 @@ export async function createAndEnqueueAgentRun(input: {
   }
 
   // Validate org (+ membership when a user is attached) before any FK write.
-  if (input.userId) {
-    await assertActiveWorkspaceAccess({
-      userId: input.userId,
-      organisationId: input.organisationId,
-    });
-  } else {
-    const org = await prisma.organisation.findFirst({
-      where: { id: input.organisationId, deletedAt: null },
-      select: { id: true },
-    });
-    if (!org) {
-      throw new WorkspaceAccessError(
-        "SESSION_ORG_INVALID",
-        "Your workspace is no longer available. Please sign in again.",
-      );
+  if (!input.accessAlreadyVerified) {
+    if (input.userId) {
+      await assertActiveWorkspaceAccess({
+        userId: input.userId,
+        organisationId: input.organisationId,
+      });
+    } else {
+      const org = await prisma.organisation.findFirst({
+        where: { id: input.organisationId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!org) {
+        throw new WorkspaceAccessError(
+          "SESSION_ORG_INVALID",
+          "Your workspace is no longer available. Please sign in again.",
+        );
+      }
     }
   }
 
@@ -279,21 +294,21 @@ export async function createAndEnqueueAgentRun(input: {
     }
   }
 
-  const limits = await prisma.organisationAgentLimits.findUnique({
-    where: { organisationId: input.organisationId },
-  });
-
   const answerMode =
     parseAnswerMode(input.answerMode) ?? detectAnswerModeFromLanguage(request);
 
-  const { looksLikeCrmInternal, looksLikeOperatorBrief } = await import(
-    "@/agents/supervisor/plan"
-  );
   const crmQuickSync =
     (answerMode === AgentAnswerMode.QUICK || answerMode === AgentAnswerMode.ACTION) &&
     !input.referenceAssetId &&
     (looksLikeCrmInternal(request) || looksLikeOperatorBrief(request)) &&
     !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request);
+
+  // Hot path: skip OrganisationAgentLimits round-trip for CRM Quick/Action sync.
+  const limits = crmQuickSync
+    ? null
+    : await prisma.organisationAgentLimits.findUnique({
+        where: { organisationId: input.organisationId },
+      });
 
   const initialPlan = crmQuickSync
     ? looksLikeOperatorBrief(request)
@@ -404,6 +419,7 @@ export async function createAndEnqueueAgentRun(input: {
       jobId: `sync-quick-crm:${run.id}`,
       plainEnglishPlan: initialPlan,
       syncFastPath: true,
+      acceptMs: Date.now() - acceptStarted,
     };
   }
 
@@ -424,6 +440,7 @@ export async function createAndEnqueueAgentRun(input: {
       jobId,
       plainEnglishPlan: initialPlan,
       syncFastPath: false,
+      acceptMs: Date.now() - acceptStarted,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Enqueue failed";

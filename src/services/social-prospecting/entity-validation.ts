@@ -403,22 +403,34 @@ export function matchCompanySizeIntent(
   if (range) {
     const lo = Number(range[1]);
     const hi = Number(range[2]);
-    const mentioned = [...hay.matchAll(/\b(\d{1,4})\s*(?:[-–—]\s*(\d{1,4})\s*)?(?:employees?|people|staff|ftes?)\b/gi)];
-    for (const m of mentioned) {
+    const patterns = [
+      ...hay.matchAll(
+        /\b(?:company\s*size|headcount|employees?|people|staff|ftes?)[:\s]*(\d{1,4})\s*(?:[-–—to]+\s*(\d{1,4}))?\b/gi,
+      ),
+      ...hay.matchAll(/\b(\d{1,4})\s*(?:[-–—]\s*(\d{1,4})\s*)?(?:employees?|people|staff|ftes?)\b/gi),
+    ];
+    for (const m of patterns) {
       const a = Number(m[1]);
       const b = m[2] ? Number(m[2]) : a;
-      const mid = (a + b) / 2;
-      if (mid >= lo && mid <= hi) {
-        return { status: "MATCHED", evidence: m[0] };
+      if (!Number.isFinite(a)) continue;
+      const mid = (a + (Number.isFinite(b) ? b : a)) / 2;
+      const overlapLo = Math.max(lo, a);
+      const overlapHi = Math.min(hi, Number.isFinite(b) ? b : a);
+      const overlaps = overlapHi >= overlapLo;
+      if ((mid >= lo && mid <= hi) || overlaps) {
+        return { status: "MATCHED", evidence: m[0].trim() };
       }
-      if (b < lo || a > hi) {
-        return { status: "FAILED", evidence: m[0] };
+      if ((Number.isFinite(b) ? b : a) < lo || a > hi) {
+        return { status: "FAILED", evidence: m[0].trim() };
       }
     }
     return { status: "NOT_VERIFIED" };
   }
   if (/\bsme\b|small[- ]?mid|small team|small firm/i.test(requestedSize)) {
-    if (/\b(\d{1,2}|1\d{2})\s*(?:employees?|people|staff)\b/i.test(hay) || /\bsme\b|small[- ]?(team|firm|business)/i.test(hay)) {
+    if (
+      /\b(\d{1,2}|1\d{2})\s*(?:employees?|people|staff)\b/i.test(hay) ||
+      /\bsme\b|small[- ]?(team|firm|business)/i.test(hay)
+    ) {
       return { status: "MATCHED", evidence: "small/SME signal" };
     }
     return { status: "NOT_VERIFIED" };

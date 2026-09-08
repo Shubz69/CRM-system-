@@ -194,22 +194,40 @@ export async function executeAgentRun(input: {
   };
 
   const startedAt = run.startedAt ?? new Date();
-  await prisma.agentRun.updateMany({
-    where: { id: run.id, organisationId: input.organisationId },
-    data: {
-      status: "PLANNING",
-      startedAt,
-      partialResults: {
-        ...priorPartial,
-        latencyTrace,
-      } as Prisma.InputJsonValue,
-      maxSteps,
-      maxWallClockSeconds,
-      maxSpendCents,
-      // Customer-facing stage while planning (no agents/tools jargon).
-      plainEnglishPlan: run.plainEnglishPlan || CUSTOMER_PROGRESS_STAGES.understanding,
-    },
-  });
+  // CRM Quick/Action sync already set a customer-facing plan — avoid an extra PLANNING write.
+  const { looksLikeCrmInternal } = await import("@/agents/supervisor/plan");
+  const skipHeavyBizContext =
+    (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
+    looksLikeCrmInternal(run.request);
+  if (!skipHeavyBizContext || !run.plainEnglishPlan) {
+    await prisma.agentRun.updateMany({
+      where: { id: run.id, organisationId: input.organisationId },
+      data: {
+        status: "PLANNING",
+        startedAt,
+        partialResults: {
+          ...priorPartial,
+          latencyTrace,
+        } as Prisma.InputJsonValue,
+        maxSteps,
+        maxWallClockSeconds,
+        maxSpendCents,
+        plainEnglishPlan: run.plainEnglishPlan || CUSTOMER_PROGRESS_STAGES.understanding,
+      },
+    });
+  } else {
+    await prisma.agentRun.updateMany({
+      where: { id: run.id, organisationId: input.organisationId },
+      data: {
+        status: "PLANNING",
+        startedAt,
+        partialResults: {
+          ...priorPartial,
+          latencyTrace,
+        } as Prisma.InputJsonValue,
+      },
+    });
+  }
 
   // Understanding / business-context stages (customer-facing only).
   // QUICK/ACTION CRM desk answers do not need Context Resolver + full Business Profile
@@ -217,10 +235,6 @@ export async function executeAgentRun(input: {
   let businessContextKnownFacts: string[] = [];
   const tBiz0 = Date.now();
   let askCtxCached: Awaited<ReturnType<typeof resolveAskBusinessContext>> | null = null;
-  const { looksLikeCrmInternal } = await import("@/agents/supervisor/plan");
-  const skipHeavyBizContext =
-    (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
-    looksLikeCrmInternal(run.request);
   if (!skipHeavyBizContext) {
   try {
     askCtxCached = await resolveAskBusinessContext({
