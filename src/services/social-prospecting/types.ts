@@ -109,7 +109,9 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   // Desired count — do not treat headcount ("35 employees") as result count.
   const desiredMatch =
     text.match(/\b(?:top|find|get|return|show|need)\s*(\d{1,3})\b/i) ||
-    text.match(/\b(\d{1,3})\s*(?:prospects?|results?|candidates|leads)\b/i);
+    text.match(/\b(\d{1,3})\s*(?:prospects?|results?|candidates|leads)\b/i) ||
+    // "5 UK recruitment founders" / "3 London dentists"
+    text.match(/^\s*(\d{1,3})\s+(?!(?:employees?|people|staff|ftes?)\b)/i);
   const desiredCount = Math.min(100, Math.max(1, desiredMatch ? Number(desiredMatch[1]) : 10));
 
   const preferredNetworks: StructuredIcp["preferredNetworks"] = [];
