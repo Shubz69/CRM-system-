@@ -23,6 +23,24 @@ function localAckLabel(prompt: string): string {
   return "Preparing your answer…";
 }
 
+/** Event-handler clock — kept outside the component so purity lint does not treat submit as render. */
+function askNowMs(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+type AskTimingProbe = { localAckMs: number; serverAcceptMs?: number };
+
+function writeAskTimingProbe(partial: AskTimingProbe) {
+  if (typeof window === "undefined") return;
+  const w = window as Window & { __askTiming?: AskTimingProbe };
+  w.__askTiming = {
+    localAckMs: partial.localAckMs,
+    ...(partial.serverAcceptMs != null ? { serverAcceptMs: partial.serverAcceptMs } : {}),
+  };
+}
+
 type Progress = {
   runId: string;
   status: string;
@@ -486,10 +504,7 @@ export default function AskPage() {
     // Always read frozen context at execution time (never a stale render snapshot).
     const ctx = getImmutableWorkspaceContext(null);
     // Immediate local acknowledgement — do not wait for network/poll.
-    const clickAt =
-      typeof performance !== "undefined" && typeof performance.now === "function"
-        ? performance.now()
-        : Date.now();
+    const clickAt = askNowMs();
     flushSync(() => {
       setSubmitting(true);
       setProgress({
@@ -518,19 +533,8 @@ export default function AskPage() {
         nextActions: ["Sit tight — progress updates as each step finishes"],
       });
     });
-    const localAckMs =
-      (typeof performance !== "undefined" && typeof performance.now === "function"
-        ? performance.now()
-        : Date.now()) - clickAt;
-    if (typeof window !== "undefined") {
-      // QA instrumentation — not React state.
-      // eslint-disable-next-line react-hooks/immutability, react-hooks/purity -- window probe for LOCAL_ACK
-      (
-        window as Window & {
-          __askTiming?: { localAckMs: number; serverAcceptMs?: number };
-        }
-      ).__askTiming = { localAckMs: Math.round(localAckMs) };
-    }
+    const localAckMs = askNowMs() - clickAt;
+    writeAskTimingProbe({ localAckMs: Math.round(localAckMs) });
     stopPolling();
     try {
       const res = await workspaceFetch(ctx.loadedOrganisationId, ctx.workspaceRevision, "/api/ask", {
@@ -549,21 +553,11 @@ export default function AskPage() {
       const serverAcceptMs =
         typeof json.acceptMs === "number"
           ? json.acceptMs
-          : Math.round(
-              (typeof performance !== "undefined" && typeof performance.now === "function"
-                ? performance.now()
-                : Date.now()) - clickAt,
-            );
-      if (typeof window !== "undefined") {
-        const w = window as Window & {
-          __askTiming?: { localAckMs: number; serverAcceptMs?: number };
-        };
-        // eslint-disable-next-line react-hooks/immutability, react-hooks/purity -- window probe for SERVER_ACCEPT
-        w.__askTiming = {
-          localAckMs: w.__askTiming?.localAckMs ?? Math.round(localAckMs),
-          serverAcceptMs,
-        };
-      }
+          : Math.round(askNowMs() - clickAt);
+      writeAskTimingProbe({
+        localAckMs: Math.round(localAckMs),
+        serverAcceptMs,
+      });
       setRunId(json.runId);
       if (json.plainEnglishPlan || json.message) {
         setProgress((prev) =>
