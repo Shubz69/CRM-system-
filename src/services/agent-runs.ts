@@ -512,6 +512,37 @@ export async function createAndEnqueueAgentRun(input: {
           }
         }
       };
+
+      const mustAwait =
+        answerMode === AgentAnswerMode.DEEP ||
+        /\b(research|gdpr|investigate|compare)\b/i.test(request);
+
+      if (mustAwait) {
+        // Keep the serverless invocation alive for DEEP/research — after()-only
+        // previously left runs stranded in RUNNING when the isolate froze.
+        try {
+          await Promise.race([
+            runLocal(),
+            new Promise<void>((resolve) => setTimeout(resolve, 95_000)),
+          ]);
+        } catch {
+          /* runLocal already records failure / enqueue fallback */
+        }
+        const done = await prisma.agentRun.findFirst({
+          where: { id: run.id, organisationId: input.organisationId },
+          select: { status: true, finalOutput: true, plainEnglishPlan: true },
+        });
+        return {
+          runId: run.id,
+          jobId: `sync-deep-local:${run.id}`,
+          plainEnglishPlan: done?.plainEnglishPlan || initialPlan,
+          syncFastPath: true,
+          acceptMs,
+          status: done?.status,
+          finalOutput: done?.finalOutput ?? undefined,
+        };
+      }
+
       const execPromise = runLocal();
       after(async () => {
         await execPromise;
