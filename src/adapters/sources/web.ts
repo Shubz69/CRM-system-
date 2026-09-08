@@ -38,7 +38,7 @@ async function searchTavily(
     query: options.nicheHint ? `${query} ${options.nicheHint}` : query,
     max_results: limit,
     include_answer: false,
-    search_depth: "advanced",
+    search_depth: "basic",
   };
   if (options.includeDomains?.length) {
     body.include_domains = options.includeDomains;

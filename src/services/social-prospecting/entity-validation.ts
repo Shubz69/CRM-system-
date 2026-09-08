@@ -168,7 +168,11 @@ export function classifyEntity(input: {
 
 export function isPlausibleHumanName(name?: string | null): boolean {
   if (!name) return false;
-  const n = name.trim();
+  // Strip parenthetical aliases: "Ann Stanley (aka Simmonds)" → "Ann Stanley"
+  const n = name
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (n.length < 3 || n.length > 60) return false;
   if (FRAGMENT_PATTERNS.some((p) => p.test(n))) return false;
   if (isScrapedFragment(n) || isPrivacyOrLegalText(n)) return false;
@@ -425,6 +429,30 @@ export function matchCompanySizeIntent(
       }
     }
     return { status: "NOT_VERIFIED" };
+  }
+  // Single headcount requests e.g. "35 employees" / "about 40 staff"
+  const single = requestedSize.match(/(\d{1,4})/);
+  if (single) {
+    const target = Number(single[1]);
+    if (Number.isFinite(target)) {
+      const patterns = [
+        ...hay.matchAll(
+          /\b(?:company\s*size|headcount|employees?|people|staff|ftes?)[:\s]*(\d{1,4})\b/gi,
+        ),
+        ...hay.matchAll(/\b(\d{1,4})\s*(?:employees?|people|staff|ftes?)\b/gi),
+      ];
+      for (const m of patterns) {
+        const a = Number(m[1]);
+        if (!Number.isFinite(a)) continue;
+        if (Math.abs(a - target) <= 2) {
+          return { status: "MATCHED", evidence: m[0].trim() };
+        }
+        if (Math.abs(a - target) > Math.max(10, target * 0.5)) {
+          return { status: "FAILED", evidence: m[0].trim() };
+        }
+      }
+      return { status: "NOT_VERIFIED" };
+    }
   }
   if (/\bsme\b|small[- ]?mid|small team|small firm/i.test(requestedSize)) {
     if (
