@@ -454,6 +454,71 @@ export async function createAndEnqueueAgentRun(input: {
   }
 
   try {
+    // Prefer in-process execution with after() keepalive on serverless preview so
+    // DEEP/research does not stall forever if the worker is lagging. Still enqueue
+    // as a secondary path only when we cannot schedule after()/local execute.
+    const preferLocalExecute =
+      process.env.VERCEL_ENV === "preview" ||
+      answerMode === AgentAnswerMode.DEEP ||
+      /\b(research|gdpr|investigate|compare)\b/i.test(request);
+
+    if (preferLocalExecute) {
+      const runLocal = async () => {
+        try {
+          await executeAgentRun({
+            organisationId: input.organisationId,
+            runId: run.id,
+          });
+          await prisma.agentRun.updateMany({
+            where: { id: run.id, organisationId: input.organisationId, bullJobId: null },
+            data: { bullJobId: `sync-deep-local:${run.id}` },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Execute failed";
+          logger.error("Local deep/research execute failed", {
+            runId: run.id,
+            organisationId: input.organisationId,
+            error: message,
+          });
+          try {
+            const { jobId } = await enqueueAgentRunJob({
+              name: "agent-framework-run",
+              organisationId: input.organisationId,
+              payload: { agentRunId: run.id },
+            });
+            await prisma.agentRun.updateMany({
+              where: { id: run.id, organisationId: input.organisationId },
+              data: { bullJobId: jobId },
+            });
+          } catch (fallbackError) {
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : "Enqueue failed";
+            await prisma.agentRun.updateMany({
+              where: { id: run.id, organisationId: input.organisationId },
+              data: {
+                status: "FAILED",
+                finishedAt: new Date(),
+                error: fallbackMessage,
+                userFacingError:
+                  "I couldn't finish that request. Please try again in a moment.",
+              },
+            });
+          }
+        }
+      };
+      const execPromise = runLocal();
+      after(async () => {
+        await execPromise;
+      });
+      return {
+        runId: run.id,
+        jobId: `sync-deep-local:${run.id}`,
+        plainEnglishPlan: initialPlan,
+        syncFastPath: true,
+        acceptMs,
+      };
+    }
+
     const { jobId } = await enqueueAgentRunJob({
       name: "agent-framework-run",
       organisationId: input.organisationId,
