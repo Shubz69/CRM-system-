@@ -703,7 +703,7 @@ export function validateProspectCandidate(
     candidate.role,
     candidate.companyName,
   );
-  let industryConstraint: ConstraintStatus = !icp.industry
+  const industryConstraint: ConstraintStatus = !icp.industry
     ? "NOT_VERIFIED"
     : industry.status;
   if (icp.industry && industry.status === "FAILED") {

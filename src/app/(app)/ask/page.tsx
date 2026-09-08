@@ -523,6 +523,8 @@ export default function AskPage() {
         ? performance.now()
         : Date.now()) - clickAt;
     if (typeof window !== "undefined") {
+      // QA instrumentation — not React state.
+      // eslint-disable-next-line react-hooks/immutability, react-hooks/purity -- window probe for LOCAL_ACK
       (
         window as Window & {
           __askTiming?: { localAckMs: number; serverAcceptMs?: number };
@@ -556,6 +558,7 @@ export default function AskPage() {
         const w = window as Window & {
           __askTiming?: { localAckMs: number; serverAcceptMs?: number };
         };
+        // eslint-disable-next-line react-hooks/immutability, react-hooks/purity -- window probe for SERVER_ACCEPT
         w.__askTiming = {
           localAckMs: w.__askTiming?.localAckMs ?? Math.round(localAckMs),
           serverAcceptMs,
