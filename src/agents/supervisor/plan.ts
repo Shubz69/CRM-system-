@@ -141,7 +141,8 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
     /\bopportunit(y|ies)\b/.test(t) ||
     /\b(crm pulse|status check|inbox snapshot|what needs me|what'?s urgent|any fires|top risk)\b/.test(t) ||
-    /\b(how many open|don'?t invent deals|crm contacts?)\b/.test(t)
+    (/\b(how many open|don'?t invent deals)\b/.test(t) &&
+      !/\b(research|gdpr|ico|requirements)\b/.test(t))
   );
 }
 
