@@ -89,7 +89,7 @@ const ROLE_HINTS =
 const LOCATION_HINTS =
   /\b(uk|united kingdom|london|manchester|birmingham|scotland|wales|england|europe|eu|usa|us|new york|california)\b/i;
 const SIZE_HINTS =
-  /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}(?:\s*(?:employees?|people|staff|ftes?))?|(?:under|fewer than|less than|<)\s*\d{1,4}\s*(?:employees?|people|staff)?|(?:small|mid[- ]?size|smes?)(?:\s+(?:firms?|companies|businesses?))?)\b/i;
+  /\b(\d{1,4}\s*[-–—to]+\s*\d{1,4}(?:\s*(?:employees?|people|staff|ftes?))?|\d{1,4}\s*(?:employees?|people|staff|ftes?)|(?:under|fewer than|less than|<)\s*\d{1,4}\s*(?:employees?|people|staff)?|(?:about|approx(?:imately)?|around|~)\s*\d{1,4}\s*(?:employees?|people|staff|ftes?)?|(?:small|mid[- ]?size|smes?)(?:\s+(?:firms?|companies|businesses?))?)\b/i;
 
 /**
  * Convert natural language prospecting intent into a structured ICP.
@@ -106,7 +106,10 @@ export function parseProspectIntent(raw: string): StructuredIcp {
       : "company"
     : "person";
 
-  const desiredMatch = text.match(/\b(\d{1,3})\b/);
+  // Desired count — do not treat headcount ("35 employees") as result count.
+  const desiredMatch =
+    text.match(/\b(?:top|find|get|return|show|need)\s*(\d{1,3})\b/i) ||
+    text.match(/\b(\d{1,3})\s*(?:prospects?|results?|candidates|leads)\b/i);
   const desiredCount = Math.min(100, Math.max(1, desiredMatch ? Number(desiredMatch[1]) : 10));
 
   const preferredNetworks: StructuredIcp["preferredNetworks"] = [];
