@@ -128,8 +128,9 @@ export function parseProspectIntent(raw: string): StructuredIcp {
     else if (/co-?founder/.test(role)) role = "founder";
     else if (/head of/.test(role)) role = roleRaw!.toLowerCase();
   }
-  // Prefer country/region context: "UK" wins over bare city when both present
-  let location = text.match(/\b(united kingdom|uk)\b/i)?.[1]?.toLowerCase();
+  // Prefer city when present alongside country (tighter EXACT geography).
+  const city = text.match(/\b(london|manchester|birmingham|edinburgh|glasgow|bristol|leeds)\b/i)?.[1]?.toLowerCase();
+  let location = city || text.match(/\b(united kingdom|uk)\b/i)?.[1]?.toLowerCase();
   if (!location) {
     location = text.match(LOCATION_HINTS)?.[1]?.toLowerCase();
   }
