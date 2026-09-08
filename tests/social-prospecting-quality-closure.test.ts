@@ -575,6 +575,35 @@ describe("Final social prospecting quality closure", () => {
     expect(decision.locationEvidence).toBeTruthy();
   });
 
+  it("role-only matches stay POSSIBLE (prevents FALSE_EXACT on vague CEO hits)", () => {
+    const icp = parseProspectIntent("Find a CEO");
+    expect(icp.role).toBeTruthy();
+    expect(icp.location).toBeFalsy();
+    const decision = validateProspectCandidate(
+      {
+        personName: "Any Ceo",
+        role: "CEO",
+        linkedinUrl: "https://www.linkedin.com/in/any-ceo",
+        sourceEvidence: [
+          evidence("Any Ceo is CEO at SomeCo", "https://www.linkedin.com/in/any-ceo"),
+        ],
+        socialIdentities: [
+          {
+            network: "LINKEDIN",
+            canonicalProfileUrl: "https://www.linkedin.com/in/any-ceo",
+            confidence: 0.9,
+            verificationState: "VERIFIED",
+            evidence: [],
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      icp,
+    );
+    expect(decision.accepted).toBe(true);
+    expect(decision.matchTier).toBe("POSSIBLE");
+  });
+
   it("size ranges and SMEs force POSSIBLE when size unverified", () => {
     const icp = parseProspectIntent("COO or operations lead UK professional services 10-50");
     expect(icp.companySize).toBeTruthy();

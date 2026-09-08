@@ -811,12 +811,15 @@ export function validateProspectCandidate(
   }
   const allMatched =
     requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");
-  // EXACT requires role/size/industry (not location alone) + every requested constraint MATCHED + evidence.
+  // EXACT needs ≥2 matched mandatory constraint classes (e.g. role+location).
+  // Role-only MATCHED is POSSIBLE — otherwise any CEO snippet becomes FALSE_EXACT.
+  const matchedConstraintClasses = requestedStatuses.filter((s) => s === "MATCHED").length;
   const matchTier: ProspectMatchTier =
     !hasRoleOrSizeOrIndustry ||
     possibleOnly ||
     !allMatched ||
-    evidenceGaps.length > 0
+    evidenceGaps.length > 0 ||
+    matchedConstraintClasses < 2
       ? "POSSIBLE"
       : "EXACT";
 
