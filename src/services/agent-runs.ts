@@ -480,6 +480,51 @@ export async function createAndEnqueueAgentRun(input: {
           where: { id: run.id, organisationId: input.organisationId },
           data: { bullJobId: jobId },
         });
+        // Backup if the worker is restarting / never picks up: reclaim PENDING or
+        // stale PLANNING/RUNNING with no steps (orphaned by a deploy kill).
+        after(async () => {
+          const delays = [12_000, 28_000, 50_000];
+          let waited = 0;
+          for (const target of delays) {
+            await new Promise((r) => setTimeout(r, target - waited));
+            waited = target;
+            const cur = await prisma.agentRun.findFirst({
+              where: { id: run.id, organisationId: input.organisationId },
+              select: { status: true, updatedAt: true, partialResults: true },
+            });
+            if (!cur) return;
+            if (
+              ["COMPLETED", "PARTIAL", "FAILED", "AWAITING_CLARIFICATION", "AWAITING_PROMPT_CONFIRM"].includes(
+                cur.status,
+              )
+            ) {
+              return;
+            }
+            const pr =
+              cur.partialResults && typeof cur.partialResults === "object"
+                ? (cur.partialResults as { steps?: unknown[] })
+                : null;
+            const hasSteps = Array.isArray(pr?.steps) && pr!.steps!.length > 0;
+            const staleMs = Date.now() - cur.updatedAt.getTime();
+            const reclaim =
+              cur.status === "PENDING" ||
+              ((cur.status === "PLANNING" || cur.status === "RUNNING") && !hasSteps && staleMs >= 20_000);
+            if (!reclaim) continue;
+            try {
+              await executeAgentRun({
+                organisationId: input.organisationId,
+                runId: run.id,
+              });
+            } catch (error) {
+              logger.warn("Ask after() reclaim execute failed", {
+                runId: run.id,
+                organisationId: input.organisationId,
+                error: error instanceof Error ? error.message : "unknown",
+              });
+            }
+            return;
+          }
+        });
         return {
           runId: run.id,
           jobId,
