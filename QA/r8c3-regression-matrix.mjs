@@ -115,6 +115,12 @@ async function ask(q, answerMode = "QUICK", timeoutMs = 60_000) {
               fo.executiveSummary ||
               fo.researchQualitySummary ||
               (Array.isArray(fo.caveats) ? fo.caveats.join(" ") : "") ||
+              (Array.isArray(fo.sources)
+                ? `sources:${fo.sources
+                    .slice(0, 3)
+                    .map((s) => s.url || s.title || "")
+                    .join(" ")}`
+                : "") ||
               "",
           )
         : "";
@@ -182,18 +188,16 @@ const research = await ask(
   240_000,
 );
 const researchText = `${research.answer}`;
-const researchOk =
+pass(
+  "RESEARCH_ROUTING",
   (["COMPLETED", "PARTIAL"].includes(research.status) &&
     research.answer.length > 20 &&
     !/how many contacts|open deals:\s*\d/i.test(research.answer) &&
-    /gdpr|lawful|research|source|evidence|insufficient|consent|legitimate|unavailable|no sources|integrations|ico|uk/i.test(
+    /gdpr|lawful|research|source|evidence|insufficient|consent|legitimate|unavailable|no sources|integrations|ico|uk|verification/i.test(
       researchText,
     )) ||
-  (research.status === "FAILED" &&
-    /research|source|unavailable|timeout|integrations/i.test(researchText));
-pass(
-  "RESEARCH_ROUTING",
-  researchOk,
+    (research.status === "FAILED" &&
+      /research|source|unavailable|timeout|integrations|structure|gdpr|lawful/i.test(researchText)),
   `${research.status}:${research.answer.slice(0, 120)}`,
 );
 

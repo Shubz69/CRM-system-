@@ -74,6 +74,9 @@ export const researchOutputSchema = z.object({
   ),
   summary: z.string(),
   adapterErrors: z.array(z.object({ platform: z.string(), message: z.string() })),
+  /** Honest degrade markers when sources exist but findings are incomplete. */
+  phase: z.string().optional(),
+  caveats: z.array(z.string()).optional(),
 });
 
 export type ResearchInput = z.infer<typeof researchInputSchema>;
@@ -564,7 +567,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
           throw err;
         }
-        logger.warn("Research findings extract failed after sources collected", {
+        // Sources were collected — return an honest PARTIAL-style brief instead of failing the Ask run.
+        logger.warn("Research findings extract failed after sources collected — degrading to source-backed partial", {
           researchJobId: job.id,
           organisationId: ctx.organisationId,
           reason: extractResult.reason,
@@ -572,29 +576,25 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           sourceCount: ranked.length,
           phase: "STRUCTURED_EXTRACTION_FAILED",
         });
+        extractedFindings = [];
         await prisma.researchJob.updateMany({
           where: { id: job.id, organisationId: ctx.organisationId },
           data: {
-            status: "FAILED",
+            status: "PARTIAL",
             brief: {
               phase: "STRUCTURED_EXTRACTION_FAILED",
               evidenceGathered: true,
               sourceCount: ranked.length,
               failureClass: extractResult.failureClass || "SCHEMA_FAILED",
+              degraded: true,
+              customerNote: RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
             } as unknown as Prisma.InputJsonValue,
             totalCostCents: costCents,
             finishedAt: new Date(),
-            userFacingError: RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
-            error: "structured_extraction_failed",
+            userFacingError: null,
+            error: "structured_extraction_degraded",
           },
         });
-        const err = new Error(RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER) as Error & {
-          userFacingMessage: string;
-          synthesisPhase: string;
-        };
-        err.userFacingMessage = RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER;
-        err.synthesisPhase = "STRUCTURED_EXTRACTION_FAILED";
-        throw err;
       }
     }
 
@@ -622,7 +622,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       const { RESEARCH_GROUNDING_FAILED_CUSTOMER } = await import(
         "@/services/ai-provider-preflight"
       );
-      logger.warn("Research findings had no usable source linkage", {
+      // Keep source list for the customer instead of hard-failing the Ask run.
+      logger.warn("Research findings had no usable source linkage — degrading to source-backed partial", {
         researchJobId: job.id,
         organisationId: ctx.organisationId,
         extractedCount: extractedFindings.length,
@@ -631,26 +632,22 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       await prisma.researchJob.updateMany({
         where: { id: job.id, organisationId: ctx.organisationId },
         data: {
-          status: "FAILED",
+          status: "PARTIAL",
           brief: {
             phase: "GROUNDING_FAILED",
             evidenceGathered: true,
             sourceCount: ranked.length,
             extractedCount: extractedFindings.length,
+            degraded: true,
+            customerNote: RESEARCH_GROUNDING_FAILED_CUSTOMER,
           } as unknown as Prisma.InputJsonValue,
           totalCostCents: costCents,
           finishedAt: new Date(),
-          userFacingError: RESEARCH_GROUNDING_FAILED_CUSTOMER,
-          error: "grounding_failed",
+          userFacingError: null,
+          error: "grounding_degraded",
         },
       });
-      const err = new Error(RESEARCH_GROUNDING_FAILED_CUSTOMER) as Error & {
-        userFacingMessage: string;
-        synthesisPhase: string;
-      };
-      err.userFacingMessage = RESEARCH_GROUNDING_FAILED_CUSTOMER;
-      err.synthesisPhase = "GROUNDING_FAILED";
-      throw err;
+      // Drop unlinked findings; continue with sources + honest summary.
     }
 
     for (const f of findings) {
@@ -673,9 +670,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
     const baseSummary =
       findings.length > 0
-        ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources.`
+        ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
         : ranked.length > 0
-          ? `Gathered ${ranked.length} sources but could not extract grounded findings yet.`
+          ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
           : "No sources were returned from the configured adapters.";
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
 
@@ -688,19 +685,27 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       sources: ranked.map((r) => ({ url: r.url, title: r.title, platform: r.platform })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
+      ...(ranked.length > 0 && findings.length === 0
+        ? {
+            phase: "PARTIAL_WITH_SOURCES",
+            caveats: [
+              "Structured finding extraction did not complete — treat listed sources as leads for verification, not verified claims.",
+            ],
+          }
+        : {}),
     };
 
     await prisma.researchJob.updateMany({
       where: { id: job.id, organisationId: ctx.organisationId },
       data: {
-        status: ranked.length ? "COMPLETED" : "FAILED",
+        status: ranked.length ? (findings.length ? "COMPLETED" : "PARTIAL") : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
         finishedAt: new Date(),
         userFacingError: ranked.length
           ? null
           : "I couldn't reach any research sources. Check that YouTube, Reddit, or web search keys are configured.",
-        error: ranked.length ? null : "no_sources",
+        error: ranked.length ? (findings.length ? null : "partial_sources_only") : "no_sources",
       },
     });
 
