@@ -191,10 +191,10 @@ export async function gatherProspectCandidatesFromResearch(input: {
   const configured = listConfiguredSourcePlatforms();
   const degradationNotes: string[] = [];
   if (!configured.includes("web")) {
-    degradationNotes.push("Web/Tavily search not configured — results limited");
+    degradationNotes.push("Web research is not configured — results limited");
   }
   if (!configured.some((p) => ["instagram", "linkedin", "tiktok", "twitter", "threads"].includes(p))) {
-    degradationNotes.push("Apify social sources not configured — profile discovery limited to web evidence");
+    degradationNotes.push("Licensed social sources are not configured — profile discovery limited to web evidence");
   }
 
   const queries = buildResearchQueries(input.icp);
@@ -252,13 +252,16 @@ export async function gatherProspectCandidatesFromResearch(input: {
               items.push(...res.results);
               allResults.push(...res.results);
             } catch (error) {
-              const message = error instanceof Error ? error.message : "web search failed";
+              const raw = error instanceof Error ? error.message : "web search failed";
+              const message = /tavily|exa|apify|\b432\b|quota|usage limit/i.test(raw)
+                ? "Web research is temporarily unavailable"
+                : raw;
               sourceErrors.push({
                 platform: "web",
                 message,
                 code: error instanceof SourceNotConfiguredError ? "NOT_CONFIGURED" : "SEARCH_FAILED",
               });
-              degradationNotes.push("Web search unavailable — continuing with other tiers");
+              degradationNotes.push("Web research is temporarily unavailable — continuing with other tiers");
             }
           }
           return { items, notes: ["web_search"] };
@@ -320,7 +323,7 @@ export async function gatherProspectCandidatesFromResearch(input: {
               message,
               code: error instanceof SourceNotConfiguredError ? "NOT_CONFIGURED" : "SEARCH_FAILED",
             });
-            degradationNotes.push("Apify social sources unavailable — continuing without paid social scrape");
+            degradationNotes.push("Licensed social sources unavailable — continuing without paid social scrape");
             return { items: [], notes: ["apify_failed"] };
           }
         },
