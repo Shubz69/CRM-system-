@@ -317,14 +317,17 @@ export async function gatherProspectCandidatesFromResearch(input: {
             allResults.push(...res.results);
             return { items: res.results, notes: ["apify_social"] };
           } catch (error) {
-            const message = error instanceof Error ? error.message : "apify search failed";
+            const raw = error instanceof Error ? error.message : "social search failed";
+            const message = /tavily|exa|apify|\b432\b|quota|usage limit|actor/i.test(raw)
+              ? "Licensed social sources were unavailable for this search."
+              : raw;
             sourceErrors.push({
               platform: platforms[0] || "linkedin",
               message,
               code: error instanceof SourceNotConfiguredError ? "NOT_CONFIGURED" : "SEARCH_FAILED",
             });
             degradationNotes.push("Licensed social sources unavailable — continuing without paid social scrape");
-            return { items: [], notes: ["apify_failed"] };
+            return { items: [], notes: ["licensed_social_failed"] };
           }
         },
       },
@@ -372,12 +375,27 @@ export async function gatherProspectCandidatesFromResearch(input: {
 
   const degraded = degradationNotes.length > 0 || (!configured.length && enriched.length === 0);
 
+  const sanitizeTier = (tier: string): string => {
+    if (/tavily|exa|web_search/i.test(tier)) return "web_search";
+    if (/apify/i.test(tier)) return "licensed_social";
+    if (/business_profile|crm|knowledge/i.test(tier)) return "workspace_knowledge";
+    if (/seed/i.test(tier)) return "seed_fixtures";
+    return "research_tier";
+  };
+
   return {
     candidates: enriched.slice(0, limits.maxCandidates * 3), // quality layer trims further
-    sourceErrors,
+    sourceErrors: sourceErrors.map((e) => ({
+      ...e,
+      message: /tavily|exa|apify|\b432\b|quota|usage limit/i.test(e.message)
+        ? e.platform === "web"
+          ? "Web research is temporarily unavailable"
+          : "Licensed social sources were unavailable for this search."
+        : e.message,
+    })),
     externalCalls,
     billableCents,
-    tiersTried: [...new Set([...tiersTried, ...progressive.tiersTried])],
+    tiersTried: [...new Set([...tiersTried, ...progressive.tiersTried])].map(sanitizeTier),
     sourcesConfigured: configured,
     degraded,
     degradationNotes,
