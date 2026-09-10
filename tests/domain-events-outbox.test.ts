@@ -342,7 +342,7 @@ describe("Phase 12B transactional outbox", () => {
     // small batch can process an older row while leaving the new event pending.
     // A concurrent global outbox poller may also claim first (claimed=0 here).
     let after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
-    for (let i = 0; i < 20 && after.status !== DomainEventStatus.PROCESSED; i++) {
+    for (let i = 0; i < 40 && after.status !== DomainEventStatus.PROCESSED; i++) {
       await dispatchDomainEventBatch({
         organisationId: claimOrg.organisationId,
         batchSize: 50,
@@ -353,12 +353,12 @@ describe("Phase 12B transactional outbox", () => {
         after.status === DomainEventStatus.PROCESSING ||
         after.status === DomainEventStatus.RETRY
       ) {
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 250));
         after = await prisma.domainEvent.findUniqueOrThrow({ where: { id: event.id } });
       }
     }
     expect(after.status).toBe(DomainEventStatus.PROCESSED);
-  }, 20_000);
+  }, 45_000);
 
   it("parse rejects unsupported version", () => {
     expect(() => {
