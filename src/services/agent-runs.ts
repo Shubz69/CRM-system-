@@ -27,6 +27,22 @@ import {
 import { executeAgentRun } from "@/agents/supervisor/execute";
 import { after } from "next/server";
 
+const orgLimitsCache = new Map<
+  string,
+  { at: number; value: Awaited<ReturnType<typeof prisma.organisationAgentLimits.findUnique>> }
+>();
+const ORG_LIMITS_CACHE_MS = 60_000;
+
+async function getCachedOrganisationAgentLimits(organisationId: string) {
+  const hit = orgLimitsCache.get(organisationId);
+  if (hit && Date.now() - hit.at < ORG_LIMITS_CACHE_MS) return hit.value;
+  const value = await prisma.organisationAgentLimits.findUnique({
+    where: { organisationId },
+  });
+  orgLimitsCache.set(organisationId, { at: Date.now(), value });
+  return value;
+}
+
 export type AgentRunProgress = {
   runId: string;
   status: AgentRun["status"];
@@ -314,11 +330,10 @@ export async function createAndEnqueueAgentRun(input: {
       !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
 
   // Hot path: skip OrganisationAgentLimits round-trip for CRM Quick/Action sync.
+  // Cache non-sync lookups briefly — rapid DEEP creates were paying a DB RTT each time.
   const limits = crmQuickSync
     ? null
-    : await prisma.organisationAgentLimits.findUnique({
-        where: { organisationId: input.organisationId },
-      });
+    : await getCachedOrganisationAgentLimits(input.organisationId);
 
   const initialPlan = crmQuickSync
     ? looksLikeOperatorBrief(request)
@@ -477,13 +492,21 @@ export async function createAndEnqueueAgentRun(input: {
           organisationId: input.organisationId,
           payload: { agentRunId: run.id },
         });
-        await prisma.agentRun.updateMany({
-          where: { id: run.id, organisationId: input.organisationId },
-          data: { bullJobId: jobId },
-        });
-        // Backup if the worker is restarting / never picks up: reclaim PENDING or
-        // stale PLANNING/RUNNING with no steps (orphaned by a deploy kill).
+        // Persist bullJobId + orphan reclaim off the accept path (one less DB RTT
+        // before runId is returned to the client).
         after(async () => {
+          try {
+            await prisma.agentRun.updateMany({
+              where: { id: run.id, organisationId: input.organisationId },
+              data: { bullJobId: jobId },
+            });
+          } catch (error) {
+            logger.warn("Deferred bullJobId write failed", {
+              runId: run.id,
+              organisationId: input.organisationId,
+              error: error instanceof Error ? error.message : "unknown",
+            });
+          }
           const delays = [12_000, 28_000, 50_000];
           let waited = 0;
           for (const target of delays) {

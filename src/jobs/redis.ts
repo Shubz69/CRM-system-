@@ -20,7 +20,7 @@ import {
 let shared: IORedis | null = null;
 let lastPingAt = 0;
 let lastPingOk = false;
-const PING_CACHE_MS = 5_000;
+const PING_CACHE_MS = 15_000;
 
 export class RemoteRedisInDevError extends Error {
   readonly code = "REMOTE_REDIS_IN_DEV";
