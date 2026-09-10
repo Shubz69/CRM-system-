@@ -48,3 +48,4 @@ describe("Public provider capability health", () => {
     },
     40_000,
   );
+});
