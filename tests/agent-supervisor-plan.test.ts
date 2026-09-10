@@ -171,6 +171,18 @@ describe("supervisor planning", () => {
     }
   });
 
+  it("routes summarise open deals from CRM to pipeline_summary not operator brief", () => {
+    const result = planAgentRunDeterministic("Summarise my open deals from CRM", {
+      organisationId: "org_test",
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("pipeline_summary");
+    }
+  });
+
   it("routes automate/deprioritise phrasing to operator_brief", () => {
     const auto = planAgentRunDeterministic("What should I automate from my CRM?", {
       organisationId: "org_test",

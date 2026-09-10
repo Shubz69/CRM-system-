@@ -162,6 +162,31 @@ export async function executeAgentRun(input: {
     };
   }
 
+  // Concurrent execute guard: never reset a run that is already RUNNING or has steps.
+  // Preview DEEP paths enqueue a worker and may also reclaim via after() — both must
+  // not rewrite PLANNING over an active executor (observed RUNNING → PLANNING → FAILED).
+  if (run.status === "RUNNING") {
+    return {
+      runId: run.id,
+      status: run.status,
+      finalOutput: run.finalOutput,
+      partialResults: run.partialResults,
+      userFacingError: run.userFacingError,
+    };
+  }
+  const existingStepCount = await prisma.agentStep.count({
+    where: { agentRunId: run.id, organisationId: input.organisationId },
+  });
+  if (existingStepCount > 0) {
+    return {
+      runId: run.id,
+      status: run.status,
+      finalOutput: run.finalOutput,
+      partialResults: run.partialResults,
+      userFacingError: run.userFacingError,
+    };
+  }
+
   // Ultra-fast path: QUICK/ACTION internal CRM — deterministic plan + crm_desk only.
   // Avoids governor/RAG/CoS/memory and collapses intermediate run writes.
   if (
@@ -266,34 +291,42 @@ export async function executeAgentRun(input: {
   const skipHeavyBizContext =
     (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
     looksLikeCrmInternal(run.request);
-  if (!skipHeavyBizContext || !run.plainEnglishPlan) {
-    await prisma.agentRun.updateMany({
+  // Claim only PENDING/PLANNING — never overwrite RUNNING (lost race → exit).
+  const claimData = {
+    status: "PLANNING" as const,
+    startedAt,
+    partialResults: {
+      ...priorPartial,
+      latencyTrace,
+    } as Prisma.InputJsonValue,
+    ...(!skipHeavyBizContext || !run.plainEnglishPlan
+      ? {
+          maxSteps,
+          maxWallClockSeconds,
+          maxSpendCents,
+          plainEnglishPlan: run.plainEnglishPlan || CUSTOMER_PROGRESS_STAGES.understanding,
+        }
+      : {}),
+  };
+  const claimed = await prisma.agentRun.updateMany({
+    where: {
+      id: run.id,
+      organisationId: input.organisationId,
+      status: { in: ["PENDING", "PLANNING"] },
+    },
+    data: claimData,
+  });
+  if (claimed.count !== 1) {
+    const cur = await prisma.agentRun.findFirst({
       where: { id: run.id, organisationId: input.organisationId },
-      data: {
-        status: "PLANNING",
-        startedAt,
-        partialResults: {
-          ...priorPartial,
-          latencyTrace,
-        } as Prisma.InputJsonValue,
-        maxSteps,
-        maxWallClockSeconds,
-        maxSpendCents,
-        plainEnglishPlan: run.plainEnglishPlan || CUSTOMER_PROGRESS_STAGES.understanding,
-      },
     });
-  } else {
-    await prisma.agentRun.updateMany({
-      where: { id: run.id, organisationId: input.organisationId },
-      data: {
-        status: "PLANNING",
-        startedAt,
-        partialResults: {
-          ...priorPartial,
-          latencyTrace,
-        } as Prisma.InputJsonValue,
-      },
-    });
+    return {
+      runId: run.id,
+      status: cur?.status ?? run.status,
+      finalOutput: cur?.finalOutput ?? run.finalOutput,
+      partialResults: cur?.partialResults ?? run.partialResults,
+      userFacingError: cur?.userFacingError ?? run.userFacingError,
+    };
   }
 
   // Understanding / business-context stages (customer-facing only).

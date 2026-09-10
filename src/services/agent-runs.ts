@@ -507,18 +507,25 @@ export async function createAndEnqueueAgentRun(input: {
               error: error instanceof Error ? error.message : "unknown",
             });
           }
-          const delays = [12_000, 28_000, 50_000];
+          // Reclaim only true orphans. Never touch RUNNING — that races the Railway
+          // worker and was resetting DEEP runs to PLANNING mid-flight.
+          const delays = [20_000, 45_000, 75_000];
           let waited = 0;
           for (const target of delays) {
             await new Promise((r) => setTimeout(r, target - waited));
             waited = target;
             const cur = await prisma.agentRun.findFirst({
               where: { id: run.id, organisationId: input.organisationId },
-              select: { status: true, updatedAt: true, partialResults: true },
+              select: {
+                status: true,
+                updatedAt: true,
+                partialResults: true,
+                _count: { select: { steps: true } },
+              },
             });
             if (!cur) return;
             if (
-              ["COMPLETED", "PARTIAL", "FAILED", "AWAITING_CLARIFICATION", "AWAITING_PROMPT_CONFIRM"].includes(
+              ["COMPLETED", "PARTIAL", "FAILED", "AWAITING_CLARIFICATION", "AWAITING_PROMPT_CONFIRM", "RUNNING"].includes(
                 cur.status,
               )
             ) {
@@ -528,11 +535,13 @@ export async function createAndEnqueueAgentRun(input: {
               cur.partialResults && typeof cur.partialResults === "object"
                 ? (cur.partialResults as { steps?: unknown[] })
                 : null;
-            const hasSteps = Array.isArray(pr?.steps) && pr!.steps!.length > 0;
+            const hasSteps =
+              cur._count.steps > 0 || (Array.isArray(pr?.steps) && pr!.steps!.length > 0);
+            if (hasSteps) return;
             const staleMs = Date.now() - cur.updatedAt.getTime();
             const reclaim =
               cur.status === "PENDING" ||
-              ((cur.status === "PLANNING" || cur.status === "RUNNING") && !hasSteps && staleMs >= 20_000);
+              (cur.status === "PLANNING" && staleMs >= 40_000);
             if (!reclaim) continue;
             try {
               await executeAgentRun({

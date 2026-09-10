@@ -85,7 +85,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bblocking revenue\b|\bwasting time\b|\bhighest-value actions\b/.test(t) ||
     /\boperator brief\b/.test(t) ||
     /\bchief of staff\b/.test(t) ||
-    /\bprioritis[e].*\b(today|crm|from)\b|\bfrom crm\b/.test(t) ||
+    // "prioritise … from CRM" is operator; bare "… from CRM" is not (e.g. summarise deals from CRM).
+    /\bprioritis[e].{0,48}\b(today|from crm|from this crm)\b/.test(t) ||
     /\b(what'?s urgent|any fires|top risk|status check|crm pulse|are we healthy|what matters (this )?(morning|today|now))\b/.test(
       t,
     ) ||
