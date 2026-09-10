@@ -127,9 +127,8 @@ export function listConfiguredSourcePlatforms(): SourcePlatform[] {
   const configured: SourcePlatform[] = [];
   if (env.YOUTUBE_API_KEY) configured.push("youtube");
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) configured.push("reddit");
-  const webProvider = (env.WEB_SEARCH_PROVIDER || "tavily").toLowerCase();
-  if (webProvider === "tavily" && env.TAVILY_API_KEY) configured.push("web");
-  if (webProvider === "exa" && env.EXA_API_KEY) configured.push("web");
+  // Web is available when any supported search key is present (primary or fallback).
+  if (env.TAVILY_API_KEY || env.EXA_API_KEY) configured.push("web");
   if (env.APIFY_TOKEN) {
     configured.push("instagram", "linkedin", "tiktok", "twitter", "threads");
   }

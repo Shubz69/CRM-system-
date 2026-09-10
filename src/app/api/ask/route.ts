@@ -15,7 +15,6 @@ import {
 import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import {
   WorkspaceAccessError,
-  assertActiveWorkspaceAccess,
   toUserFacingAskError,
 } from "@/services/workspace-access";
 
@@ -62,10 +61,6 @@ export async function POST(req: NextRequest) {
   try {
     const raw = await req.json();
     const session = await requirePermissionForMutation("ask:use", req, raw);
-    await assertActiveWorkspaceAccess({
-      userId: session.userId,
-      organisationId: session.organisationId,
-    });
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(raw);
     const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs, status, finalOutput } =
@@ -75,7 +70,7 @@ export async function POST(req: NextRequest) {
         request: body.request,
         referenceAssetId: body.referenceAssetId ?? null,
         answerMode: body.answerMode ?? null,
-        // Route already asserted workspace access — avoid a second membership round-trip.
+        // requirePermissionForMutation already asserted workspace access.
         accessAlreadyVerified: true,
       });
     return Response.json({
@@ -111,10 +106,6 @@ export async function PATCH(req: NextRequest) {
   try {
     const raw = await req.json();
     const session = await requirePermissionForMutation("ask:use", req, raw);
-    await assertActiveWorkspaceAccess({
-      userId: session.userId,
-      organisationId: session.organisationId,
-    });
     const body = patchSchema.parse(raw);
 
     if ("confirmedPrompt" in body) {

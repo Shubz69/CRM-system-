@@ -361,8 +361,9 @@ export async function createAndEnqueueAgentRun(input: {
       } as Prisma.InputJsonValue,
     },
   });
-  // Accept clock stops when the run is persisted with a customer-visible plan.
-  const acceptMs = Date.now() - acceptStarted;
+  // Early accept clock (plan persisted). Durable enqueue extends acceptMs below so
+  // SERVER_ACCEPT reflects runId-available latency including Redis.
+  let acceptMs = Date.now() - acceptStarted;
 
   if (crmQuickSync) {
     // Operator briefs can take several seconds — accept fast via after() keepalive.
@@ -525,6 +526,7 @@ export async function createAndEnqueueAgentRun(input: {
             return;
           }
         });
+        acceptMs = Date.now() - acceptStarted;
         return {
           runId: run.id,
           jobId,
@@ -573,6 +575,7 @@ export async function createAndEnqueueAgentRun(input: {
         after(async () => {
           await execPromise;
         });
+        acceptMs = Date.now() - acceptStarted;
         return {
           runId: run.id,
           jobId: `sync-deep-local:${run.id}`,
@@ -594,6 +597,7 @@ export async function createAndEnqueueAgentRun(input: {
       data: { bullJobId: jobId },
     });
 
+    acceptMs = Date.now() - acceptStarted;
     return {
       runId: run.id,
       jobId,

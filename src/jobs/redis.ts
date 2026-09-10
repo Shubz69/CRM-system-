@@ -214,32 +214,22 @@ export async function pingRedis(
     return false;
   }
 
-  // Reuse shared connection when already open (no extra TCP handshake).
-  if (shared && shared.status === "ready") {
-    try {
-      const pong = await shared.ping();
-      lastPingOk = pong === "PONG";
-      lastPingAt = now;
-      return lastPingOk;
-    } catch (error) {
-      noteRedisError(error);
-      /* fall through to ephemeral */
-    }
-  }
-
-  let client: IORedis | null = null;
+  // Prefer establishing/reusing the shared BullMQ connection (one TLS handshake)
+  // instead of an ephemeral connect/quit that forces a second cold connect on enqueue.
   try {
-    client = new IORedis(
-      url,
-      redisConnectionOptions(url, {
-        maxRetriesPerRequest: 1,
-        connectTimeout: timeoutMs,
-        lazyConnect: true,
-        enableOfflineQueue: false,
-      }),
-    );
-    await client.connect();
-    const pong = await client.ping();
+    const conn = getRedisConnection();
+    if (conn.status !== "ready" && typeof conn.connect === "function") {
+      await Promise.race([
+        conn.connect().catch(() => undefined),
+        new Promise((r) => setTimeout(r, timeoutMs)),
+      ]);
+    }
+    const pong = await Promise.race([
+      conn.ping(),
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error("Redis ping timeout")), timeoutMs),
+      ),
+    ]);
     lastPingOk = pong === "PONG";
     lastPingAt = now;
     return lastPingOk;
@@ -253,10 +243,6 @@ export async function pingRedis(
     lastPingOk = false;
     lastPingAt = now;
     return false;
-  } finally {
-    if (client) {
-      await client.quit().catch(() => undefined);
-    }
   }
 }
 
