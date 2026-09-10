@@ -232,21 +232,25 @@ export async function discoverSocialProspects(input: {
 
   const exactSaved = saved.filter((row) => {
     const flags = row.uncertaintyFlags;
-    if (Array.isArray(flags) && flags.some((f) => typeof f === "string" && f.includes('"matchTier":"POSSIBLE"'))) {
+    if (!Array.isArray(flags)) return false;
+    if (flags.some((f) => typeof f === "string" && f.includes('"matchTier":"POSSIBLE"'))) {
       return false;
     }
-    const qa = Array.isArray(flags)
-      ? flags.find((f) => typeof f === "string" && f.startsWith("qa:"))
-      : null;
+    if (flags.some((f) => typeof f === "string" && /^matchTier:POSSIBLE$/i.test(f))) {
+      return false;
+    }
+    const qa = flags.find((f) => typeof f === "string" && f.startsWith("qa:"));
     if (typeof qa === "string") {
       try {
         const parsed = JSON.parse(qa.slice(3)) as { matchTier?: string };
         if (parsed.matchTier === "POSSIBLE") return false;
+        if (parsed.matchTier === "EXACT") return true;
       } catch {
         /* ignore */
       }
     }
-    return true;
+    // Explicit EXACT marker only — never default missing metadata to EXACT.
+    return flags.some((f) => typeof f === "string" && /^matchTier:EXACT$/i.test(f));
   });
   const possibleSaved = saved.filter((row) => !exactSaved.includes(row));
 

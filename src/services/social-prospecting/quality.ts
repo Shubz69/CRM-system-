@@ -110,6 +110,7 @@ function identityBoost(identities?: SocialProfileIdentity[]): number {
 const DEFAULT_ICP: StructuredIcp = {
   entityType: "person",
   signals: [],
+  additionalMandatoryPhrases: [],
   keywords: [],
   exclusions: [],
   preferredNetworks: ["any"],

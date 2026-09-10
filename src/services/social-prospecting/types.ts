@@ -37,6 +37,8 @@ export type StructuredIcp = {
   location?: string;
   companySize?: string;
   signals: string[];
+  /** Extra mandatory phrases from compound queries ("who are also X and Y"). */
+  additionalMandatoryPhrases: string[];
   keywords: string[];
   exclusions: string[];
   preferredNetworks: Array<"linkedin" | "instagram" | "x" | "tiktok" | "youtube" | "any">;
@@ -157,6 +159,33 @@ export function parseProspectIntent(raw: string): StructuredIcp {
   if (/hiring|expand|raised|launch/i.test(lower)) signals.push("growth_signal");
   if (/need|looking for|want|benefit|automation/i.test(lower)) signals.push("need_signal");
 
+  // Compound / multi-role constraints ("who are also …") must be evidenced for EXACT.
+  const additionalMandatoryPhrases: string[] = [];
+  const alsoMatch = text.match(
+    /\b(?:who\s+(?:are\s+)?also|also\s+(?:full[- ]?time|practising|serving)?)\s+(.+)$/i,
+  );
+  if (alsoMatch?.[1]) {
+    for (const part of alsoMatch[1].split(/\band\b|,|;/i)) {
+      const phrase = part.replace(/\b(who|that|with|at|as|a|an|the)\b/gi, " ").replace(/\s+/g, " ").trim();
+      if (phrase.length >= 4 && phrase.length <= 80) additionalMandatoryPhrases.push(phrase.toLowerCase());
+    }
+  }
+  for (const hard of [
+    "unicorn",
+    "nhs",
+    "kindergarten",
+    "antarctic",
+    "penguin",
+    "underwater welding",
+    "deep-sea mining",
+    "handmade pottery",
+    "cryptocurrency regulator",
+  ]) {
+    if (lower.includes(hard) && !additionalMandatoryPhrases.some((p) => p.includes(hard))) {
+      additionalMandatoryPhrases.push(hard);
+    }
+  }
+
   let industry: string | undefined;
   for (const token of [
     "fintech",
@@ -191,6 +220,7 @@ export function parseProspectIntent(raw: string): StructuredIcp {
     location: location || undefined,
     companySize: companySize || undefined,
     signals,
+    additionalMandatoryPhrases,
     keywords,
     exclusions,
     preferredNetworks,

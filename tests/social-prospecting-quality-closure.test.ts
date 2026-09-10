@@ -653,4 +653,40 @@ describe("Final social prospecting quality closure", () => {
     expect(roleHasPermission(MemberRole.OWNER, "platform:manage")).toBe(false);
     expect(roleHasPermission(MemberRole.SUPER_ADMIN, "platform:manage")).toBe(true);
   });
+
+  it("compound multi-role queries cannot EXACT without evidence for every phrase", () => {
+    const icp = parseProspectIntent(
+      "Find UK unicorn founders who are also full-time NHS consultants and kindergarten teachers",
+    );
+    expect(icp.additionalMandatoryPhrases.length).toBeGreaterThan(0);
+    expect(icp.additionalMandatoryPhrases.some((p) => /nhs|unicorn|kindergarten/i.test(p))).toBe(true);
+
+    const decision = validateProspectCandidate(
+      {
+        personName: "Brent Hoberman",
+        role: "Co-Founder",
+        companyName: "lastminute.com",
+        location: "London",
+        linkedinUrl: "https://www.linkedin.com/in/brenthoberman",
+        sourceEvidence: [
+          evidence(
+            "Brent Hoberman Co-Founder London UK tech entrepreneur",
+            "https://www.linkedin.com/in/brenthoberman",
+          ),
+        ],
+      },
+      icp,
+    );
+    // Must never be EXACT without NHS/kindergarten/unicorn evidence.
+    if (decision.accepted) {
+      expect(decision.matchTier).toBe("POSSIBLE");
+    } else {
+      expect(decision.matchTier).not.toBe("EXACT");
+    }
+  });
+
+  it("treats garbled company association phrases as weak", () => {
+    expect(isWeakCompanyName("UK tech through London Tech Week")).toBe(true);
+    expect(isWeakCompanyName("Indian heritage")).toBe(true);
+  });
 });

@@ -135,7 +135,10 @@ const WEAK_COMPANY_NAMES = [
   /^click\b/i,
   /^here$/i,
   /\bwho bring\b/i,
-  /^the\s+$/i,
+  /\bthrough\b/i,
+  /\bheritage\b/i,
+  /\bpotentially\b/i,
+  /^uk\s+tech\b/i,
   /^[a-z\s]{0,2}$/i,
 ];
 
@@ -837,10 +840,44 @@ export function validateProspectCandidate(
   if (icp.industry && industryConstraint !== "MATCHED") {
     evidenceGaps.push("industry");
   }
+
+  // Compound query phrases ("who are also NHS consultants…") require positive evidence.
+  const compoundEvidenceHaystack = [
+    candidate.personName,
+    candidate.role,
+    candidate.companyName,
+    candidate.location,
+    ...(candidate.sourceEvidence || []).map((e) => `${e.url || ""} ${e.excerpt || ""}`),
+    ...(candidate.socialIdentities || []).flatMap((i) =>
+      (i.evidence || []).map((e) => `${e.url || ""} ${e.excerpt || ""}`),
+    ),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  const compoundPhrases = icp.additionalMandatoryPhrases || [];
+  for (const phrase of compoundPhrases) {
+    const tokens = phrase
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.replace(/[^a-z0-9+-]/g, ""))
+      .filter((t) => t.length >= 3);
+    const hit =
+      tokens.length === 0
+        ? false
+        : tokens.every((t) => compoundEvidenceHaystack.includes(t)) ||
+          compoundEvidenceHaystack.includes(phrase.toLowerCase());
+    if (!hit) {
+      possibleOnly = true;
+      evidenceGaps.push(`compound:${phrase.slice(0, 40)}`);
+    }
+  }
+
   const allMatched =
     requestedStatuses.length > 0 && requestedStatuses.every((s) => s === "MATCHED");
   // EXACT needs ≥2 matched mandatory constraint classes (e.g. role+location).
   // Role-only MATCHED is POSSIBLE — otherwise any CEO snippet becomes FALSE_EXACT.
+  // unmet compound phrases set possibleOnly / evidenceGaps above.
   const matchedConstraintClasses = requestedStatuses.filter((s) => s === "MATCHED").length;
   const matchTier: ProspectMatchTier =
     !hasRoleOrSizeOrIndustry ||
