@@ -1,8 +1,14 @@
 import { OrganisationStatus } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { assertOrganisationMutable } from "@/lib/platform-org";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
+
+/** Coerce org ids to plain strings so query builders never accept operator objects. */
+function asOrgId(value: unknown): string {
+  return z.string().min(1).max(64).parse(value);
+}
 
 /**
  * Organisation deletion policy (Prompt 1.5 follow-up):
@@ -40,10 +46,11 @@ export async function softDeleteOrganisation(input: {
   actorUserId?: string | null;
   reason?: string;
 }): Promise<{ id: string; deletedAt: Date }> {
-  await assertOrganisationMutable(input.organisationId);
+  const organisationId = asOrgId(input.organisationId);
+  await assertOrganisationMutable(organisationId);
 
   const updated = await prisma.organisation.update({
-    where: { id: input.organisationId },
+    where: { id: organisationId },
     data: {
       deletedAt: new Date(),
       status: OrganisationStatus.SUSPENDED,
@@ -53,11 +60,11 @@ export async function softDeleteOrganisation(input: {
   });
 
   await writeAuditLog({
-    organisationId: input.organisationId,
+    organisationId,
     userId: input.actorUserId ?? null,
     action: "workspace.soft_delete",
     entityType: "Organisation",
-    entityId: input.organisationId,
+    entityId: organisationId,
     metadata: { reason: input.reason ?? null },
   });
 
@@ -70,8 +77,9 @@ export async function softDeleteOrganisation(input: {
 
 /** Count ledger rows that block hard-delete under RESTRICT. */
 export async function exportOrganisationLedgers(
-  organisationId: string,
+  organisationIdInput: string,
 ): Promise<OrganisationLedgerExport> {
+  const organisationId = asOrgId(organisationIdInput);
   const [auditLogs, usageRecords, aiExecutions, webhookEvents, failedJobs] =
     await Promise.all([
       prisma.auditLog.count({ where: { organisationId } }),
@@ -99,18 +107,21 @@ export async function purgeOrganisationHard(input: {
   confirmSlug: string;
   actorUserId?: string | null;
 }): Promise<{ export: OrganisationLedgerExport }> {
-  await assertOrganisationMutable(input.organisationId);
+  const organisationId = asOrgId(input.organisationId);
+  const confirmSlug = z.string().min(1).max(120).parse(input.confirmSlug);
+  await assertOrganisationMutable(organisationId);
 
   const org = await prisma.organisation.findUnique({
-    where: { id: input.organisationId },
+    where: { id: organisationId },
     select: { id: true, slug: true, name: true },
   });
   if (!org) throw new Error("Organisation not found");
-  if (org.slug !== input.confirmSlug) {
+  if (org.slug !== confirmSlug) {
     throw new Error("confirmSlug does not match organisation slug — aborting purge");
   }
 
-  const ledgerExport = await exportOrganisationLedgers(org.id);
+  const orgId = asOrgId(org.id);
+  const ledgerExport = await exportOrganisationLedgers(orgId);
 
   // Platform-scoped audit of the purge intent (survives tenant wipe).
   await writeAuditLog({
@@ -119,7 +130,7 @@ export async function purgeOrganisationHard(input: {
     userId: input.actorUserId ?? null,
     action: "workspace.purge_started",
     entityType: "Organisation",
-    entityId: org.id,
+    entityId: orgId,
     metadata: {
       slug: org.slug,
       name: org.name,
@@ -127,21 +138,23 @@ export async function purgeOrganisationHard(input: {
     },
   });
 
+  // Plain string equality only — never pass unvalidated request objects into where.
+  const purgeOrgId = String(orgId);
   await prisma.$transaction(
     async (tx) => {
-      await tx.auditLog.deleteMany({ where: { organisationId: org.id } });
-      await tx.usageRecord.deleteMany({ where: { organisationId: org.id } });
-      await tx.aiExecution.deleteMany({ where: { organisationId: org.id } });
-      await tx.webhookEvent.deleteMany({ where: { organisationId: org.id } });
-      await tx.failedJob.deleteMany({ where: { organisationId: org.id } });
-      await tx.organisation.delete({ where: { id: org.id } });
+      await tx.auditLog.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
+      await tx.usageRecord.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
+      await tx.aiExecution.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
+      await tx.webhookEvent.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
+      await tx.failedJob.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
+      await tx.organisation.delete({ where: { id: { equals: purgeOrgId } } });
     },
     // Supabase pooler + multi-delete purge exceeds Prisma's 5s interactive default.
     { timeout: 30_000, maxWait: 15_000 },
   );
 
   logger.warn("Organisation hard-purged after explicit ledger wipe", {
-    organisationId: org.id,
+    organisationId: orgId,
     slug: org.slug,
     ledgerExport,
   });
