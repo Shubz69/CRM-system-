@@ -80,6 +80,22 @@ describe("supervisor planning", () => {
     expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
   });
 
+  it("routes replied-last / stage / hottest-lead asks to CRM desk", () => {
+    for (const q of [
+      "Who replied last?",
+      "What stage has the most deals?",
+      "List my hottest leads",
+      "Any overdue conversations?",
+      "Count contacts in my workspace",
+    ]) {
+      const result = planAgentRunDeterministic(q, { answerMode: "QUICK" });
+      expect(result.kind).toBe("plan");
+      if (result.kind === "plan") {
+        expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+      }
+    }
+  });
+
   it("routes company list and goals/KPI to CRM desk with correct intents", () => {
     const company = planAgentRunDeterministic("List my companies", {
       organisationId: "org_test",

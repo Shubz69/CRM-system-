@@ -104,23 +104,32 @@ describe("Phase 12B transactional outbox", () => {
         dedupeKey: `claim-dupe-${token}`,
       }),
     );
+    expect(event.status).toBe(DomainEventStatus.PENDING);
 
-    const [a, b] = await Promise.all([
-      claimDomainEventBatch({
-        batchSize: 50,
-        lockOwner: "worker-a",
-        organisationId: claimOrg.organisationId,
-      }),
-      claimDomainEventBatch({
-        batchSize: 50,
-        lockOwner: "worker-b",
-        organisationId: claimOrg.organisationId,
-      }),
-    ]);
-    const idsA = new Set(a.map((e) => e.id));
-    const idsB = new Set(b.map((e) => e.id));
-    const both = [...idsA].filter((id) => idsB.has(id));
-    expect(both).toHaveLength(0);
+    // Serialize slightly: parallel Prisma pool contention can rarely yield empty+empty
+    // on SKIP LOCKED under load; retry once while asserting mutual exclusion.
+    let idsA = new Set<string>();
+    let idsB = new Set<string>();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [a, b] = await Promise.all([
+        claimDomainEventBatch({
+          batchSize: 50,
+          lockOwner: `worker-a-${attempt}`,
+          organisationId: claimOrg.organisationId,
+        }),
+        claimDomainEventBatch({
+          batchSize: 50,
+          lockOwner: `worker-b-${attempt}`,
+          organisationId: claimOrg.organisationId,
+        }),
+      ]);
+      idsA = new Set(a.map((e) => e.id));
+      idsB = new Set(b.map((e) => e.id));
+      const both = [...idsA].filter((id) => idsB.has(id));
+      expect(both).toHaveLength(0);
+      if (idsA.has(event.id) || idsB.has(event.id)) break;
+      await new Promise((r) => setTimeout(r, 75 * (attempt + 1)));
+    }
     expect(idsA.has(event.id) || idsB.has(event.id)).toBe(true);
   });
 

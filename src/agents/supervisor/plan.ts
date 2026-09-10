@@ -136,6 +136,11 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bwho (is|are) (our|my) (customer|audience)\b/.test(t) ||
     /\bfrom (my|our|this)\s+(crm|workspace|business)\b/.test(t) ||
     /\bwho needs (a )?reply\b/.test(t) ||
+    /\bwho replied\b|\blast reply\b|\breplied last\b|\bwho (last )?responded\b/.test(t) ||
+    /\b(overdue|waiting)\b.{0,30}\b(conversations?|inbox|replies|messages?)\b/.test(t) ||
+    /\b(hottest|top)\s+leads?\b|\bleads?\b.{0,20}\b(hot|priority)\b/.test(t) ||
+    /\bwhat stage\b|\bstage (has|with) (the )?most\b|\bmost deals?\b/.test(t) ||
+    /\bcount (my |our )?(contacts?|deals?|leads?)\b/.test(t) ||
     /\b(waiting on me|inbox.{0,40}(waiting|human|reply)|needing (a )?human|needs? human)\b/.test(t) ||
     /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
