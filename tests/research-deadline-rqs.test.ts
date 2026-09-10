@@ -19,6 +19,7 @@ const agentStepCreate = vi.fn(async (args: { data: Record<string, unknown> }) =>
   ...args.data,
 }));
 const agentStepUpdateMany = vi.fn(async () => ({ count: 1 }));
+const agentStepCount = vi.fn(async () => 0);
 const organisationFindFirst = vi.fn(async () => ({ id: "org_a", name: "Demo" }));
 const limitsFindUnique = vi.fn(async () => null);
 
@@ -31,6 +32,7 @@ vi.mock("@/lib/db", () => ({
     agentStep: {
       create: (...a: unknown[]) => agentStepCreate(...a),
       updateMany: (...a: unknown[]) => agentStepUpdateMany(...a),
+      count: (...a: unknown[]) => agentStepCount(...a),
     },
     organisation: {
       findFirst: (...a: unknown[]) => organisationFindFirst(...a),
@@ -231,6 +233,8 @@ describe("research deadline / RQS attach (Round 7D A–F)", () => {
     agentRunUpdateMany.mockClear();
     agentStepCreate.mockClear();
     agentStepUpdateMany.mockClear();
+    agentStepCount.mockClear();
+    agentStepCount.mockResolvedValue(0);
     scoreResearchQualityMock.mockReset();
   });
 

@@ -120,22 +120,24 @@ describe("Ask/Research degradation + privacy", () => {
       raw: { findings: [{ claim: "x", sourceUrl: "not-a-url" }] },
     });
 
-    await expect(
-      researchAgent.execute(
-        { topic: "UK SME demand for AI consultancy" },
-        {
-          organisationId: "org-qa",
-          agentRunId: "run-1",
-          agentStepId: "step-1",
-        },
-      ),
-    ).rejects.toThrow(/verify the answer structure/i);
+    const result = await researchAgent.execute(
+      { topic: "UK SME demand for AI consultancy" },
+      {
+        organisationId: "org-qa",
+        agentRunId: "run-1",
+        agentStepId: "step-1",
+      },
+    );
 
+    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
+    expect(result.output.sourceCount).toBe(1);
+    expect(result.output.findings).toEqual([]);
+    expect(result.output.summary).toMatch(/structured evidence extraction was incomplete/i);
     expect(prisma.researchJob.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          status: "FAILED",
-          error: "structured_extraction_failed",
+          status: "PARTIAL",
+          error: expect.stringMatching(/structured_extraction_degraded|partial_sources_only/),
         }),
       }),
     );

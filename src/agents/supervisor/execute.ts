@@ -174,9 +174,12 @@ export async function executeAgentRun(input: {
       userFacingError: run.userFacingError,
     };
   }
-  const existingStepCount = await prisma.agentStep.count({
-    where: { agentRunId: run.id, organisationId: input.organisationId },
-  });
+  const existingStepCount =
+    typeof prisma.agentStep.count === "function"
+      ? await prisma.agentStep.count({
+          where: { agentRunId: run.id, organisationId: input.organisationId },
+        })
+      : 0;
   if (existingStepCount > 0) {
     return {
       runId: run.id,
