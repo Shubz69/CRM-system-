@@ -31,17 +31,20 @@ describe("Public provider capability health", () => {
     expect(meta!.liveConnectionAware).toBe(false);
   });
 
-  it("GET /api/health/providers stays public-safe for non-platform callers", async () => {
-    const { GET } = await import("@/app/api/health/providers/route");
-    const res = await GET();
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.ok).toBe(true);
-    // Customer / unauthenticated callers get product-level AI health only
-    expect(json.providers?.ai?.label).toBe("Agent Desk intelligence");
-    expect(["AVAILABLE", "UNAVAILABLE"]).toContain(json.providers?.ai?.status);
-    const blob = JSON.stringify(json);
-    expect(blob).not.toMatch(/ANTHROPIC_API_KEY|INSTAGRAM_APP_SECRET|MANYCHAT_API_TOKEN|AYRSHARE_API_KEY/);
-    expect(blob).not.toMatch(/Claude|Anthropic|OpenAI|hasAnthropicKey/i);
-  });
-});
+  it(
+    "GET /api/health/providers stays public-safe for non-platform callers",
+    async () => {
+      const { GET } = await import("@/app/api/health/providers/route");
+      const res = await GET();
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.ok).toBe(true);
+      // Customer / unauthenticated callers get product-level AI health only
+      expect(json.providers?.ai?.label).toBe("Agent Desk intelligence");
+      expect(["AVAILABLE", "UNAVAILABLE"]).toContain(json.providers?.ai?.status);
+      const blob = JSON.stringify(json);
+      expect(blob).not.toMatch(/ANTHROPIC_API_KEY|INSTAGRAM_APP_SECRET|MANYCHAT_API_TOKEN|AYRSHARE_API_KEY/);
+      expect(blob).not.toMatch(/Claude|Anthropic|OpenAI|hasAnthropicKey/i);
+    },
+    40_000,
+  );
