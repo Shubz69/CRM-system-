@@ -76,6 +76,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\b(detected )?opportunit(y|ies)\b.*\b(review|attention|matter|focus)\b/.test(t) ||
     /\bwhat (should|can) i (automate|ignore|create|deprioritis[e]?|improve)\b/.test(t) ||
     /\bwhat content should (i )?create\b/.test(t) ||
+    /\bwhat content idea\b/.test(t) ||
+    /\bcontent idea would\b/.test(t) ||
     /\b(worth automating|should i automate|repetitive process)\b/.test(t) ||
     /\b(deprioritis[e]?|what can wait|what should i ignore|safely deprioritis[e]?)\b/.test(t) ||
     /\bwhat changed recently\b/.test(t) ||

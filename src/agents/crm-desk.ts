@@ -585,14 +585,18 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
 
     if (intent === "business_context") {
       const profile = await getBusinessProfile(orgId).catch(() => null);
-      const products = (profile?.products || [])
-        .slice(0, 5)
-        .map((p: { name?: string | null }) => p.name)
-        .filter(Boolean) as string[];
-      const audiences = (profile?.audiences || [])
-        .slice(0, 5)
-        .map((a: { name?: string | null }) => a.name)
-        .filter(Boolean) as string[];
+      const products = [...new Set(
+        (profile?.products || [])
+          .slice(0, 8)
+          .map((p: { name?: string | null }) => p.name?.trim())
+          .filter((n): n is string => Boolean(n) && !/^primary offering$/i.test(n)),
+      )].slice(0, 5);
+      const audiences = [...new Set(
+        (profile?.audiences || [])
+          .slice(0, 8)
+          .map((a: { name?: string | null }) => a.name?.trim())
+          .filter((n): n is string => Boolean(n) && !/^primary audience$/i.test(n)),
+      )].slice(0, 5);
       const claims = (profile?.claims || [])
         .slice(0, 6)
         .map((c: { predicate?: string | null; valueText?: string | null }) => {
@@ -613,6 +617,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         )?.valueText || null;
       const lines: string[] = [
         `Business context for ${orgName} (organisation-scoped Business Profile).`,
+        "EVIDENCE: Business Profile / digital twin (this organisation only).",
       ];
       if (whatWeDo) lines.push(`What we do: ${String(whatWeDo).slice(0, 280)}`);
       if (products.length) lines.push(`What we sell / offer: ${products.join("; ")}.`);
