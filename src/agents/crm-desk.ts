@@ -108,6 +108,9 @@ function buildOperatorBrief(input: {
   contactCount: number;
   counts: CrmDeskOutput["counts"];
   request?: string;
+  workspaceLabel?: string | null;
+  businessSummary?: string | null;
+  audienceSummary?: string | null;
 }): { summary: string; shortAnswer: string; sections: NonNullable<CrmDeskOutput["operatorSections"]> } {
   const topPriorities: string[] = [];
   const needsAttention: string[] = [];
@@ -120,6 +123,9 @@ function buildOperatorBrief(input: {
   const risks: string[] = [];
   const insufficientEvidence: string[] = [];
   const req = (input.request || "").toLowerCase();
+  const contentAsk = /\b(content|draft|post|audience)\b/.test(req) || /\bwhat content should\b/.test(req);
+  const revenueAsk =
+    /\b(revenue|pipeline|deal|sales|commercial|risk|momentum|priorit)\b/.test(req) && !contentAsk;
 
   const fmtRec = (parts: {
     what: string;
@@ -197,15 +203,17 @@ function buildOperatorBrief(input: {
   }
   if (!input.stalledDeals.length && input.dealRows.length) {
     const top = input.dealRows[0]!;
-    sales.push(
-      fmtRec({
-        what: `Advance “${top.name}”`,
-        why: "Highest-urgency open deal (no ≥14-day stalls detected)",
-        evidence: `${top.stageLabel || "no stage"} · ${money(top.amountCents)}`,
-        urgency: "medium",
-        next: "Confirm next stage action with the buyer",
-      }),
-    );
+    const advance = fmtRec({
+      what: `Advance “${top.name}”`,
+      why: "Highest-urgency open deal (no ≥14-day stalls detected)",
+      evidence: `${top.stageLabel || "no stage"} · ${money(top.amountCents)}`,
+      urgency: "medium",
+      next: "Confirm next stage action with the buyer",
+    });
+    sales.push(advance);
+    // Open deals must compete for TOP PRIORITIES — otherwise content-queue noise
+    // dominates every brief and businesses look identical.
+    topPriorities.push(advance);
   }
   if (!input.dealRows.length) {
     insufficientEvidence.push("No open deals in this workspace — cannot prioritise a stuck deal.");
@@ -289,16 +297,23 @@ function buildOperatorBrief(input: {
     goalsKpi.push("INSUFFICIENT EVIDENCE: no active/at-risk goals or KPI rows to prioritise.");
   }
 
-  for (const p of input.contentRows.slice(0, 3)) {
+  const boilerplateContentTitle = (title: string) =>
+    /^(create mission|save research|draft content|untitled|new draft|pending approval)\b/i.test(
+      title.trim(),
+    );
+  for (const p of input.contentRows.slice(0, 5)) {
+    const title = (p.title || "Untitled draft").trim();
+    if (boilerplateContentTitle(title) && !contentAsk) continue;
     const rec = fmtRec({
-      what: `Approve or revise “${p.title || "Untitled draft"}”`,
+      what: `Approve or revise “${title}”`,
       why: "Content currently in review / awaiting approval",
       evidence: "Content OS status IN_REVIEW or pending approval",
-      urgency: "medium",
+      urgency: contentAsk ? "medium" : "low",
       next: "Open Content → approve, revise, or reject",
     });
     content.push(rec);
-    if (topPriorities.length < 5) topPriorities.push(rec);
+    // Revenue/pipeline asks: keep content out of TOP PRIORITIES so deal advice leads.
+    if (!revenueAsk && topPriorities.length < 5) topPriorities.push(rec);
   }
   if (!input.contentRows.length) {
     if (input.hotLeads[0] || input.stalledDeals[0]) {
@@ -449,8 +464,23 @@ function buildOperatorBrief(input: {
     }
   }
 
+  // Request-aware reorder: revenue/pipeline → sales first; content → content first.
+  let orderedTop = [...new Set(topPriorities)];
+  if (revenueAsk) {
+    const salesSet = new Set(sales);
+    orderedTop = [
+      ...orderedTop.filter((p) => salesSet.has(p) || pipelineRisk.includes(p)),
+      ...orderedTop.filter((p) => !salesSet.has(p) && !pipelineRisk.includes(p)),
+    ];
+  } else if (contentAsk) {
+    const contentSet = new Set(content);
+    orderedTop = [
+      ...orderedTop.filter((p) => contentSet.has(p)),
+      ...orderedTop.filter((p) => !contentSet.has(p)),
+    ];
+  }
   const sections = {
-    topPriorities: [...new Set(topPriorities)].slice(0, 6),
+    topPriorities: orderedTop.slice(0, 6),
     needsAttention,
     sales,
     pipelineRisk,
@@ -462,7 +492,15 @@ function buildOperatorBrief(input: {
     insufficientEvidence: [...new Set(insufficientEvidence)],
   };
 
-  const blocks: string[] = ["TOP PRIORITIES"];
+  const blocks: string[] = [];
+  if (input.workspaceLabel || input.businessSummary || input.audienceSummary) {
+    blocks.push("WORKSPACE CONTEXT");
+    if (input.workspaceLabel) blocks.push(`• Business: ${input.workspaceLabel}`);
+    if (input.businessSummary) blocks.push(`• What we do: ${input.businessSummary}`);
+    if (input.audienceSummary) blocks.push(`• Who we reach: ${input.audienceSummary}`);
+    blocks.push("");
+  }
+  blocks.push("TOP PRIORITIES");
   sections.topPriorities.slice(0, 5).forEach((p, i) => {
     blocks.push(`${i + 1}. ${p}`);
   });
@@ -1004,7 +1042,10 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     }
 
     if (parsed.intent === "operator_brief") {
-      const [cos, knowledge, evidencePack] = (await operatorBriefPromise) ?? [null, null, null];
+      const [[cos, knowledge, evidencePack], profile] = await Promise.all([
+        (operatorBriefPromise ?? Promise.resolve([null, null, null] as const)),
+        getBusinessProfile(orgId).catch(() => null),
+      ]);
 
       const opportunities = (cos?.sections.OPPORTUNITIES || []).slice(0, 5).map((o) => ({
         title: o.title,
@@ -1018,6 +1059,27 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         detail: a.detail,
         why: a.why,
       }));
+
+      const whatWeDo =
+        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+          /what_we_do|what you do|business_description/i.test(String(c.predicate || "")),
+        )?.valueText ||
+        (profile?.products || [])
+          .slice(0, 2)
+          .map((p: { name?: string | null }) => p.name)
+          .filter(Boolean)
+          .join("; ") ||
+        null;
+      const whoWeReach =
+        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+          /who_to_reach|audience|who you reach/i.test(String(c.predicate || "")),
+        )?.valueText ||
+        (profile?.audiences || [])
+          .slice(0, 2)
+          .map((a: { name?: string | null }) => a.name)
+          .filter(Boolean)
+          .join("; ") ||
+        null;
 
       const brief = buildOperatorBrief({
         stalledDeals,
@@ -1042,6 +1104,9 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         contactCount,
         counts,
         request: parsed.request,
+        workspaceLabel: profile?.organisation?.name || null,
+        businessSummary: whatWeDo ? String(whatWeDo).slice(0, 240) : null,
+        audienceSummary: whoWeReach ? String(whoWeReach).slice(0, 240) : null,
       });
 
       const evidenceFooter =

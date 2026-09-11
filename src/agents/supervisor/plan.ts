@@ -91,7 +91,10 @@ export function looksLikeOperatorBrief(request: string): boolean {
       t,
     ) ||
     /\b(who should i talk to|who is waiting on me|anything overdue|where are we behind|blocking progress)\b/.test(t) ||
-    /\b(needs? attention|what needs me|pipeline and inbox)\b/.test(t)
+    /\b(needs? attention|what needs me|pipeline and inbox)\b/.test(t) ||
+    /\b(revenue priority|next revenue|prioritis[e].{0,40}revenue|commercial priorit)\b/.test(t) ||
+    /\b(open risks|pipeline risks?|losing momentum|blocking growth)\b/.test(t) ||
+    /\bwhat should (i|we) (prioritis[e]|focus on|do).{0,40}\b(week|today|now)\b/.test(t)
   );
 }
 
@@ -184,18 +187,24 @@ function crmDeskIntentFromRequest(
   | "business_context"
   | "desk_overview" {
   const t = request.toLowerCase();
+  // Business-profile questions must win over ACTION operator_brief preference —
+  // otherwise "ideal customer / what we sell" collapses into a generic CRM priority list.
+  if (
+    /\bbusiness (profile|context)\b/.test(t) ||
+    /\bsummaris[e].{0,40}\bbusiness profile\b/.test(t) ||
+    /\bwhat (do|does) (we|our(?:\s+(?:business|company))?|the business|the company) sell\b/.test(t) ||
+    /\bwhat industry\b/.test(t) ||
+    /\bwho (is|are) (our|my) (customer|audience)\b/.test(t) ||
+    /\bideal customer\b/.test(t) ||
+    /\btarget (customer|audience|market)\b/.test(t) ||
+    /\bwho should we reach\b/.test(t)
+  ) {
+    return "business_context";
+  }
   if (opts?.preferOperatorBrief && !isPureDeterministicCrmFact(t)) {
     return "operator_brief";
   }
   if (looksLikeOperatorBrief(t)) return "operator_brief";
-  if (
-    /\bbusiness (profile|context)\b/.test(t) ||
-    /\bwhat (do|does) (we|our(?:\s+(?:business|company))?|the business|the company) sell\b/.test(t) ||
-    /\bwhat industry\b/.test(t) ||
-    /\bwho (is|are) (our|my) (customer|audience)\b/.test(t)
-  ) {
-    return "business_context";
-  }
   if (/\bgoals?\b/.test(t) || /\bkpi\b/.test(t)) return "goals_at_risk";
   if (
     /\bcontent\b/.test(t) &&
