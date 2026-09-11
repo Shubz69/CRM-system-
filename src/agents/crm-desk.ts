@@ -298,7 +298,7 @@ function buildOperatorBrief(input: {
   }
 
   const boilerplateContentTitle = (title: string) =>
-    /^(create mission|save research|draft content|untitled|new draft|pending approval)\b/i.test(
+    /^(create mission|save research|draft content|create opportunity|untitled|new draft|pending approval)\b/i.test(
       title.trim(),
     );
   for (const p of input.contentRows.slice(0, 5)) {
@@ -434,7 +434,7 @@ function buildOperatorBrief(input: {
   if (/\b(content|create|draft)\b/.test(req) && content[0]) {
     topPriorities.unshift(content[0]);
   }
-  if (/\b(deal|pipeline|stuck|stalled)\b/.test(req)) {
+  if (/\b(deal|pipeline|stuck|stalled|revenue)\b/.test(req)) {
     if (!input.dealRows.length) {
       topPriorities.unshift(
         fmtRec({
@@ -445,10 +445,11 @@ function buildOperatorBrief(input: {
           next: "Create or import a deal, then ask again which deal needs attention",
         }),
       );
-    } else if (pipelineRisk[0]) {
-      topPriorities.unshift(pipelineRisk[0]);
     } else if (sales[0]) {
+      // Prefer a concrete sales action — never promote the "stall risk low" info line.
       topPriorities.unshift(sales[0]);
+    } else if (pipelineRisk[0] && /WHAT:|Stalled|Unblock deal/i.test(pipelineRisk[0])) {
+      topPriorities.unshift(pipelineRisk[0]);
     }
   }
   if (/\b(lead|opportunit)\b/.test(req) && sales[0]) {
@@ -469,8 +470,8 @@ function buildOperatorBrief(input: {
   if (revenueAsk) {
     const salesSet = new Set(sales);
     orderedTop = [
-      ...orderedTop.filter((p) => salesSet.has(p) || pipelineRisk.includes(p)),
-      ...orderedTop.filter((p) => !salesSet.has(p) && !pipelineRisk.includes(p)),
+      ...orderedTop.filter((p) => salesSet.has(p)),
+      ...orderedTop.filter((p) => !salesSet.has(p)),
     ];
   } else if (contentAsk) {
     const contentSet = new Set(content);
@@ -602,24 +603,38 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         })
         .filter(Boolean);
       const orgName = profile?.organisation?.name || "This workspace";
+      const whatWeDo =
+        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+          /what_we_do|what you do|business_description/i.test(String(c.predicate || "")),
+        )?.valueText || null;
+      const whoWeReach =
+        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+          /who_to_reach|audience|who you reach/i.test(String(c.predicate || "")),
+        )?.valueText || null;
       const lines: string[] = [
         `Business context for ${orgName} (organisation-scoped Business Profile).`,
       ];
+      if (whatWeDo) lines.push(`What we do: ${String(whatWeDo).slice(0, 280)}`);
       if (products.length) lines.push(`What we sell / offer: ${products.join("; ")}.`);
-      else lines.push("No active product offerings recorded in Business Profile yet.");
+      else if (!whatWeDo) lines.push("No active product offerings recorded in Business Profile yet.");
+      if (whoWeReach) lines.push(`Who we reach: ${String(whoWeReach).slice(0, 240)}`);
       if (audiences.length) lines.push(`Audiences: ${audiences.join("; ")}.`);
       if (claims.length) lines.push(`Known claims: ${claims.join(" | ")}.`);
-      if (!products.length && !audiences.length && !claims.length) {
+      if (!products.length && !audiences.length && !claims.length && !whatWeDo) {
         lines.push(
           "INSUFFICIENT EVIDENCE: Business Profile is sparse — fill Business Context before answering external positioning questions.",
         );
       }
-      const summary = lines.join(" ");
+      const summary = lines.join("\n");
+      const shortBits = [
+        orgName,
+        whatWeDo ? String(whatWeDo).slice(0, 120) : null,
+        audiences[0] || whoWeReach ? `Audience: ${audiences[0] || String(whoWeReach).slice(0, 80)}` : null,
+        products[0] ? `Offer: ${products[0]}` : null,
+      ].filter(Boolean);
       return {
         output: {
-          shortAnswer: products.length
-            ? `${orgName} offers: ${products.slice(0, 3).join("; ")}.`
-            : summary.slice(0, 280),
+          shortAnswer: shortBits.join(" · ").slice(0, 320) || summary.slice(0, 280),
           summary,
           source: "internal_crm" as const,
           organisationId: orgId,

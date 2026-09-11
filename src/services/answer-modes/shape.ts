@@ -53,11 +53,9 @@ function gapsAndRisks(raw: Record<string, unknown>): string[] {
 }
 
 function buildQuick(raw: Record<string, unknown>): QuickAnswer {
-  const sections = asRecord(raw.operatorSections);
   const answer =
-    (sections && str(raw.summary)) ||
-    str(raw.shortAnswer) ||
     str(raw.summary) ||
+    str(raw.shortAnswer) ||
     str(raw.answer) ||
     claimTexts(raw)[0] ||
     "No concise answer was available from this run.";
@@ -184,16 +182,12 @@ function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
 }
 
 function buildAction(raw: Record<string, unknown>): ActionAnswer {
-  const sections = asRecord(raw.operatorSections);
   return {
     mode: "action",
     actions: buildActionItems(raw),
     researchJobId: researchJobIdOf(raw),
-    summary:
-      (sections && str(raw.summary)) ||
-      str(raw.shortAnswer) ||
-      str(raw.summary) ||
-      undefined,
+    // Prefer full CRM/operator summary over crumb shortAnswer (business_context, briefs).
+    summary: str(raw.summary) || str(raw.shortAnswer) || undefined,
   };
 }
 

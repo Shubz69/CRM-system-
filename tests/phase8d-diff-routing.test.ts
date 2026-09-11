@@ -6,6 +6,7 @@ describe("phase8d differentiation routing", () => {
     "What should our next revenue priority be this week, based on our CRM and pipeline?",
     "Who is our ideal customer and how should we reach them?",
     "Summarise open risks in our sales pipeline and one concrete next action.",
+    "What automation would help without sending anything externally yet?",
   ] as const;
   for (const q of qs) {
     it(`ACTION routes judgement: ${q.slice(0, 40)}`, () => {

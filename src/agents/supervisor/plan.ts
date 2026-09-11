@@ -94,7 +94,10 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\b(needs? attention|what needs me|pipeline and inbox)\b/.test(t) ||
     /\b(revenue priority|next revenue|prioritis[e].{0,40}revenue|commercial priorit)\b/.test(t) ||
     /\b(open risks|pipeline risks?|losing momentum|blocking growth)\b/.test(t) ||
-    /\bwhat should (i|we) (prioritis[e]|focus on|do).{0,40}\b(week|today|now)\b/.test(t)
+    /\bwhat should (i|we) (prioritis[e]|focus on|do).{0,40}\b(week|today|now)\b/.test(t) ||
+    /\bwhat automation\b/.test(t) ||
+    /\bautomation would help\b/.test(t) ||
+    /\bwithout sending\b.{0,40}\b(extern|automatic)/.test(t)
   );
 }
 
