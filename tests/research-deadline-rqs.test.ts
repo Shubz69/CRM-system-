@@ -14,11 +14,22 @@ import {
 
 const agentRunFindFirst = vi.fn();
 const agentRunUpdateMany = vi.fn(async () => ({ count: 1 }));
+const agentRunUpdate = vi.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => ({
+  id: args.where.id,
+  ...args.data,
+}));
 const agentStepCreate = vi.fn(async (args: { data: Record<string, unknown> }) => ({
   id: `step_${String(args.data.position)}`,
   ...args.data,
 }));
 const agentStepUpdateMany = vi.fn(async () => ({ count: 1 }));
+const agentStepFindFirst = vi.fn(async (args: { where: { id?: { equals?: string } } }) => ({
+  id: args.where.id?.equals || "step_1",
+}));
+const agentStepUpdate = vi.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => ({
+  id: args.where.id,
+  ...args.data,
+}));
 const agentStepCount = vi.fn(async () => 0);
 const organisationFindFirst = vi.fn(async () => ({ id: "org_a", name: "Demo" }));
 const limitsFindUnique = vi.fn(async () => null);
@@ -28,10 +39,13 @@ vi.mock("@/lib/db", () => ({
     agentRun: {
       findFirst: (...a: unknown[]) => agentRunFindFirst(...a),
       updateMany: (...a: unknown[]) => agentRunUpdateMany(...a),
+      update: (...a: unknown[]) => agentRunUpdate(...a),
     },
     agentStep: {
       create: (...a: unknown[]) => agentStepCreate(...a),
       updateMany: (...a: unknown[]) => agentStepUpdateMany(...a),
+      findFirst: (...a: unknown[]) => agentStepFindFirst(...a),
+      update: (...a: unknown[]) => agentStepUpdate(...a),
       count: (...a: unknown[]) => agentStepCount(...a),
     },
     organisation: {

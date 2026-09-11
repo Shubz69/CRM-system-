@@ -2,11 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentRunFindFirst = vi.fn();
 const agentRunUpdateMany = vi.fn(async () => ({ count: 1 }));
+const agentRunUpdate = vi.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => ({
+  id: args.where.id,
+  ...args.data,
+}));
 const agentStepCreate = vi.fn(async (args: { data: Record<string, unknown> }) => ({
   id: `step_${String(args.data.position)}`,
   ...args.data,
 }));
 const agentStepUpdateMany = vi.fn(async () => ({ count: 1 }));
+const agentStepFindFirst = vi.fn(async (args: { where: { id?: { equals?: string } } }) => ({
+  id: args.where.id?.equals || "step_1",
+}));
+const agentStepUpdate = vi.fn(async (args: { where: { id: string }; data: Record<string, unknown> }) => ({
+  id: args.where.id,
+  ...args.data,
+}));
 const agentStepCount = vi.fn(async () => 0);
 const organisationFindFirst = vi.fn(async () => ({ id: "org_a", name: "Demo" }));
 const limitsFindUnique = vi.fn(async () => null);
@@ -16,10 +27,13 @@ vi.mock("@/lib/db", () => ({
     agentRun: {
       findFirst: (...a: unknown[]) => agentRunFindFirst(...a),
       updateMany: (...a: unknown[]) => agentRunUpdateMany(...a),
+      update: (...a: unknown[]) => agentRunUpdate(...a),
     },
     agentStep: {
       create: (...a: unknown[]) => agentStepCreate(...a),
       updateMany: (...a: unknown[]) => agentStepUpdateMany(...a),
+      findFirst: (...a: unknown[]) => agentStepFindFirst(...a),
+      update: (...a: unknown[]) => agentStepUpdate(...a),
       count: (...a: unknown[]) => agentStepCount(...a),
     },
     organisation: {
@@ -92,8 +106,11 @@ describe("supervisor execution — budget, partial results, clarification", () =
     registerAgent(summariseAgent);
     agentRunFindFirst.mockReset();
     agentRunUpdateMany.mockClear();
+    agentRunUpdate.mockClear();
     agentStepCreate.mockClear();
     agentStepUpdateMany.mockClear();
+    agentStepFindFirst.mockClear();
+    agentStepUpdate.mockClear();
     agentStepCount.mockClear();
     agentStepCount.mockResolvedValue(0);
     vi.mocked(assertWithinSpendCap).mockReset();
@@ -109,9 +126,9 @@ describe("supervisor execution — budget, partial results, clarification", () =
     const result = await executeAgentRun({ organisationId: "org_a", runId: "run_1" });
     expect(result.status).toBe("AWAITING_CLARIFICATION");
     expect(agentStepCreate).not.toHaveBeenCalled();
-    expect(agentRunUpdateMany).toHaveBeenCalledWith(
+    expect(agentRunUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "run_1", organisationId: "org_a" },
+        where: { id: "run_1" },
         data: expect.objectContaining({ status: "AWAITING_CLARIFICATION" }),
       }),
     );
@@ -126,9 +143,9 @@ describe("supervisor execution — budget, partial results, clarification", () =
     expect(createData.organisationId).toBe("org_a");
     expect(createData.userFacingLabel).toMatch(/Repeating/i);
     expect(createData.status).toBe("RUNNING");
-    expect(agentStepUpdateMany).toHaveBeenCalledWith(
+    expect(agentStepUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ organisationId: "org_a" }),
+        where: expect.objectContaining({ id: expect.any(String) }),
         data: expect.objectContaining({ status: "COMPLETED" }),
       }),
     );

@@ -7,6 +7,7 @@ vi.mock("@/lib/db", () => ({
       create: vi.fn(),
       updateMany: vi.fn(),
       findFirst: vi.fn(),
+      update: vi.fn(),
     },
     researchFinding: { create: vi.fn() },
     socialPost: { create: vi.fn() },
@@ -90,6 +91,8 @@ describe("Ask/Research degradation + privacy", () => {
       id: "job-1",
     });
     (prisma.researchJob.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 1 });
+    (prisma.researchJob.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "job-1" });
+    (prisma.researchJob.update as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "job-1" });
     (prisma.researchFinding.create as ReturnType<typeof vi.fn>).mockResolvedValue({});
   });
 
@@ -133,8 +136,9 @@ describe("Ask/Research degradation + privacy", () => {
     expect(result.output.sourceCount).toBe(1);
     expect(result.output.findings).toEqual([]);
     expect(result.output.summary).toMatch(/structured evidence extraction was incomplete/i);
-    expect(prisma.researchJob.updateMany).toHaveBeenCalledWith(
+    expect(prisma.researchJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: { id: "job-1" },
         data: expect.objectContaining({
           status: "PARTIAL",
           error: expect.stringMatching(/structured_extraction_degraded|partial_sources_only/),
