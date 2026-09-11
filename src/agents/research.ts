@@ -6,6 +6,7 @@ import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { assertEntitlement, recordMeteredUsage } from "@/services/entitlements";
 import { prisma } from "@/lib/db";
+import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
 import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
   parseClaimKind,
@@ -265,8 +266,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     }
     const fast = parsed.depth === "FAST";
     const maxSources = parsed.maxSources ?? (fast ? 6 : 28);
-    await assertEntitlement(ctx.organisationId, "research");
-    await assertWithinSpendCap(ctx.organisationId, researchAgent.estimateCostCents(parsed));
+    const organisationId = asSafePrismaId(ctx.organisationId);
+    await assertEntitlement(organisationId, "research");
+    await assertWithinSpendCap(organisationId, researchAgent.estimateCostCents(parsed));
 
     const model = resolveModelForTier("cheap");
     let costCents = 0;
@@ -275,7 +277,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     let expanded: string[] = [];
     if (!fast) {
       expanded = await expandResearchQueries({
-        organisationId: ctx.organisationId,
+        organisationId: organisationId,
         topic,
         nicheHint: parsed.nicheHint,
         model,
@@ -291,7 +293,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const job = await prisma.researchJob.create({
       data: {
-        organisationId: ctx.organisationId,
+        organisationId: organisationId,
         agentRunId: ctx.agentRunId,
         kind: "RESEARCH",
         topic,
@@ -300,6 +302,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         startedAt: new Date(),
       },
     });
+    const jobId = asSafePrismaId(job.id);
 
     const configuredPlatforms = listConfiguredSourcePlatforms();
     const explicitPlatforms = (parsed.platforms as SourcePlatform[] | undefined)?.length
@@ -357,7 +360,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           platforms: usePlatforms,
           concurrency,
           options: {
-            organisationId: ctx.organisationId,
+            organisationId: organisationId,
             limit: searchOptions.limit,
             recent: true,
             nicheHint: parsed.nicheHint,
@@ -375,13 +378,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         }
         activePlatforms = activePlatforms.filter((p) => !coldPlatforms.has(p));
         await recordResearchToolCall({
-          organisationId: ctx.organisationId,
+          organisationId: organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
           args: {
             query,
             platforms: usePlatforms,
-            organisationId: ctx.organisationId,
+            organisationId: organisationId,
             includeDomains: searchOptions.includeDomains ?? null,
           },
           result: {
@@ -403,13 +406,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         coldPlatforms.add("web");
         activePlatforms = activePlatforms.filter((p) => !coldPlatforms.has(p));
         await recordResearchToolCall({
-          organisationId: ctx.organisationId,
+          organisationId: organisationId,
           agentStepId: ctx.agentStepId,
           toolName: "source.search",
           args: {
             query,
             platforms: usePlatforms,
-            organisationId: ctx.organisationId,
+            organisationId: organisationId,
             includeDomains: searchOptions.includeDomains ?? null,
           },
           error: message,
@@ -485,8 +488,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
     for (const r of ranked) {
       const persisted = await persistResearchSourceWithSnapshot({
-        organisationId: ctx.organisationId,
-        researchJobId: job.id,
+        organisationId: organisationId,
+        researchJobId: jobId,
         url: r.url,
         title: r.title,
         platform: r.platform,
@@ -513,12 +516,12 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       )
       .join("\n\n----\n\n");
 
-    await assertWithinSpendCap(ctx.organisationId, 2);
+    await assertWithinSpendCap(organisationId, 2);
     let extractedFindings: z.infer<typeof findingsExtractSchema>["findings"] = [];
     if (catalog) {
       const findingLimit = Math.min(maxSources, 15);
       const extractResult = await completeStructuredSafe(findingsExtractSchema, {
-        organisationId: ctx.organisationId,
+        organisationId: organisationId,
         tier: "cheap",
         model,
         maxTokens: 8192,
@@ -541,13 +544,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         } = await import("@/services/ai-provider-preflight");
         if (isAiProviderAuthError(extractResult.reason)) {
           logger.warn("Research findings extract failed — provider authentication", {
-            researchJobId: job.id,
-            organisationId: ctx.organisationId,
+            researchJobId: jobId,
+            organisationId: organisationId,
             phase: "SYNTHESIS_FAILED",
             evidenceGathered: ranked.length > 0,
           });
-          await prisma.researchJob.updateMany({
-            where: { id: job.id, organisationId: ctx.organisationId },
+          await updateOrgScopedById(prisma.researchJob, {
+            id: jobId,
+            organisationId,
             data: {
               status: "FAILED",
               brief: {
@@ -569,17 +573,18 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         }
         // Sources were collected — return an honest PARTIAL-style brief instead of failing the Ask run.
         logger.warn("Research findings extract failed after sources collected — degrading to source-backed partial", {
-          researchJobId: job.id,
-          organisationId: ctx.organisationId,
+          researchJobId: jobId,
+          organisationId: organisationId,
           reason: extractResult.reason,
           failureClass: extractResult.failureClass,
           sourceCount: ranked.length,
           phase: "STRUCTURED_EXTRACTION_FAILED",
         });
         extractedFindings = [];
-        await prisma.researchJob.updateMany({
-          where: { id: job.id, organisationId: ctx.organisationId },
-          data: {
+        await updateOrgScopedById(prisma.researchJob, {
+            id: jobId,
+            organisationId,
+            data: {
             status: "PARTIAL",
             brief: {
               phase: "STRUCTURED_EXTRACTION_FAILED",
@@ -594,7 +599,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             userFacingError: null,
             error: "structured_extraction_degraded",
           },
-        });
+          });
       }
     }
 
@@ -624,14 +629,15 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       );
       // Keep source list for the customer instead of hard-failing the Ask run.
       logger.warn("Research findings had no usable source linkage — degrading to source-backed partial", {
-        researchJobId: job.id,
-        organisationId: ctx.organisationId,
+        researchJobId: jobId,
+        organisationId: organisationId,
         extractedCount: extractedFindings.length,
         phase: "GROUNDING_FAILED",
       });
-      await prisma.researchJob.updateMany({
-        where: { id: job.id, organisationId: ctx.organisationId },
-        data: {
+      await updateOrgScopedById(prisma.researchJob, {
+            id: jobId,
+            organisationId,
+            data: {
           status: "PARTIAL",
           brief: {
             phase: "GROUNDING_FAILED",
@@ -646,7 +652,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           userFacingError: null,
           error: "grounding_degraded",
         },
-      });
+          });
       // Drop unlinked findings; continue with sources + honest summary.
     }
 
@@ -655,8 +661,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       if (!sourceId) continue;
       await prisma.researchFinding.create({
         data: {
-          organisationId: ctx.organisationId,
-          researchJobId: job.id,
+          organisationId: organisationId,
+          researchJobId: jobId,
           researchSourceId: sourceId,
           claim: f.claim,
           evidenceExcerpt: f.evidenceExcerpt,
@@ -677,7 +683,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
 
     const output: ResearchOutput = {
-      researchJobId: job.id,
+      researchJobId: jobId,
       topic,
       queries,
       sourceCount: ranked.length,
@@ -695,9 +701,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         : {}),
     };
 
-    await prisma.researchJob.updateMany({
-      where: { id: job.id, organisationId: ctx.organisationId },
-      data: {
+    await updateOrgScopedById(prisma.researchJob, {
+            id: jobId,
+            organisationId,
+            data: {
         status: ranked.length ? (findings.length ? "COMPLETED" : "PARTIAL") : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
@@ -707,26 +714,26 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           : "I couldn't reach any research sources. Check that YouTube, Reddit, or web search keys are configured.",
         error: ranked.length ? (findings.length ? null : "partial_sources_only") : "no_sources",
       },
-    });
+          });
 
     if (ranked.length) {
       try {
         await recordMeteredUsage({
-          organisationId: ctx.organisationId,
+          organisationId: organisationId,
           feature: "research",
-          metadata: { researchJobId: job.id },
+          metadata: { researchJobId: jobId },
         });
       } catch {
         /* metering must not fail the research output */
       }
       try {
         await ingestResearchJobSocialContent({
-          organisationId: ctx.organisationId,
-          researchJobId: job.id,
+          organisationId: organisationId,
+          researchJobId: jobId,
         });
       } catch (error) {
         logger.warn("Social intelligence ingest skipped after research", {
-          researchJobId: job.id,
+          researchJobId: jobId,
           message: error instanceof Error ? error.message : "unknown",
         });
       }

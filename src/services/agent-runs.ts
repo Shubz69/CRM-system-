@@ -1,5 +1,6 @@
 import { AgentAnswerMode, AgentDetailRetention, Prisma, type AgentRun, type AgentStep } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
 import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { ensureAgentsRegistered } from "@/agents";
 import {
@@ -392,9 +393,10 @@ export async function createAndEnqueueAgentRun(input: {
           organisationId: input.organisationId,
           runId: run.id,
         });
-        await prisma.agentRun.updateMany({
-          where: { id: run.id, organisationId: input.organisationId },
-          data: { bullJobId: `sync-quick-crm:${run.id}` },
+        await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: { bullJobId: `sync-quick-crm:${run.id}` },
         });
         logger.info("Agent run completed via Quick CRM sync fast-path", {
           runId: run.id,
@@ -410,11 +412,7 @@ export async function createAndEnqueueAgentRun(input: {
         });
         try {
           const stillOpen = await prisma.agentRun.findFirst({
-            where: {
-              id: run.id,
-              organisationId: input.organisationId,
-              status: { in: ["PENDING", "PLANNING", "RUNNING"] },
-            },
+            where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) }, status: { in: ["PENDING", "PLANNING", "RUNNING"] } },
             select: { id: true },
           });
           if (stillOpen) {
@@ -423,17 +421,19 @@ export async function createAndEnqueueAgentRun(input: {
               organisationId: input.organisationId,
               payload: { agentRunId: run.id },
             });
-            await prisma.agentRun.updateMany({
-              where: { id: run.id, organisationId: input.organisationId },
+            await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
               data: { bullJobId: jobId },
             });
           }
         } catch (fallbackError) {
           const fallbackMessage =
             fallbackError instanceof Error ? fallbackError.message : "Enqueue failed";
-          await prisma.agentRun.updateMany({
-            where: { id: run.id, organisationId: input.organisationId },
-            data: {
+          await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: {
               status: "FAILED",
               finishedAt: new Date(),
               error: fallbackMessage,
@@ -461,7 +461,7 @@ export async function createAndEnqueueAgentRun(input: {
 
     await runExecute();
     const done = await prisma.agentRun.findFirst({
-      where: { id: run.id, organisationId: input.organisationId },
+      where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
       select: { status: true, finalOutput: true, plainEnglishPlan: true },
     });
     return {
@@ -496,8 +496,9 @@ export async function createAndEnqueueAgentRun(input: {
         // before runId is returned to the client).
         after(async () => {
           try {
-            await prisma.agentRun.updateMany({
-              where: { id: run.id, organisationId: input.organisationId },
+            await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
               data: { bullJobId: jobId },
             });
           } catch (error) {
@@ -515,7 +516,7 @@ export async function createAndEnqueueAgentRun(input: {
             await new Promise((r) => setTimeout(r, target - waited));
             waited = target;
             const cur = await prisma.agentRun.findFirst({
-              where: { id: run.id, organisationId: input.organisationId },
+              where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
               select: {
                 status: true,
                 updatedAt: true,
@@ -580,8 +581,10 @@ export async function createAndEnqueueAgentRun(input: {
               organisationId: input.organisationId,
               runId: run.id,
             });
-            await prisma.agentRun.updateMany({
-              where: { id: run.id, organisationId: input.organisationId, bullJobId: null },
+            await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              extraWhere: { bullJobId: null },
               data: { bullJobId: `sync-deep-local:${run.id}` },
             });
           } catch (error) {
@@ -591,8 +594,9 @@ export async function createAndEnqueueAgentRun(input: {
               organisationId: input.organisationId,
               error: message,
             });
-            await prisma.agentRun.updateMany({
-              where: { id: run.id, organisationId: input.organisationId },
+            await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
               data: {
                 status: "FAILED",
                 finishedAt: new Date(),
@@ -624,9 +628,10 @@ export async function createAndEnqueueAgentRun(input: {
       payload: { agentRunId: run.id },
     });
 
-    await prisma.agentRun.updateMany({
-      where: { id: run.id, organisationId: input.organisationId },
-      data: { bullJobId: jobId },
+    await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: { bullJobId: jobId },
     });
 
     acceptMs = Date.now() - acceptStarted;
@@ -639,9 +644,10 @@ export async function createAndEnqueueAgentRun(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Enqueue failed";
-    await prisma.agentRun.updateMany({
-      where: { id: run.id, organisationId: input.organisationId },
-      data: {
+    await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: {
         status: "FAILED",
         finishedAt: new Date(),
         error: message,
@@ -663,11 +669,7 @@ export async function clarifyAndEnqueueAgentRun(input: {
   selectedOption: string;
 }): Promise<{ runId: string; jobId: string }> {
   const run = await prisma.agentRun.findFirst({
-    where: {
-      id: input.runId,
-      organisationId: input.organisationId,
-      status: "AWAITING_CLARIFICATION",
-    },
+    where: { id: { equals: String(asSafePrismaId(input.runId)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) }, status: "AWAITING_CLARIFICATION" },
   });
   if (!run) {
     throw new Error("Run not awaiting clarification");
@@ -717,9 +719,10 @@ export async function clarifyAndEnqueueAgentRun(input: {
     ? priorBrief.clarifications.filter((c): c is string => typeof c === "string")
     : [];
 
-  await prisma.agentRun.updateMany({
-    where: { id: run.id, organisationId: input.organisationId },
-    data: {
+  await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: {
       request: immutableRequest,
       status: "PENDING",
       answerMode: preservedMode,
@@ -745,9 +748,10 @@ export async function clarifyAndEnqueueAgentRun(input: {
     payload: { agentRunId: run.id },
   });
 
-  await prisma.agentRun.updateMany({
-    where: { id: run.id, organisationId: input.organisationId },
-    data: { bullJobId: jobId },
+  await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: { bullJobId: jobId },
   });
 
   logger.info("Agent run clarified and re-enqueued", {
@@ -774,11 +778,7 @@ export async function confirmImagingPromptAndEnqueue(input: {
   }
 
   const run = await prisma.agentRun.findFirst({
-    where: {
-      id: input.runId,
-      organisationId: input.organisationId,
-      status: "AWAITING_PROMPT_CONFIRM",
-    },
+    where: { id: { equals: String(asSafePrismaId(input.runId)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) }, status: "AWAITING_PROMPT_CONFIRM" },
   });
   if (!run) {
     throw new Error("Run not awaiting prompt confirmation");
@@ -808,9 +808,10 @@ export async function confirmImagingPromptAndEnqueue(input: {
     }.`,
   };
 
-  await prisma.agentRun.updateMany({
-    where: { id: run.id, organisationId: input.organisationId },
-    data: {
+  await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: {
       pendingPrompt: prompt,
       plan: plan as unknown as Prisma.InputJsonValue,
       plainEnglishPlan: plan.plainEnglishPlan,
@@ -828,9 +829,10 @@ export async function confirmImagingPromptAndEnqueue(input: {
     payload: { agentRunId: run.id },
   });
 
-  await prisma.agentRun.updateMany({
-    where: { id: run.id, organisationId: input.organisationId },
-    data: { bullJobId: jobId },
+  await updateOrgScopedById(prisma.agentRun, {
+              id: run.id,
+              organisationId: input.organisationId,
+              data: { bullJobId: jobId },
   });
 
   logger.info("Imaging prompt confirmed and generation enqueued", {
@@ -850,7 +852,7 @@ export async function getAgentRunProgress(input: {
   runId: string;
 }): Promise<AgentRunProgress | null> {
   const run = await prisma.agentRun.findFirst({
-    where: { id: input.runId, organisationId: input.organisationId },
+    where: { id: { equals: String(asSafePrismaId(input.runId)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
     include: {
       steps: {
         where: { organisationId: input.organisationId },

@@ -146,9 +146,11 @@ describe("organisation lifecycle — soft-delete + restrict purge", () => {
 
     expect(result.export.counts.auditLogs).toBe(2);
     expect(mocks.auditLog.deleteMany).toHaveBeenCalledWith({
-      where: { organisationId: "org_1" },
+      where: { organisationId: { equals: "org_1" } },
     });
-    expect(mocks.organisation.delete).toHaveBeenCalledWith({ where: { id: "org_1" } });
+    expect(mocks.organisation.delete).toHaveBeenCalledWith({
+      where: { id: "org_1" },
+    });
     expect(writeAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ scope: "PLATFORM", action: "workspace.purge_started" }),
     );

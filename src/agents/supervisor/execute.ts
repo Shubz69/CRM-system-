@@ -1,5 +1,6 @@
 import { Prisma, type AgentRunStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
 import { ensureAgentsRegistered, getAgent } from "@/agents";
 import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal } from "@/agents/supervisor/plan";
 import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
@@ -79,9 +80,10 @@ async function finishRun(input: {
   /** Used to write episodic memory on terminal outcomes. */
   request?: string;
 }): Promise<ExecuteAgentRunResult> {
-  const updated = await prisma.agentRun.updateMany({
-    where: { id: input.runId, organisationId: input.organisationId },
-    data: {
+  const updated = await updateOrgScopedById(prisma.agentRun, {
+      id: input.runId,
+      organisationId: input.organisationId,
+      data: {
       status: input.status,
       finishedAt: input.keepOpen ? null : new Date(),
       totalCostCents: input.totalCostCents,
@@ -136,7 +138,7 @@ export async function executeAgentRun(input: {
   ensureAgentsRegistered();
 
   const run = await prisma.agentRun.findFirst({
-    where: { id: input.runId, organisationId: input.organisationId },
+    where: { id: { equals: String(asSafePrismaId(input.runId)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
   });
   if (!run) {
     throw new Error("Agent run not found for organisation");
@@ -177,7 +179,7 @@ export async function executeAgentRun(input: {
   const existingStepCount =
     typeof prisma.agentStep.count === "function"
       ? await prisma.agentStep.count({
-          where: { agentRunId: run.id, organisationId: input.organisationId },
+          where: { agentRunId: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
         })
       : 0;
   if (existingStepCount > 0) {
@@ -311,17 +313,15 @@ export async function executeAgentRun(input: {
         }
       : {}),
   };
-  const claimed = await prisma.agentRun.updateMany({
-    where: {
-      id: run.id,
-      organisationId: input.organisationId,
-      status: { in: ["PENDING", "PLANNING"] },
-    },
+  const claimed = await updateOrgScopedById(prisma.agentRun, {
+    id: run.id,
+    organisationId: input.organisationId,
+    extraWhere: { status: { in: ["PENDING", "PLANNING"] } },
     data: claimData,
   });
   if (claimed.count !== 1) {
     const cur = await prisma.agentRun.findFirst({
-      where: { id: run.id, organisationId: input.organisationId },
+      where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
     });
     return {
       runId: run.id,
@@ -346,8 +346,10 @@ export async function executeAgentRun(input: {
     });
     businessContextKnownFacts = askCtxCached.knownFacts;
     if (askCtxCached.knownFacts.length && !asPlan(run.plan)) {
-      await prisma.agentRun.updateMany({
-        where: { id: run.id, organisationId: input.organisationId, status: "PLANNING" },
+      await updateOrgScopedById(prisma.agentRun, {
+        id: run.id,
+        organisationId: input.organisationId,
+        extraWhere: { status: "PLANNING" },
         data: { plainEnglishPlan: CUSTOMER_PROGRESS_STAGES.context },
       });
     }
@@ -387,9 +389,10 @@ export async function executeAgentRun(input: {
       }
 
       if (!suppress) {
-        await prisma.agentRun.updateMany({
-          where: { id: run.id, organisationId: input.organisationId },
-          data: {
+        await updateOrgScopedById(prisma.agentRun, {
+      id: run.id,
+      organisationId: input.organisationId,
+      data: {
             status: "AWAITING_CLARIFICATION",
             clarificationQuestion: planned.question,
             clarificationOptions: planned.options,
@@ -416,9 +419,10 @@ export async function executeAgentRun(input: {
         },
       );
       if (replanned.kind === "clarification") {
-        await prisma.agentRun.updateMany({
-          where: { id: run.id, organisationId: input.organisationId },
-          data: {
+        await updateOrgScopedById(prisma.agentRun, {
+      id: run.id,
+      organisationId: input.organisationId,
+      data: {
             status: "AWAITING_CLARIFICATION",
             clarificationQuestion: replanned.question,
             clarificationOptions: replanned.options,
@@ -439,8 +443,9 @@ export async function executeAgentRun(input: {
       plan = planned.plan;
     }
 
-    await prisma.agentRun.updateMany({
-      where: { id: run.id, organisationId: input.organisationId },
+    await updateOrgScopedById(prisma.agentRun, {
+      id: run.id,
+      organisationId: input.organisationId,
       data: {
         plan: plan as unknown as Prisma.InputJsonValue,
         plainEnglishPlan: plan.plainEnglishPlan,
@@ -450,8 +455,9 @@ export async function executeAgentRun(input: {
       },
     });
   } else {
-    await prisma.agentRun.updateMany({
-      where: { id: run.id, organisationId: input.organisationId },
+    await updateOrgScopedById(prisma.agentRun, {
+      id: run.id,
+      organisationId: input.organisationId,
       data: {
         status: "RUNNING",
         plainEnglishPlan: plan.plainEnglishPlan,
@@ -960,12 +966,10 @@ export async function executeAgentRun(input: {
       const costCents = result.costCents ?? 0;
       totalCostCents += costCents;
 
-      await prisma.agentStep.updateMany({
-        where: {
-          id: stepRow.id,
-          organisationId: input.organisationId,
-          agentRunId: run.id,
-        },
+      await updateOrgScopedById(prisma.agentStep, {
+        id: stepRow.id,
+        organisationId: input.organisationId,
+        extraWhere: { agentRunId: { equals: String(asSafePrismaId(run.id)) } },
         data: {
           output: result.output as Prisma.InputJsonValue,
           model: result.model ?? null,
@@ -978,9 +982,10 @@ export async function executeAgentRun(input: {
         },
       });
 
-      await prisma.agentRun.updateMany({
-        where: { id: run.id, organisationId: input.organisationId },
-        data: { totalCostCents },
+      await updateOrgScopedById(prisma.agentRun, {
+      id: run.id,
+      organisationId: input.organisationId,
+      data: { totalCostCents },
       });
 
       const priorForMerge = previousOutput;
@@ -1105,12 +1110,10 @@ export async function executeAgentRun(input: {
         message,
       });
 
-      await prisma.agentStep.updateMany({
-        where: {
-          id: stepRow.id,
-          organisationId: input.organisationId,
-          agentRunId: run.id,
-        },
+      await updateOrgScopedById(prisma.agentStep, {
+        id: stepRow.id,
+        organisationId: input.organisationId,
+        extraWhere: { agentRunId: { equals: String(asSafePrismaId(run.id)) } },
         data: {
           durationMs,
           status: "FAILED",

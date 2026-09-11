@@ -1,13 +1,14 @@
 import { OrganisationStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { asSafePrismaId } from "@/lib/safe-prisma-id";
 import { assertOrganisationMutable } from "@/lib/platform-org";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
 
-/** Coerce org ids to plain strings so query builders never accept operator objects. */
+/** @deprecated prefer asSafePrismaId — kept as alias for call sites in this module. */
 function asOrgId(value: unknown): string {
-  return z.string().min(1).max(64).parse(value);
+  return asSafePrismaId(value);
 }
 
 /**
@@ -147,7 +148,8 @@ export async function purgeOrganisationHard(input: {
       await tx.aiExecution.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
       await tx.webhookEvent.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
       await tx.failedJob.deleteMany({ where: { organisationId: { equals: purgeOrgId } } });
-      await tx.organisation.delete({ where: { id: { equals: purgeOrgId } } });
+      // Unique-delete where requires a scalar id (already Zod-coerced above).
+      await tx.organisation.delete({ where: { id: purgeOrgId } });
     },
     // Supabase pooler + multi-delete purge exceeds Prisma's 5s interactive default.
     { timeout: 30_000, maxWait: 15_000 },
