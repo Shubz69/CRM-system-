@@ -124,6 +124,16 @@ describe("evaluateOrganisationConnectors honesty", () => {
     expect(publish?.provenance).toMatch(/ZERNIO/i);
     expect(publish?.missingScopes ?? []).toEqual([]);
 
+    const ghostDeletes = capabilityDeleteMany.mock.calls.filter((call) => {
+      const where = (call[0] as { where: Record<string, unknown> }).where;
+      return (
+        where.organisationId === "org_honest" &&
+        where.providerKey === "linkedin" &&
+        where.connectionRef === "none" &&
+        where.status === ConnectorCapabilityStatus.AUTH_REQUIRED
+      );
+    });
+    expect(ghostDeletes.length).toBeGreaterThan(0);
     expect(capabilityDeleteMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -157,5 +167,88 @@ describe("evaluateOrganisationConnectors honesty", () => {
       ?.capabilities.find((c) => c.capability === "PUBLISH");
     expect(publish?.status).toBe(ConnectorCapabilityStatus.SCOPE_REQUIRED);
     expect(publish?.missingScopes).toContain("w_member_social");
+  });
+
+  it("marks Zernio Instagram PUBLISH connected and does not invent native SCOPE_REQUIRED", async () => {
+    socialFindMany.mockResolvedValue([
+      {
+        id: "sc_zernio_ig",
+        platform: "INSTAGRAM",
+        status: "ACTIVE",
+        scopes: ["zernio:publish"],
+        capabilities: { listen: true, publish: true, message: true },
+        expiresAt: null,
+        lastSyncedAt: new Date("2026-09-14"),
+        updatedAt: new Date("2026-09-14"),
+        externalAccountId: "zernio:ig_prod",
+        metadata: { provider: "ZERNIO", zernioNetwork: "instagram", zernioAccountId: "ig_prod" },
+      },
+    ]);
+
+    const rows = await evaluateOrganisationConnectors("org_ig");
+    expect(socialFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organisationId: "org_ig" } }),
+    );
+    const instagram = rows.find((r) => r.providerKey === "instagram");
+    expect(instagram?.connectionStatus).toBe(ConnectorConnectionStatus.CONNECTED);
+    expect(instagram?.connectionRef).toBe("sc_zernio_ig");
+    const publish = instagram?.capabilities.find((c) => c.capability === "PUBLISH");
+    expect(publish?.status).toBe(ConnectorCapabilityStatus.CONNECTED);
+    expect(publish?.provenance).toMatch(/ZERNIO/i);
+  });
+
+  it("keeps org B AUTH_REQUIRED after org A Zernio sync", async () => {
+    socialFindMany.mockImplementation(async (args: { where?: { organisationId?: string } }) => {
+      if (args.where?.organisationId === "org_a") {
+        return [
+          {
+            id: "sc_zernio_a",
+            platform: "LINKEDIN",
+            status: "ACTIVE",
+            scopes: ["zernio:publish"],
+            capabilities: { publish: true },
+            expiresAt: null,
+            lastSyncedAt: new Date(),
+            updatedAt: new Date(),
+            externalAccountId: "zernio:li_a",
+            metadata: { provider: "ZERNIO" },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const rowsA = await evaluateOrganisationConnectors("org_a");
+    const rowsB = await evaluateOrganisationConnectors("org_b");
+    const publishA = rowsA
+      .find((r) => r.providerKey === "linkedin")
+      ?.capabilities.find((c) => c.capability === "PUBLISH");
+    const linkedinB = rowsB.find((r) => r.providerKey === "linkedin");
+    const publishB = linkedinB?.capabilities.find((c) => c.capability === "PUBLISH");
+    expect(publishA?.status).toBe(ConnectorCapabilityStatus.CONNECTED);
+    expect(linkedinB?.connectionRef).toBe("none");
+    expect(publishB?.status).toBe(ConnectorCapabilityStatus.AUTH_REQUIRED);
+  });
+
+  it("keeps ManyChat WEBHOOK_RECEIVE AUTH_REQUIRED until an org secret exists", async () => {
+    const prevToken = process.env.MANYCHAT_API_TOKEN;
+    const prevSecret = process.env.MANYCHAT_WEBHOOK_SECRET;
+    process.env.MANYCHAT_API_TOKEN = "env-shared-token";
+    process.env.MANYCHAT_WEBHOOK_SECRET = "env-shared-secret";
+    socialFindMany.mockResolvedValue([]);
+    integrationFindFirst.mockResolvedValue(null);
+
+    try {
+      const rows = await evaluateOrganisationConnectors("org_new");
+      const manychat = rows.find((r) => r.providerKey === "manychat");
+      const receive = manychat?.capabilities.find((c) => c.capability === "WEBHOOK_RECEIVE");
+      expect(receive?.status).toBe(ConnectorCapabilityStatus.AUTH_REQUIRED);
+      expect(receive?.provenance).toMatch(/AUTH_REQUIRED/i);
+    } finally {
+      if (prevToken === undefined) delete process.env.MANYCHAT_API_TOKEN;
+      else process.env.MANYCHAT_API_TOKEN = prevToken;
+      if (prevSecret === undefined) delete process.env.MANYCHAT_WEBHOOK_SECRET;
+      else process.env.MANYCHAT_WEBHOOK_SECRET = prevSecret;
+    }
   });
 });

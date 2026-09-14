@@ -35,7 +35,8 @@ export async function GET() {
     });
 
     const orgSecret = await getOrganisationManyChatSecret(session.organisationId);
-    const secretConfigured = Boolean(orgSecret || env.MANYCHAT_WEBHOOK_SECRET);
+    const secretConfigured = Boolean(orgSecret);
+    const inboundAuthRequired = !secretConfigured;
     const connection = await getOrganisationManyChatConnectionState(session.organisationId);
     const activeOrgToken = await getOrganisationManyChatApiToken(session.organisationId);
     const envToken = Boolean(env.MANYCHAT_API_TOKEN?.trim());
@@ -73,8 +74,10 @@ export async function GET() {
       webhookUrl: `${appUrl.replace(/\/$/, "")}/api/webhooks/manychat`,
       inboundAliasUrl: `${appUrl.replace(/\/$/, "")}/api/integrations/manychat/inbound`,
       secretConfigured,
-      secretMasked: maskSecret(orgSecret || env.MANYCHAT_WEBHOOK_SECRET),
-      secretSource: orgSecret ? "organisation" : "environment",
+      inboundAuthRequired,
+      inboundCapabilityStatus: inboundAuthRequired ? "AUTH_REQUIRED" : "CONNECTED",
+      secretMasked: maskSecret(orgSecret),
+      secretSource: orgSecret ? "organisation" : "none",
       apiTokenConfigured,
       apiTokenStatus: apiTokenStatusLabel(apiTokenConfigured),
       // Never return plaintext — masked status only.
@@ -160,7 +163,7 @@ async function validateManyChatConfiguration(organisationId: string): Promise<{
   const env = getEnv();
   const connection = await getOrganisationManyChatConnectionState(organisationId);
   const orgSecret = await getOrganisationManyChatSecret(organisationId);
-  const secretConfigured = Boolean(orgSecret || env.MANYCHAT_WEBHOOK_SECRET);
+  const secretConfigured = Boolean(orgSecret);
   const token = await getOrganisationManyChatApiToken(organisationId);
   const envToken = env.MANYCHAT_API_TOKEN?.trim() || null;
   const effectiveToken = token || (connection.isActive || !connection.exists ? envToken : null);

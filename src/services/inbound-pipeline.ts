@@ -51,7 +51,9 @@ import {
 } from "@/services/messaging/understanding";
 import { NotificationType } from "@prisma/client";
 import {
+  isDemoAccountPlaceholder,
   messagingChannelDisplayName,
+  persistableChannelInstagramUsername,
   resolveChannelInstagramUsername,
 } from "@/services/messaging/channel-identity";
 
@@ -213,12 +215,12 @@ export async function processInboundMessage(
             provider: messagingProvider,
             externalId: input.channelExternalId ?? "default",
             displayName: messagingChannelDisplayName(messagingProvider),
-            instagramUsername: inboundHandle,
+            instagramUsername: persistableChannelInstagramUsername(inboundHandle),
           },
         });
       } else if (
         inboundHandle &&
-        (!channel.instagramUsername || channel.instagramUsername.toLowerCase() === "demo_account")
+        (!channel.instagramUsername || isDemoAccountPlaceholder(channel.instagramUsername))
       ) {
         channel = await tx.messagingChannel.update({
           where: { id: channel.id },

@@ -20,6 +20,8 @@ type MessagingStatus = {
   webhookUrl: string;
   inboundAliasUrl?: string;
   secretConfigured: boolean;
+  inboundAuthRequired?: boolean;
+  inboundCapabilityStatus?: "AUTH_REQUIRED" | "CONNECTED";
   secretMasked: string;
   secretSource?: string;
   apiTokenConfigured: boolean;
@@ -938,11 +940,32 @@ export default function IntegrationsClient() {
             <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
               {status?.connected ? "Connected" : "Not connected"}
             </span>
+            {status?.inboundAuthRequired ||
+            status?.inboundCapabilityStatus === "AUTH_REQUIRED" ||
+            (status && !status.secretConfigured) ? (
+              <span className="badge badge-warn">AUTH_REQUIRED</span>
+            ) : null}
             {status?.connectionActive === false && (
               <span className="badge badge-warn">Disconnected</span>
             )}
           </div>
         </div>
+
+        {status && !status.secretConfigured ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/60 p-4">
+            <p className="font-medium">First-run inbound checklist</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Inbound receive is <span className="font-medium text-[var(--foreground)]">AUTH_REQUIRED</span>{" "}
+              until this workspace has its own webhook secret. The environment secret cannot authorize
+              another organisation&apos;s events.
+            </p>
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-[var(--muted)]">
+              <li>Copy the webhook URL and organisationId below.</li>
+              <li>Click Regenerate secret and store header x-manychat-secret on the inbound request.</li>
+              <li>Include organisationId on every payload so events land in this workspace only.</li>
+            </ol>
+          </div>
+        ) : null}
 
         <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
           <li>
@@ -953,7 +976,7 @@ export default function IntegrationsClient() {
           <li>
             <span className="font-medium text-[var(--foreground)]">Regenerate the webhook secret</span>{" "}
             — copy it once, then send header <code>x-manychat-secret</code> on the inbound request.
-            Without an organisation secret, inbound receive stays authentication-required.
+            Without an organisation secret, inbound receive stays AUTH_REQUIRED for this workspace.
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Paste your API token</span> for
@@ -1007,7 +1030,9 @@ export default function IntegrationsClient() {
             <dt className="text-[var(--muted)]">Webhook secret</dt>
             <dd className="mt-1 font-mono text-xs">
               {status?.secretConfigured ? status.secretMasked : "not set"}
-              {status?.secretSource ? ` (${status.secretSource})` : ""}
+              {status?.secretSource && status.secretSource !== "none"
+                ? ` (${status.secretSource})`
+                : ""}
             </dd>
             <div className="mt-2 flex flex-wrap gap-2">
               <button

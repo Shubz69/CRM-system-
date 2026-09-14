@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   messagingChannelDisplayName,
+  persistableChannelInstagramUsername,
   resolveChannelInstagramUsername,
 } from "@/services/messaging/channel-identity";
 
@@ -31,5 +32,13 @@ describe("resolveChannelInstagramUsername", () => {
     expect(messagingChannelDisplayName("zernio")).toBe("Instagram (Zernio)");
     expect(messagingChannelDisplayName("manychat")).toBe("Instagram via ManyChat");
     expect(messagingChannelDisplayName("meta_instagram")).toBe("Instagram (Meta)");
+  });
+
+  it("persistableChannelInstagramUsername never stores demo_account", () => {
+    expect(persistableChannelInstagramUsername("demo_account")).toBeNull();
+    expect(persistableChannelInstagramUsername("@demo_account")).toBeNull();
+    expect(persistableChannelInstagramUsername("DEMO_ACCOUNT")).toBeNull();
+    expect(persistableChannelInstagramUsername(null)).toBeNull();
+    expect(persistableChannelInstagramUsername("@live_handle")).toBe("live_handle");
   });
 });
