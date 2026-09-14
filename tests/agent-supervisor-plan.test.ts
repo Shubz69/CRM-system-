@@ -60,6 +60,22 @@ describe("supervisor planning", () => {
     expect(result.plan.steps).toHaveLength(1);
     expect(result.plan.steps[0]?.agentName).toBe("research");
     expect((result.plan.steps[0]?.input as { depth?: string }).depth).toBe("FAST");
+    expect((result.plan.steps[0]?.input as { maxSources?: number }).maxSources).toBe(8);
+    expect(result.plan.plainEnglishPlan).toMatch(/strategy|posting plan|monetization/i);
+    expect(result.plan.plainEnglishPlan).not.toMatch(/fast sourced scan/i);
+  });
+
+  it("QUICK Instagram Reels growth Ask is a thorough FAST research step", () => {
+    const result = planAgentRunDeterministic(
+      "What Instagram Reels content and posting strategy should @shubzfx use to grow",
+      { organisationId: "org_test", answerMode: "QUICK" },
+    );
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps).toHaveLength(1);
+    expect(result.plan.steps[0]?.agentName).toBe("research");
+    expect((result.plan.steps[0]?.input as { depth?: string }).depth).toBe("FAST");
+    expect(result.plan.plainEnglishPlan).not.toMatch(/taking too long|sources gathered/i);
   });
 
   it("routes research about CRM topics to research, not Inbox/CRM desk", () => {

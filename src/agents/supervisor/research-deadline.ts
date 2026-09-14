@@ -1,12 +1,15 @@
 /**
  * Deadline-aware budgeting for research pipelines.
  *
- * Product latency (2026-09-14):
- * - Quick Ask research: a few seconds (hard cap RESEARCH_QUICK_CEILING_MS).
- * - Even hard/Deep queries: finish or PARTIAL within RESEARCH_HARD_CEILING_MS (~30s).
- * - Prefer source-backed PARTIAL over long empty waits / extra LLM passes.
+ * Product latency:
+ * - Default / Quick Ask: thorough search + 4-section synthesis inside
+ *   RESEARCH_QUICK_CEILING_MS (≤60s wall clock). Everyday CRM Asks stay
+ *   near-instant on the non-research path.
+ * - Deep / hard queries: finish or PARTIAL within RESEARCH_HARD_CEILING_MS.
+ * - Prefer four typed answers over a sources-only dump when time runs out.
  *
- * Mandatory path: retrieval → (optional extract) → grounding → RQS attach.
+ * Mandatory path: retrieval → extract (when remaining time allows) →
+ * grounding → 4-section shape → RQS attach.
  * Optional: analyst / critic — skipped when remaining wall-clock cannot
  * cover them without blowing the ceiling.
  */
@@ -18,39 +21,85 @@ export const OPTIONAL_RESEARCH_ENRICHMENT_AGENTS = new Set(["analyst", "critic"]
 export const RESEARCH_EVIDENCE_AGENTS = new Set(["research", "social_listening"]);
 
 /**
- * Quick research hard cap (ms). Search + persist + source-backed findings only.
- * No query-expand LLM, no extract LLM, no analyst/critic.
+ * Quick / default research hard cap (ms). Search + extract + 4-section answers.
+ * Must leave a few seconds of supervisor headroom under a 60s Ask wall clock
+ * (Vercel `maxDuration` on /api/ask is 60).
  */
-export const RESEARCH_QUICK_CEILING_MS = 8_000;
+export const RESEARCH_QUICK_CEILING_MS = 52_000;
 
 /**
- * Even Deep/hard Ask research must PARTIAL or complete within this execute budget.
- * Supervisor wall-clock for research plans is aligned (see researchWallClockCapSeconds).
+ * Deep/hard Ask research must PARTIAL or complete within this execute budget.
+ * Aligned with the 60s Ask function budget so Deep does not abort earlier than Quick.
  */
-export const RESEARCH_HARD_CEILING_MS = 30_000;
+export const RESEARCH_HARD_CEILING_MS = 58_000;
 
 /**
  * Per-adapter source fetch timeout (ms). Unbounded Tavily/Apify waits are not allowed.
  * FAST must still be long enough for one Tavily/Exa round-trip from Vercel
- * serverless — 3.5s aborted plant-hire searches before any URL returned.
+ * serverless, and for a parallel second/third query inside the 60s budget.
  */
 export const RESEARCH_SOURCE_FETCH_MS = {
-  FAST: 7_000,
-  STANDARD: 6_000,
-  DEEP: 7_000,
+  FAST: 12_000,
+  /** Apify social must not stretch the FAST wave past web search. */
+  FAST_SOCIAL: 8_000,
+  STANDARD: 12_000,
+  DEEP: 14_000,
 } as const;
 
 /** Skip structured extract LLM when remaining time is below this. */
 export const RESEARCH_EXTRACT_MIN_MS = 5_000;
 
+/**
+ * Hold back this much wall-clock for extract + persist + 4-section shape.
+ * Search used to race `remainingMs - 400`, which consumed the whole 60s
+ * budget and left only source cards.
+ */
+export const RESEARCH_SYNTH_RESERVE_MS = 18_000;
+
+export const RESEARCH_SEARCH_CAP_MS = {
+  FAST: 32_000,
+  STANDARD: 32_000,
+  DEEP: 34_000,
+} as const;
+
+/** Last-ditch research after the supervisor is already over budget. */
+export const RESEARCH_LAST_DITCH_MS =
+  RESEARCH_SOURCE_FETCH_MS.FAST + RESEARCH_EXTRACT_MIN_MS + 3_000;
+
+export function researchSearchBudgetMs(input: {
+  remainingMs: number;
+  depth: "FAST" | "STANDARD" | "DEEP";
+}): number {
+  const cap = RESEARCH_SEARCH_CAP_MS[input.depth];
+  const afterReserve = input.remainingMs - RESEARCH_SYNTH_RESERVE_MS;
+  return Math.max(1_200, Math.min(cap, Math.max(200, afterReserve)));
+}
+
+export function researchWallClockUserMessage(input: {
+  salvaged: boolean;
+  sourceCount: number;
+  stepOutputsLength: number;
+  stepsToRunLength: number;
+  hasTypedAnswers?: boolean;
+}): string | null {
+  if (input.hasTypedAnswers) return null;
+  if (input.salvaged || input.sourceCount > 0) {
+    return "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
+  }
+  if (input.stepOutputsLength === 0) {
+    return "I ran out of time before I could finish. Try again in a moment.";
+  }
+  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped to stay inside the time budget.`;
+}
+
 export const RESEARCH_QUERY_CAP = {
-  FAST: 1,
+  FAST: 3,
   STANDARD: 3,
   DEEP: 4,
 } as const;
 
 export const RESEARCH_SOURCE_CAP = {
-  FAST: 5,
+  FAST: 8,
   STANDARD: 8,
   DEEP: 10,
 } as const;
@@ -114,7 +163,8 @@ export function looksLikeResearchOutput(output: unknown): boolean {
 
 /** Supervisor wall-clock cap (seconds) for research / social-listening plans. */
 export function researchWallClockCapSeconds(answerMode: string | null | undefined): number {
-  return answerMode === "QUICK" ? Math.ceil(RESEARCH_QUICK_CEILING_MS / 1000) + 4 : 30;
+  void answerMode;
+  return 60;
 }
 
 export function isResearchPlanStepName(agentName: string): boolean {

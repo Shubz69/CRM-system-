@@ -390,7 +390,8 @@ describe("research deadline / RQS attach (Round 7D A–F)", () => {
     agentRunFindFirst.mockResolvedValue(baseRun({ maxWallClockSeconds: 1 }));
     const result = await executeAgentRun({ organisationId: "org_a", runId: "run_deadline" });
     expect(result.status).toBe("PARTIAL");
-    expect(result.userFacingError).toMatch(/taking too long/i);
+    expect(String(result.userFacingError || "")).not.toMatch(/sources gathered/i);
+    expect(String(result.userFacingError || "")).not.toMatch(/taking too long/i);
     const fo = result.finalOutput as Record<string, unknown>;
     expect(fo.researchQuality).toBeTruthy();
     expect(fo.phase).toBe("PARTIAL_WITH_GROUNDED_QUALITY");

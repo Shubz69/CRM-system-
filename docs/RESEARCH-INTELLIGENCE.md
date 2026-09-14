@@ -2,6 +2,21 @@
 
 **Status:** Phase 3 in progress. Foundation: `src/adapters/sources/**`, ResearchJob/Source/Finding/Snapshot.
 
+## Ask results (customer-facing)
+
+Default Ask UI returns **four answer types** for every workspace — not a freeform wall of source cards:
+
+1. **Strategy** — what to do and why
+2. **Scripts** — hooks, captions, talking points
+3. **Posting plan** — cadence, formats, timing
+4. **Monetization** — how to get paid / convert attention
+
+Research still gathers sources internally for quality and never invents URLs. The default Ask view does **not** list source cards. Evidence is opt-in via “Show evidence”.
+
+Default / Quick Ask aims to finish a thorough search plus these four sections inside **60 seconds**. Search is time-boxed so extraction and the four answers still fit — it must not dump “sources gathered before the limit”. Instagram/LinkedIn growth Asks take the same in-process FAST path as explicit “Research …” prompts.
+
+Growth/content Asks also attach **example AI video briefs** (title, hook, shot list, length). Generation fails closed with `AUTH_REQUIRED` / not-configured unless `VIDEO_PROVIDER` is wired — there is no video adapter in-repo yet.
+
 ## Source Registry
 
 Runtime matrix: `GET /api/integrations/capability-matrix` (`buildIntegrationCapabilityMatrix`).

@@ -9,6 +9,8 @@ import { toast } from "sonner";
 import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
+import { ASK_SHOW_SOURCES_BY_DEFAULT, looksLikeAskGrowthQuery } from "@/lib/ask-result-ui";
+import { hasCompleteTypedAnswers } from "@/services/answer-modes/typed-answers";
 import {
   ResearchFindingCards,
   ResearchSourceCards,
@@ -22,6 +24,7 @@ import { getImmutableWorkspaceContext, isWorkspaceContextReady, subscribeWorkspa
 
 function localAckLabel(prompt: string): string {
   const t = prompt.toLowerCase();
+  if (looksLikeAskGrowthQuery(prompt)) return "Searching sources for a full answer…";
   if (/\b(pipeline|deal|stalled|stuck)\b/.test(t)) return "Reviewing your pipeline…";
   if (/\b(inbox|reply|follow[- ]?up|conversation)\b/.test(t)) return "Checking your Inbox…";
   if (/\b(goal|kpi)\b/.test(t)) return "Checking goals and KPIs…";
@@ -504,7 +507,7 @@ export default function AskPage() {
         body: JSON.stringify({
           request: text,
           ...(referenceAssetId ? { referenceAssetId } : {}),
-          ...(/\b(research|look up|investigate|compare)\b/i.test(text)
+          ...(/\b(research|look up|investigate|compare)\b/i.test(text) || looksLikeAskGrowthQuery(text)
             ? { answerMode: "QUICK" }
             : {}),
         }),
@@ -929,9 +932,11 @@ export default function AskPage() {
       : [];
   const isPartial = progress?.status === "PARTIAL";
   const modeShapedAnswer = isModeShapedOutput(answerSource);
+  const typedReady = hasCompleteTypedAnswers(answerSource);
   const showAnswer =
     Boolean(
-      modeShapedAnswer ||
+      typedReady ||
+        modeShapedAnswer ||
         answerBody ||
         fullBrief ||
         imageUrl ||
@@ -1131,7 +1136,10 @@ export default function AskPage() {
       {/* Answer at the top */}
       {showAnswer && (
         <section className="space-y-6">
-          {isPartial && progress?.userFacingError && (
+          {isPartial &&
+            progress?.userFacingError &&
+            !typedReady &&
+            !/taking too long|sources gathered/i.test(progress.userFacingError) && (
             <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
               {progress.userFacingError}
             </p>
@@ -1146,6 +1154,7 @@ export default function AskPage() {
           )}
           <AnswerModeOutputView
             output={answerSource}
+            request={progress?.request || request}
             onCapability={(label) => void onNextAction(label)}
             fallback={
               <>
@@ -1254,8 +1263,10 @@ export default function AskPage() {
                   </details>
                 )}
 
-                <ResearchFindingCards findings={findings} />
-                <ResearchSourceCards sources={normalizeVisibleSources(answerSource)} />
+                <ResearchFindingCards findings={ASK_SHOW_SOURCES_BY_DEFAULT ? findings : []} />
+                <ResearchSourceCards
+                  sources={ASK_SHOW_SOURCES_BY_DEFAULT ? normalizeVisibleSources(answerSource) : []}
+                />
                 {adapterErrors.length > 0 && (
                   <p className="text-sm text-[var(--muted)]">
                     Some sources were skipped:{" "}
@@ -1283,7 +1294,7 @@ export default function AskPage() {
         <WorkingPulse label={workingLabel} />
       )}
 
-      {!showAnswer && sources.length > 0 && (
+      {!showAnswer && ASK_SHOW_SOURCES_BY_DEFAULT && sources.length > 0 && (
         <section className="space-y-3">
           <ResearchFindingCards findings={findings} />
           <ResearchSourceCards sources={normalizeVisibleSources(answerSource)} />

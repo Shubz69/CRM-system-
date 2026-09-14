@@ -11,7 +11,12 @@ import {
   type VisibleFinding,
   type VisibleSource,
 } from "@/lib/research-visible-evidence";
-import { looksLikeResearchOutput } from "@/agents/supervisor/research-deadline";
+import {
+  looksLikeResearchOutput,
+  researchWallClockUserMessage,
+} from "@/agents/supervisor/research-deadline";
+import { shapeFinalOutputForMode } from "@/services/answer-modes/shape";
+import { buildTypedAnswers, hasCompleteTypedAnswers } from "@/services/answer-modes/typed-answers";
 
 export type SalvagedResearchPartial = {
   researchJobId?: string;
@@ -29,7 +34,7 @@ export type SalvagedResearchPartial = {
 export function honestEmptyResearchPartial(request?: string): SalvagedResearchPartial {
   const topic = (request || "").replace(/\s+/g, " ").trim().slice(0, 500) || "Research";
   const summary =
-    "I ran out of time before sourced findings were ready. Nothing below was invented — try again or use Deep / Research for a longer scan.";
+    "I ran out of time before sourced findings were ready. Nothing below was invented — try again.";
   return {
     topic,
     summary,
@@ -61,7 +66,20 @@ export function isBlankAskFinalOutput(value: unknown): boolean {
   const findings = Array.isArray(obj.findings) ? obj.findings : [];
   const sources = Array.isArray(obj.sources) ? obj.sources : [];
   const claims = Array.isArray(obj.claims) ? obj.claims : [];
-  return !text && findings.length === 0 && sources.length === 0 && claims.length === 0;
+  const typed = obj.typedAnswers;
+  const typedFilled =
+    typed &&
+    typeof typed === "object" &&
+    ["strategy", "scripts", "postingPlan", "monetization"].every((key) => {
+      const rec = (typed as Record<string, unknown>)[key];
+      return (
+        rec &&
+        typeof rec === "object" &&
+        typeof (rec as { body?: unknown }).body === "string" &&
+        (rec as { body: string }).body.trim().length > 0
+      );
+    });
+  return !text && findings.length === 0 && sources.length === 0 && claims.length === 0 && !typedFilled;
 }
 
 function sourceCountOf(value: unknown): number {
@@ -133,9 +151,9 @@ export function researchPartialFromJobRow(job: {
           topic: trimText(job.topic, 500) || trimText(brief.topic, 500) || "Research",
           summary:
             trimText(brief.summary, 1_200) ||
-            `Research gathered ${sources.length || findings.length} source${
+            `Finished a time-boxed scan of ${trimText(job.topic, 80) || "this topic"} using ${sources.length || findings.length} gathered page${
               (sources.length || findings.length) === 1 ? "" : "s"
-            } before the time limit. Findings quote collected pages — they are not invented statistics.`,
+            }. The four answers below use that evidence — they are not invented statistics.`,
           findings,
           sources: sources.length
             ? sources
@@ -148,7 +166,7 @@ export function researchPartialFromJobRow(job: {
           sourceCount: sources.length || findings.length,
           phase: "PARTIAL_WITH_SOURCES",
           caveats: [
-            "This run hit the time limit. Listed sources and quoted excerpts were gathered before stop — not fully synthesised claims.",
+            "This run used everything gathered inside the time budget. The four answers are synthesised from quoted evidence — not a sources-only dump.",
           ],
         };
       }
@@ -202,15 +220,15 @@ export function researchPartialFromJobRow(job: {
   return {
     researchJobId: job.id,
     topic: trimText(job.topic, 500) || "Research",
-    summary: `Research gathered ${sources.length || findings.length} source${
+    summary: `Finished a time-boxed scan of ${trimText(job.topic, 80) || "this topic"} using ${sources.length || findings.length} gathered page${
       (sources.length || findings.length) === 1 ? "" : "s"
-    } before the time limit. Findings quote collected pages — they are not invented statistics.`,
+    }. The four answers below use that evidence — they are not invented statistics.`,
     findings,
     sources,
     sourceCount: sources.length || findings.length,
     phase: "PARTIAL_WITH_SOURCES",
     caveats: [
-      "This run hit the time limit. Listed sources and quoted excerpts were gathered before stop — not fully synthesised claims.",
+      "This run used everything gathered inside the time budget. The four answers are synthesised from quoted evidence — not a sources-only dump.",
     ],
   };
 }
@@ -247,6 +265,35 @@ export async function salvageResearchPartialFromDb(input: {
   return researchPartialFromJobRow(job);
 }
 
+/** Persist 4-section answers even when the wall-clock fires mid-search. */
+export function shapeSalvagedAskOutput(
+  raw: unknown,
+  request: string,
+  answerMode: "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP" = "QUICK",
+): unknown {
+  const shaped = shapeFinalOutputForMode(answerMode, raw, request);
+  if (shaped) return shaped;
+  const attached = attachVisibleResearchEvidence(raw);
+  const record =
+    attached && typeof attached === "object" && !Array.isArray(attached)
+      ? (attached as Record<string, unknown>)
+      : { summary: String(raw ?? "") };
+  return {
+    ...record,
+    typedAnswers: buildTypedAnswers(record, request),
+  };
+}
+
+export function salvageUserFacingError(output: unknown, salvaged: boolean, sourceCount: number): string | null {
+  return researchWallClockUserMessage({
+    salvaged,
+    sourceCount,
+    stepOutputsLength: salvaged ? 1 : 0,
+    stepsToRunLength: 1,
+    hasTypedAnswers: hasCompleteTypedAnswers(output),
+  });
+}
+
 /**
  * Read-path safety net for every organisation: blank Ask research PARTIAL
  * (legacy MAX_WALL_CLOCK with null finalOutput) still surfaces org-scoped
@@ -272,11 +319,11 @@ export async function hydrateBlankResearchFinalOutput(input: {
 
   for (const candidate of [input.finalOutput, input.lastCompletedOutput]) {
     if (!isBlankAskFinalOutput(candidate)) {
-      const attached = attachVisibleResearchEvidence(candidate);
+      const shaped = shapeSalvagedAskOutput(candidate, input.request);
       return {
-        finalOutput: attached,
+        finalOutput: shaped,
         salvaged: false,
-        sourceCount: sourceCountOf(attached),
+        sourceCount: sourceCountOf(shaped),
       };
     }
   }
@@ -286,10 +333,10 @@ export async function hydrateBlankResearchFinalOutput(input: {
     agentRunId: input.agentRunId,
   });
   const raw = salvaged ?? honestEmptyResearchPartial(input.request);
-  const attached = attachVisibleResearchEvidence(raw);
+  const shaped = shapeSalvagedAskOutput(raw, input.request);
   return {
-    finalOutput: attached,
+    finalOutput: shaped,
     salvaged: Boolean(salvaged),
-    sourceCount: salvaged?.sourceCount ?? sourceCountOf(attached),
+    sourceCount: salvaged?.sourceCount ?? sourceCountOf(shaped),
   };
 }

@@ -104,6 +104,12 @@ const envSchema = z.object({
    * Claude/Anthropic is never a valid generator (rejected at getImageProvider).
    */
   IMAGE_PROVIDER: z.string().default("none"),
+  /**
+   * Optional video generation provider for Ask example videos.
+   * none (default) → AUTH_REQUIRED / not-configured (briefs still returned).
+   * No video adapter is wired yet — any non-none value still fails closed.
+   */
+  VIDEO_PROVIDER: z.string().default("none"),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_IMAGE_MODEL: z.string().optional(),
   GEMINI_IMAGE_MODEL_FALLBACK: z.string().optional(),

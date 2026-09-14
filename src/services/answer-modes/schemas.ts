@@ -2,7 +2,40 @@ import { z } from "zod";
 
 /** Practical mode schemas — optional fields stay optional; no forced empties. */
 
-/** Source + finding cards — required on research answers so UI/API never hide evidence. */
+export const askTypedSectionSchema = z.object({
+  type: z.enum(["strategy", "scripts", "posting_plan", "monetization"]),
+  title: z.string().min(1),
+  body: z.string().min(1),
+  bullets: z.array(z.string().min(1)).optional(),
+});
+
+export const askTypedAnswersSchema = z.object({
+  strategy: askTypedSectionSchema,
+  scripts: askTypedSectionSchema,
+  postingPlan: askTypedSectionSchema,
+  monetization: askTypedSectionSchema,
+});
+
+export const askVideoExampleSchema = z.object({
+  title: z.string().min(1),
+  hook: z.string().min(1),
+  shotList: z.array(z.string().min(1)).min(1),
+  lengthSeconds: z.number().int().positive(),
+  platform: z.enum(["instagram", "linkedin", "tiktok", "youtube", "generic"]),
+  status: z.enum(["brief_only", "queued", "generated", "not_configured"]),
+  code: z.literal("AUTH_REQUIRED").optional(),
+  reason: z.literal("VIDEO_PROVIDER_NOT_CONFIGURED").optional(),
+  userFacingMessage: z.string().optional(),
+  assetId: z.string().optional(),
+  url: z.string().optional(),
+});
+
+const typedResultFields = {
+  typedAnswers: askTypedAnswersSchema.optional(),
+  videoExamples: z.array(askVideoExampleSchema).optional(),
+};
+
+/** Source + finding cards — kept on the payload for ops/quality; default Ask UI does not list them. */
 export const evidenceSourceSchema = z.object({
   url: z.string(),
   title: z.string().optional(),
@@ -26,6 +59,7 @@ export const quickAnswerSchema = z.object({
   researchJobId: z.string().optional(),
   findings: z.array(evidenceFindingSchema).optional(),
   sources: z.array(evidenceSourceSchema).optional(),
+  ...typedResultFields,
 });
 
 export const executiveAnswerSchema = z.object({
@@ -38,6 +72,7 @@ export const executiveAnswerSchema = z.object({
   researchJobId: z.string().optional(),
   findings: z.array(evidenceFindingSchema).optional(),
   sources: z.array(evidenceSourceSchema).optional(),
+  ...typedResultFields,
 });
 
 export const actionItemSchema = z.object({
@@ -70,6 +105,7 @@ export const actionAnswerSchema = z.object({
   summary: z.string().optional(),
   findings: z.array(evidenceFindingSchema).optional(),
   sources: z.array(evidenceSourceSchema).optional(),
+  ...typedResultFields,
 });
 
 export const deepAnswerSchema = z.object({
@@ -87,6 +123,7 @@ export const deepAnswerSchema = z.object({
   recommendations: z.array(z.string()).optional(),
   nextActions: z.array(z.string()).optional(),
   researchJobId: z.string().optional(),
+  ...typedResultFields,
   /** Capability proposals awaiting approval — never auto-executed. */
   capabilityProposals: z
     .array(
@@ -112,3 +149,6 @@ export type ActionAnswer = z.infer<typeof actionAnswerSchema>;
 export type DeepAnswer = z.infer<typeof deepAnswerSchema>;
 export type AnswerModeOutput = z.infer<typeof answerModeOutputSchema>;
 export type ActionItem = z.infer<typeof actionItemSchema>;
+export type AskTypedAnswers = z.infer<typeof askTypedAnswersSchema>;
+export type AskTypedSection = z.infer<typeof askTypedSectionSchema>;
+export type AskVideoExample = z.infer<typeof askVideoExampleSchema>;

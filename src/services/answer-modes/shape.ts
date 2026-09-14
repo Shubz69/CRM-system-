@@ -13,6 +13,7 @@ import {
   type ExecutiveAnswer,
   type QuickAnswer,
 } from "./schemas";
+import { buildTypedAnswers, buildVideoExamples } from "./typed-answers";
 
 export type { AnswerModeOutput, ActionAnswer, DeepAnswer, ExecutiveAnswer, QuickAnswer };
 
@@ -74,7 +75,32 @@ function gapsAndRisks(raw: Record<string, unknown>): string[] {
   return [...stringList(raw.gaps), ...stringList(raw.algorithmNotes)].slice(0, 12);
 }
 
-function buildQuick(raw: Record<string, unknown>): QuickAnswer {
+function attachTypedResult(
+  raw: Record<string, unknown>,
+  request?: string | null,
+  videoConfigured = false,
+): {
+  typedAnswers: ReturnType<typeof buildTypedAnswers>;
+  videoExamples?: ReturnType<typeof buildVideoExamples>;
+} {
+  const typedAnswers = buildTypedAnswers(raw, request);
+  const videoExamples = buildVideoExamples({
+    raw,
+    request,
+    typedAnswers,
+    videoConfigured,
+  });
+  return {
+    typedAnswers,
+    ...(videoExamples.length ? { videoExamples } : {}),
+  };
+}
+
+function buildQuick(
+  raw: Record<string, unknown>,
+  request?: string | null,
+  videoConfigured = false,
+): QuickAnswer {
   const answer =
     str(raw.summary) ||
     str(raw.shortAnswer) ||
@@ -86,10 +112,15 @@ function buildQuick(raw: Record<string, unknown>): QuickAnswer {
     answer,
     researchJobId: researchJobIdOf(raw),
     ...evidenceFromRaw(raw),
+    ...attachTypedResult(raw, request, videoConfigured),
   };
 }
 
-function buildExecutive(raw: Record<string, unknown>): ExecutiveAnswer {
+function buildExecutive(
+  raw: Record<string, unknown>,
+  request?: string | null,
+  videoConfigured = false,
+): ExecutiveAnswer {
   const keyFinding =
     str(raw.shortAnswer) || str(raw.summary) || claimTexts(raw)[0] || "Key finding unavailable.";
   const whatMatters = str(raw.summary) || str(raw.brief) || undefined;
@@ -114,6 +145,7 @@ function buildExecutive(raw: Record<string, unknown>): ExecutiveAnswer {
     recommendation,
     researchJobId: researchJobIdOf(raw),
     ...evidenceFromRaw(raw),
+    ...attachTypedResult(raw, request, videoConfigured),
   };
 }
 
@@ -205,7 +237,11 @@ function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
   return items.slice(0, 8);
 }
 
-function buildAction(raw: Record<string, unknown>): ActionAnswer {
+function buildAction(
+  raw: Record<string, unknown>,
+  request?: string | null,
+  videoConfigured = false,
+): ActionAnswer {
   const evidence = evidenceFromRaw(raw);
   const actions = buildActionItems(raw).map((item, i) => {
     if (item.sourceUrl || raw.source === "internal_crm") return item;
@@ -224,10 +260,15 @@ function buildAction(raw: Record<string, unknown>): ActionAnswer {
     // Prefer full CRM/operator summary over crumb shortAnswer (business_context, briefs).
     summary: str(raw.summary) || str(raw.shortAnswer) || undefined,
     ...evidence,
+    ...attachTypedResult(raw, request, videoConfigured),
   };
 }
 
-function buildDeep(raw: Record<string, unknown>): DeepAnswer {
+function buildDeep(
+  raw: Record<string, unknown>,
+  request?: string | null,
+  videoConfigured = false,
+): DeepAnswer {
   const findings: DeepAnswer["findings"] = [];
   const sourceClaims = Array.isArray(raw.claims)
     ? raw.claims
@@ -319,6 +360,7 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
       "Create mission",
     ],
     researchJobId: researchJobIdOf(raw),
+    ...attachTypedResult(raw, request, videoConfigured),
   };
 }
 
@@ -329,16 +371,20 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
 export function shapeFinalOutputForMode(
   mode: AgentAnswerMode,
   raw: unknown,
+  request?: string | null,
+  options?: { videoConfigured?: boolean },
 ): AnswerModeOutput | null {
   const record = asRecord(raw);
   if (!record) return null;
+  const videoConfigured = Boolean(options?.videoConfigured);
 
   const looksResearch =
     typeof record.researchJobId === "string" ||
     Array.isArray(record.claims) ||
     Array.isArray(record.findings) ||
     typeof record.shortAnswer === "string" ||
-    typeof record.brief === "string";
+    typeof record.brief === "string" ||
+    record.source === "internal_crm";
   if (!looksResearch && mode) {
     // Still shape if caller insists and we have some text.
     if (!str(record.summary) && !str(record.answer) && !str(record.echo)) return null;
@@ -347,16 +393,16 @@ export function shapeFinalOutputForMode(
   let shaped: AnswerModeOutput;
   switch (mode) {
     case "QUICK":
-      shaped = buildQuick(record);
+      shaped = buildQuick(record, request, videoConfigured);
       break;
     case "EXECUTIVE":
-      shaped = buildExecutive(record);
+      shaped = buildExecutive(record, request, videoConfigured);
       break;
     case "ACTION":
-      shaped = buildAction(record);
+      shaped = buildAction(record, request, videoConfigured);
       break;
     case "DEEP":
-      shaped = buildDeep(record);
+      shaped = buildDeep(record, request, videoConfigured);
       break;
     default:
       return null;

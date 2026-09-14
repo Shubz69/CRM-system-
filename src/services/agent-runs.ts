@@ -19,6 +19,7 @@ import {
   detectAnswerModeFromLanguage,
   isModeShapedOutput,
   parseAnswerMode,
+  hasCompleteTypedAnswers,
 } from "@/services/answer-modes";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 import {
@@ -33,8 +34,9 @@ import {
   hydrateBlankResearchFinalOutput,
   honestEmptyResearchPartial,
   salvageResearchPartialFromDb,
+  salvageUserFacingError,
+  shapeSalvagedAskOutput,
 } from "@/agents/supervisor/research-salvage";
-import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
 import { isHostedWorkerLive, shouldEnqueueDurableAgentRun } from "@/services/worker-heartbeat";
 import { after } from "next/server";
 
@@ -371,7 +373,7 @@ export async function createAndEnqueueAgentRun(input: {
           ? "Checking your inbox…"
           : "Checking your CRM…"
     : quickResearchSync
-      ? `I'll do a fast sourced scan of “${request.slice(0, 80)}” and give you a short answer.`
+      ? `I'll search thoroughly for “${request.slice(0, 80)}” and return Strategy, Scripts, a Posting plan, and Monetization.`
       : "Preparing your answer…";
 
   const run = await prisma.agentRun.create({
@@ -387,10 +389,7 @@ export async function createAndEnqueueAgentRun(input: {
       answerMode: answerMode ?? null,
       maxSteps: limits?.maxSteps ?? 8,
       maxWallClockSeconds: looksLikeResearchAsk
-        ? Math.min(
-            limits?.maxWallClockSeconds ?? 600,
-            researchWallClockCapSeconds(answerMode),
-          )
+        ? researchWallClockCapSeconds(answerMode)
         : limits?.maxWallClockSeconds ?? 600,
       maxSpendCents: limits?.maxSpendCentsPerRun ?? null,
       referenceAssetId: input.referenceAssetId ?? null,
@@ -463,6 +462,7 @@ export async function createAndEnqueueAgentRun(input: {
             agentRunId: run.id,
           }).catch(() => null);
           const raw = salvaged ?? honestEmptyResearchPartial(request);
+          const output = shapeSalvagedAskOutput(raw, request);
           await updateOrgScopedById(prisma.agentRun, {
             id: run.id,
             organisationId: input.organisationId,
@@ -471,10 +471,12 @@ export async function createAndEnqueueAgentRun(input: {
               status: "PARTIAL",
               finishedAt: new Date(),
               error: "SYNC_EXECUTE_FAILED",
-              finalOutput: attachVisibleResearchEvidence(raw) as Prisma.InputJsonValue,
-              userFacingError: salvaged
-                ? "I stopped before the full scan finished. Sources gathered so far are below."
-                : "I couldn't finish that sourced scan in time. Nothing below was invented — try again in a moment.",
+              finalOutput: output as Prisma.InputJsonValue,
+              userFacingError: salvageUserFacingError(
+                output,
+                Boolean(salvaged),
+                salvaged?.sourceCount ?? 0,
+              ),
             },
           });
         }
@@ -815,7 +817,7 @@ export async function clarifyAndEnqueueAgentRun(input: {
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,
       plainEnglishPlan: isQuickResearchAsk(preservedMode, immutableRequest)
-        ? `I'll do a fast sourced scan of “${immutableRequest.slice(0, 80)}” and give you a short answer.`
+        ? `I'll search thoroughly for “${immutableRequest.slice(0, 80)}” and return Strategy, Scripts, a Posting plan, and Monetization.`
         : null,
       error: null,
       userFacingError: null,
@@ -867,6 +869,7 @@ export async function clarifyAndEnqueueAgentRun(input: {
           agentRunId: run.id,
         }).catch(() => null);
         const raw = salvaged ?? honestEmptyResearchPartial(immutableRequest);
+        const output = shapeSalvagedAskOutput(raw, immutableRequest);
         await updateOrgScopedById(prisma.agentRun, {
           id: run.id,
           organisationId: input.organisationId,
@@ -875,10 +878,12 @@ export async function clarifyAndEnqueueAgentRun(input: {
             status: "PARTIAL",
             finishedAt: new Date(),
             error: "SYNC_EXECUTE_FAILED",
-            finalOutput: attachVisibleResearchEvidence(raw) as Prisma.InputJsonValue,
-            userFacingError: salvaged
-              ? "I stopped before the full scan finished. Sources gathered so far are below."
-              : "I couldn't finish that sourced scan in time. Nothing below was invented — try again in a moment.",
+            finalOutput: output as Prisma.InputJsonValue,
+            userFacingError: salvageUserFacingError(
+              output,
+              Boolean(salvaged),
+              salvaged?.sourceCount ?? 0,
+            ),
           },
         });
         return { runId: run.id, jobId: `sync-quick-research:${run.id}` };
@@ -1062,13 +1067,15 @@ export async function getAgentRunProgress(input: {
       lastCompletedOutput,
     });
     finalOutput = hydrated.finalOutput;
-    if (
+    if (hasCompleteTypedAnswers(finalOutput)) {
+      userFacingError = null;
+    } else if (
       hydrated.salvaged &&
       typeof userFacingError === "string" &&
-      /finished 0 of/i.test(userFacingError)
+      /finished 0 of|taking too long|sources gathered/i.test(userFacingError)
     ) {
       userFacingError =
-        "I stopped because this was taking too long. Sources gathered before the limit are below.";
+        "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
     }
   }
 

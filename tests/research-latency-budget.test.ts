@@ -1,9 +1,9 @@
 /**
- * Product latency budget (2026-09-14):
- * - Quick Ask research: a few seconds (hard cap RESEARCH_QUICK_CEILING_MS ≤ 8s).
- * - Even hard/Deep queries: finish or source-backed PARTIAL within RESEARCH_HARD_CEILING_MS ≤ 30s.
- * This file fails CI if those ceilings regress, and asserts the FAST path skips
- * the query-expand + extract LLM passes that previously took 1–2 minutes.
+ * Product latency budget:
+ * - Default / Quick Ask research: thorough search + 4-section synthesis
+ *   inside RESEARCH_QUICK_CEILING_MS (≤60s wall clock).
+ * - Deep / hard queries: finish or PARTIAL within RESEARCH_HARD_CEILING_MS ≤ 60s.
+ * FAST still skips query-expand LLM; extract runs when remaining time allows.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -87,11 +87,15 @@ import {
   CRITIC_SAFE_BUDGET_MS,
   RESEARCH_EXTRACT_MIN_MS,
   RESEARCH_HARD_CEILING_MS,
+  RESEARCH_LAST_DITCH_MS,
   RESEARCH_QUERY_CAP,
   RESEARCH_QUICK_CEILING_MS,
+  RESEARCH_SEARCH_CAP_MS,
   RESEARCH_SOURCE_CAP,
   RESEARCH_SOURCE_FETCH_MS,
+  RESEARCH_SYNTH_RESERVE_MS,
   raceWithTimeout,
+  researchSearchBudgetMs,
   researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
 } from "@/agents/supervisor/research-deadline";
@@ -108,19 +112,34 @@ const SAMPLE_SOURCE = {
 };
 
 describe("research latency budgets", () => {
-  it("keeps documented Ask ceilings — fail this test if they regress upward", () => {
-    expect(RESEARCH_QUICK_CEILING_MS).toBeLessThanOrEqual(8_000);
-    expect(RESEARCH_HARD_CEILING_MS).toBeLessThanOrEqual(30_000);
+  it("keeps documented Ask ceilings — fail this test if they regress past 60s", () => {
+    expect(RESEARCH_QUICK_CEILING_MS).toBeLessThanOrEqual(60_000);
+    expect(RESEARCH_QUICK_CEILING_MS).toBeGreaterThanOrEqual(45_000);
+    expect(RESEARCH_HARD_CEILING_MS).toBeLessThanOrEqual(60_000);
     expect(ANALYST_SAFE_BUDGET_MS).toBeLessThanOrEqual(12_000);
     expect(CRITIC_SAFE_BUDGET_MS).toBeLessThanOrEqual(10_000);
     expect(RESEARCH_EXTRACT_MIN_MS).toBeLessThanOrEqual(6_000);
-    expect(RESEARCH_SOURCE_FETCH_MS.FAST).toBeLessThanOrEqual(7_000);
-    expect(RESEARCH_SOURCE_FETCH_MS.DEEP).toBeLessThanOrEqual(8_000);
-    expect(RESEARCH_QUERY_CAP.FAST).toBeLessThanOrEqual(2);
-    expect(RESEARCH_SOURCE_CAP.FAST).toBeLessThanOrEqual(5);
-    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(12);
-    expect(researchWallClockCapSeconds("DEEP")).toBeLessThanOrEqual(30);
-    expect(researchWallClockCapSeconds("EXECUTIVE")).toBeLessThanOrEqual(30);
+    expect(RESEARCH_SOURCE_FETCH_MS.FAST).toBeLessThanOrEqual(15_000);
+    expect(RESEARCH_SOURCE_FETCH_MS.FAST).toBeGreaterThanOrEqual(7_000);
+    expect(RESEARCH_SOURCE_FETCH_MS.DEEP).toBeLessThanOrEqual(16_000);
+    expect(RESEARCH_QUERY_CAP.FAST).toBeLessThanOrEqual(3);
+    expect(RESEARCH_QUERY_CAP.FAST).toBeGreaterThanOrEqual(2);
+    expect(RESEARCH_SOURCE_CAP.FAST).toBeLessThanOrEqual(8);
+    expect(RESEARCH_SOURCE_CAP.FAST).toBeGreaterThanOrEqual(5);
+    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(60);
+    expect(researchWallClockCapSeconds("QUICK")).toBeGreaterThanOrEqual(50);
+    expect(researchWallClockCapSeconds("DEEP")).toBeLessThanOrEqual(60);
+    expect(researchWallClockCapSeconds("EXECUTIVE")).toBeLessThanOrEqual(60);
+    expect(RESEARCH_SYNTH_RESERVE_MS).toBeGreaterThanOrEqual(12_000);
+    expect(RESEARCH_SEARCH_CAP_MS.FAST + RESEARCH_SYNTH_RESERVE_MS).toBeLessThanOrEqual(60_000);
+    expect(
+      researchSearchBudgetMs({ remainingMs: RESEARCH_QUICK_CEILING_MS, depth: "FAST" }),
+    ).toBeLessThanOrEqual(RESEARCH_SEARCH_CAP_MS.FAST);
+    expect(
+      researchSearchBudgetMs({ remainingMs: RESEARCH_QUICK_CEILING_MS, depth: "FAST" }),
+    ).toBeLessThanOrEqual(RESEARCH_QUICK_CEILING_MS - RESEARCH_SYNTH_RESERVE_MS + 50);
+    expect(RESEARCH_SOURCE_FETCH_MS.FAST_SOCIAL).toBeLessThanOrEqual(RESEARCH_SOURCE_FETCH_MS.FAST);
+    expect(RESEARCH_LAST_DITCH_MS).toBeGreaterThan(RESEARCH_SOURCE_FETCH_MS.FAST);
   });
 
   it("skips analyst/critic when remaining wall-clock cannot cover them", () => {
@@ -184,7 +203,7 @@ describe("Quick vs Deep research LLM budget", () => {
     (prisma.researchFinding.create as ReturnType<typeof vi.fn>).mockResolvedValue({});
   });
 
-  it("FAST path skips query-expand and extract LLM and finishes in well under 2s", async () => {
+  it("FAST path skips query-expand LLM but extracts findings when the deadline has room", async () => {
     const started = Date.now();
     const result = await researchAgent.execute(
       { topic: "UK plant hire pricing", depth: "FAST", maxSources: 5 },
@@ -192,17 +211,21 @@ describe("Quick vs Deep research LLM budget", () => {
         organisationId: "org-lat",
         agentRunId: "run-fast",
         agentStepId: "step-1",
+        deadlineAt: Date.now() + 50_000,
       },
     );
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(2_000);
     expect(completeStructured).not.toHaveBeenCalled();
-    expect(completeStructuredSafe).not.toHaveBeenCalled();
+    expect(completeStructuredSafe).toHaveBeenCalledTimes(1);
     expect(result.output.sourceCount).toBe(1);
     expect(result.output.findings.length).toBeGreaterThan(0);
-    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
     expect(result.output.findings[0]?.sourceUrl).toBe(SAMPLE_SOURCE.url);
+    const timeouts = searchConfiguredSources.mock.calls.map(
+      (call) => (call[0] as { options?: { timeoutMs?: number } }).options?.timeoutMs ?? 0,
+    );
+    expect(Math.max(...timeouts)).toBeLessThanOrEqual(RESEARCH_SOURCE_FETCH_MS.FAST);
   });
 
   it("STANDARD still attempts extract when the deadline has room", async () => {
