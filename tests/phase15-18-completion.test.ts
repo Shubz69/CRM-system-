@@ -2,7 +2,7 @@
  * Track 5 / Phase 15–18 completion: promotion eligibility, controlled learning,
  * prediction events, health indicators, continuous intel sweep.
  */
-import { describe, expect, it, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, vi, beforeAll, afterAll } from "vitest";
 
 vi.mock("@/services/audit", () => ({
   writeAuditLog: vi.fn(async () => undefined),

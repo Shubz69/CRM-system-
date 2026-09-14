@@ -45,5 +45,6 @@ describe("Integrations Messaging setup wiring", () => {
     expect(text).toContain("secretConfigured = Boolean(orgSecret)");
     expect(text).toContain('"regenerate_secret"');
     expect(text).toContain('"test_inbound"');
+    expect(text).toContain("Cannot operate on another workspace");
   });
 });

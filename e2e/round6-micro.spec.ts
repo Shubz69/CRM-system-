@@ -4,7 +4,7 @@
 import { config as loadEnv } from "dotenv";
 import fs from "fs";
 import path from "path";
-import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type Browser } from "@playwright/test";
 
 loadEnv({ path: path.join(process.cwd(), ".env") });
 

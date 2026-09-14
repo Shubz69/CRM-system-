@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SourceNotConfiguredError, getSourceAdapter, listConfiguredSourcePlatforms } from "@/adapters/sources";
+import { SourceNotConfiguredError, getSourceAdapter } from "@/adapters/sources";
 import { clearSourceCache } from "@/adapters/sources/cache";
 import { clearSourceRateLimits } from "@/adapters/sources/rate-limit";
 import { resetEnvCache } from "@/lib/env";

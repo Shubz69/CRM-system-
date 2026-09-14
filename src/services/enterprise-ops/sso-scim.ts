@@ -153,10 +153,12 @@ export function getSsoScimReadiness(): SsoScimReadiness {
 }
 
 /** Always false — stubs never claim connectivity. */
-export function isSsoLive(_providerId: string): false {
+export function isSsoLive(providerId: string): false {
+  void providerId;
   return false;
 }
 
-export function isScimLive(_directoryId: string): false {
+export function isScimLive(directoryId: string): false {
+  void directoryId;
   return false;
 }

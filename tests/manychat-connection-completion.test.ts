@@ -626,5 +626,69 @@ describe("ManyChat connection completion", () => {
       const res = await manychatGet();
       expect(res.status).toBe(403);
     });
+
+    it("regenerate_secret and test_inbound always use session organisationId", async () => {
+      mocks.regenerateOrganisationManyChatSecret.mockResolvedValue("mc_org_a_only");
+      mocks.processInboundMessage.mockResolvedValue({
+        duplicate: false,
+        conversationId: "conv-a",
+      });
+
+      await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "regenerate_secret",
+            organisationId: "org-a",
+          }),
+        }) as never,
+      );
+      expect(mocks.regenerateOrganisationManyChatSecret).toHaveBeenCalledWith("org-a");
+
+      await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "test_inbound",
+            organisationId: "org-a",
+          }),
+        }) as never,
+      );
+      expect(mocks.processInboundMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ organisationId: "org-a" }),
+        expect.anything(),
+      );
+    });
+
+    it("rejects a spoofed organisationId on regenerate_secret and test_inbound", async () => {
+      const regen = await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "regenerate_secret",
+            organisationId: "org-other",
+          }),
+        }) as never,
+      );
+      expect(regen.status).toBe(403);
+      expect(mocks.regenerateOrganisationManyChatSecret).not.toHaveBeenCalled();
+
+      const inbound = await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "test_inbound",
+            organisationId: "org-other",
+            text: "cross-tenant probe",
+          }),
+        }) as never,
+      );
+      expect(inbound.status).toBe(403);
+      expect(mocks.processInboundMessage).not.toHaveBeenCalled();
+    });
   });
 });
