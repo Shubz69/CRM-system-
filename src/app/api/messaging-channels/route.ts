@@ -2,7 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePermission } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
-import { resolveChannelInstagramUsername } from "@/services/messaging/channel-identity";
+import { persistableChannelInstagramUsername } from "@/services/messaging/channel-identity";
 
 export async function GET() {
   try {
@@ -34,9 +34,9 @@ export async function POST(req: Request) {
     const session = await requirePermission("integrations:manage");
     const body = upsertSchema.parse(await req.json());
     const instagramUsername =
-      body.instagramUsername === undefined
-        ? undefined
-        : resolveChannelInstagramUsername({ contactUsername: body.instagramUsername });
+      body.instagramUsername !== undefined
+        ? persistableChannelInstagramUsername(body.instagramUsername)
+        : undefined;
 
     if (body.id) {
       const existing = await prisma.messagingChannel.findFirst({
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
         data: {
           externalId: body.externalId,
           displayName: body.displayName,
-          ...(instagramUsername !== undefined ? { instagramUsername } : {}),
+          instagramUsername,
           isActive: body.isActive ?? existing.isActive,
           provider: body.provider,
         },
@@ -88,7 +88,7 @@ export async function POST(req: Request) {
       },
       update: {
         displayName: body.displayName,
-        ...(instagramUsername !== undefined ? { instagramUsername } : {}),
+        instagramUsername,
         isActive: body.isActive ?? true,
       },
       create: {

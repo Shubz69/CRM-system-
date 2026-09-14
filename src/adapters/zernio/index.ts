@@ -791,6 +791,11 @@ async function persistAccounts(organisationId: string, accounts: ZernioConnected
     "@/services/publishing/publish-targets"
   );
   await syncPublishTargetsFromConnectedAccounts(organisationId).catch(() => undefined);
+  // Capability honesty is independent of publish-target persistence.
+  const { refreshOrganisationConnectorCapabilities } = await import(
+    "@/services/connectors/capabilities"
+  );
+  await refreshOrganisationConnectorCapabilities(organisationId);
 }
 
 /**
@@ -804,6 +809,9 @@ export async function ensureZernioMessagingBindings(
 ) {
   const { IntegrationType } = await import("@prisma/client");
   const { MESSAGING_PROVIDER } = await import("@/services/messaging/providers");
+  const { persistableChannelInstagramUsername } = await import(
+    "@/services/messaging/channel-identity"
+  );
 
   const activeIg = accounts.filter(
     (a) => accountMatchesPlatform(a, "instagram") && isActivelyConnectedAccount(a),
@@ -843,12 +851,12 @@ export async function ensureZernioMessagingBindings(
         provider: MESSAGING_PROVIDER.ZERNIO,
         externalId: account.accountId,
         displayName: account.displayName || account.username || "Instagram",
-        instagramUsername: account.username || null,
+        instagramUsername: persistableChannelInstagramUsername(account.username),
         isActive: true,
       },
       update: {
         displayName: account.displayName || account.username || undefined,
-        instagramUsername: account.username || undefined,
+        instagramUsername: persistableChannelInstagramUsername(account.username) ?? undefined,
         isActive: true,
       },
     });

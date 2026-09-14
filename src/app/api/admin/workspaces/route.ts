@@ -280,6 +280,8 @@ export async function POST(req: NextRequest) {
         "@/services/social-connection-policy"
       );
       await ensureNewOrgSocialConnectionPolicy(org.id);
+      // New workspaces must not seed MessagingChannel rows (never demo_account).
+      // Channels are created from inbound, Zernio account sync, or Integrations.
 
       await writeAuditLog({
         organisationId: org.id,

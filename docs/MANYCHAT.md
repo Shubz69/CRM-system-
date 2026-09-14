@@ -8,7 +8,7 @@ Every workspace is isolated. **Do not reuse another organisation’s webhook sec
 
 Open **Integrations**. **Social Accounts** (Instagram / LinkedIn / YouTube) stays at the top.
 
-Scroll to **Messaging setup**, or open `/integrations?setup=messaging` (also linked from Inbox empty state). That section is required to configure **this organisation’s** webhook secret. Until an org secret exists, inbound `WEBHOOK_RECEIVE` stays AUTH_REQUIRED for that workspace (the environment secret is a fallback for local/dev channel mapping only — it cannot authorize a payload `organisationId` alone).
+Scroll to **Messaging setup**, or open `/integrations?setup=messaging` (also linked from Inbox empty state). That section is required to configure **this organisation’s** webhook secret. Until an org secret exists, inbound `WEBHOOK_RECEIVE` stays **AUTH_REQUIRED**. The environment webhook secret is a local/dev fallback for unique `channel_id` mappings only — it cannot authorize another organisation's `organisationId`. Each workspace must regenerate its own secret.
 
 From Messaging setup:
 
@@ -18,7 +18,7 @@ From Messaging setup:
 4. Click **Test inbound** to process a sample message inside **this** CRM workspace (nothing is sent to Instagram).
 5. **Disconnect** / **Reconnect** and **Validate configuration** remain available when a stored token exists.
 
-Workspace owners and administrators (`integrations:manage`) can load and mutate this API for their active organisation only. Read-only members cannot. Passing another workspace’s `organisationId` in the request body is rejected.
+Workspace owners and administrators (`integrations:manage`) can load and mutate this API for their active organisation only. Read-only members cannot. Passing another workspace’s `organisationId` in the request body is rejected. A first-run checklist appears until the organisation secret exists.
 
 ## Endpoints
 
@@ -40,10 +40,10 @@ x-manychat-secret: <this-workspace-secret>
 
 Secrets are checked against:
 
-1. Per-organisation encrypted secret (regenerated from **Integrations → Messaging setup**) — required for production inbound when identifying the tenant by `organisationId`
-2. `MANYCHAT_WEBHOOK_SECRET` environment variable — may only authorize writes when `channel_id` uniquely maps to one organisation; it cannot authorize an arbitrary payload `organisationId`
+1. Per-organisation encrypted secret (regenerated from **Integrations → Messaging setup**) — required to authorize a payload `organisationId`
+2. `MANYCHAT_WEBHOOK_SECRET` environment variable — only when a unique `channel_id` MessagingChannel mapping proves the tenant
 
-Never return the full saved token after storage — the UI shows a masked value. Regeneration returns the new secret once, for the signed-in workspace only.
+An org A secret must never authorize org B. Never return the full saved token after storage — the UI shows a masked value. Regeneration returns the new secret once, for the signed-in workspace only.
 
 ## Required payload
 

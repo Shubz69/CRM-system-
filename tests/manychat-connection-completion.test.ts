@@ -406,6 +406,23 @@ describe("ManyChat connection completion", () => {
       expect(mocks.requirePlatformAccess).not.toHaveBeenCalled();
     });
 
+    it("does not treat the env webhook secret as this org being configured", async () => {
+      mocks.getOrganisationManyChatSecret.mockResolvedValue(null);
+      mocks.messagingChannelFindMany.mockResolvedValue([]);
+      mocks.webhookEventFindMany.mockResolvedValue([]);
+
+      const res = await manychatGet();
+      const json = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(json.organisationId).toBe("org-a");
+      expect(json.secretConfigured).toBe(false);
+      expect(json.inboundAuthRequired).toBe(true);
+      expect(json.inboundCapabilityStatus).toBe("AUTH_REQUIRED");
+      expect(json.secretSource).toBe("none");
+      expect(json.secretMasked).toBe("not set");
+    });
+
     it("send_test_message looks up contact within session org only", async () => {
       mocks.findUniqueIntegration.mockResolvedValue({
         id: "int-a",
@@ -517,6 +534,40 @@ describe("ManyChat connection completion", () => {
         expect.objectContaining({
           action: "messaging_channel.updated",
           metadata: expect.objectContaining({ isActive: false }),
+        }),
+      );
+    });
+
+    it("never persists demo_account as instagramUsername", async () => {
+      const { prisma } = await import("@/lib/db");
+      (prisma.messagingChannel.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const upsert = prisma.messagingChannel.upsert as ReturnType<typeof vi.fn>;
+      upsert.mockResolvedValue({
+        id: "ch-clean",
+        provider: "manychat",
+        externalId: "page-demo",
+        displayName: "Page",
+        instagramUsername: null,
+        isActive: true,
+      });
+
+      await channelsPost(
+        new Request("http://localhost/api/messaging-channels", {
+          method: "POST",
+          body: JSON.stringify({
+            provider: "manychat",
+            externalId: "page-demo",
+            displayName: "Page",
+            instagramUsername: "demo_account",
+            isActive: true,
+          }),
+        }),
+      );
+
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ instagramUsername: null }),
+          update: expect.objectContaining({ instagramUsername: null }),
         }),
       );
     });

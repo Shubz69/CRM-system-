@@ -154,28 +154,42 @@ describe("org isolation — ManyChat webhook org resolution", () => {
     ).resolves.toBe(false);
   });
 
-  it("org A secret cannot authorize a payload claiming org B", async () => {
+  it("org A secret cannot authorize org B organisationId", async () => {
     mocks.findMany.mockResolvedValue([]);
-    mocks.findUnique.mockImplementation(async (args: { where?: { organisationId_type_name?: { organisationId?: string } } }) => {
-      const orgId = args.where?.organisationId_type_name?.organisationId;
-      if (orgId === "org_a") {
-        return { credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-a" }] };
-      }
-      if (orgId === "org_b") {
-        return { credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-b" }] };
-      }
-      return null;
-    });
+    mocks.findUnique.mockImplementation(
+      async (args: {
+        where?: { organisationId_type_name?: { organisationId?: string } };
+      }) => {
+        const orgId = args.where?.organisationId_type_name?.organisationId;
+        if (orgId === "org_a") {
+          return {
+            credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-org-a" }],
+          };
+        }
+        if (orgId === "org_b") {
+          return {
+            credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-org-b" }],
+          };
+        }
+        return null;
+      },
+    );
 
-    const result = await resolveManyChatWebhookOrganisation({
-      secretHeader: "secret-a",
+    const cross = await resolveManyChatWebhookOrganisation({
+      secretHeader: "secret-org-a",
       payloadOrganisationId: "org_b",
       channelExternalId: null,
     });
+    expect(cross.ok).toBe(false);
+    if (!cross.ok) expect(cross.status).toBe(401);
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.status).toBe(401);
+    const own = await resolveManyChatWebhookOrganisation({
+      secretHeader: "secret-org-a",
+      payloadOrganisationId: "org_a",
+      channelExternalId: null,
+    });
+    expect(own.ok).toBe(true);
+    if (own.ok) expect(own.organisationId).toBe("org_a");
   });
 });
 

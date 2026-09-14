@@ -183,6 +183,11 @@ describe("workspace onboarding", () => {
         organisationId: "org_1",
       }),
     );
+    const createArg = mocks.organisation.create.mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(JSON.stringify(createArg)).not.toContain("demo_account");
+    expect(createArg.data).not.toHaveProperty("messagingChannels");
   });
 
   it("createWorkspaceWithOwner allows existing user with memberships to own a new org", async () => {

@@ -20,6 +20,8 @@ type MessagingStatus = {
   webhookUrl: string;
   inboundAliasUrl?: string;
   secretConfigured: boolean;
+  inboundAuthRequired?: boolean;
+  inboundCapabilityStatus?: "AUTH_REQUIRED" | "CONNECTED";
   secretMasked: string;
   secretSource?: string;
   apiTokenConfigured: boolean;
@@ -43,98 +45,6 @@ type MessagingStatus = {
   };
 };
 
-type ReadinessStatus = "ready" | "untested" | "failed" | "missing" | "test_mode";
-
-type IntegrationReadiness = {
-  id: string;
-  label: string;
-  description: string;
-  status: ReadinessStatus;
-  statusLabel: string;
-  configured: boolean;
-  usingTestMode: boolean;
-  detail: string;
-  lastTest: { ok: boolean; testedAt: string; message: string } | null;
-};
-
-type ReadinessPayload = {
-  items: IntegrationReadiness[];
-  goLiveReady: boolean;
-  summary: string;
-};
-
-type SocialCapabilities = { listen: boolean; publish: boolean; message: boolean };
-
-type SocialConnectionSummary = {
-  id: string;
-  displayName: string | null;
-  status: "PENDING" | "ACTIVE" | "EXPIRED" | "REVOKED" | "ERROR";
-  scopes: string[];
-  expiresAt: string | null;
-  lastSyncedAt: string | null;
-  createdAt: string;
-};
-
-type SocialPlatformStatus = {
-  platform: "INSTAGRAM" | "LINKEDIN" | "TIKTOK";
-  slug: string;
-  displayName: string;
-  capabilities: SocialCapabilities;
-  configured: boolean;
-  connection: SocialConnectionSummary | null;
-};
-
-type MetaInstagramStatus = {
-  appConfigured: boolean;
-  connection: {
-    configured: boolean;
-    isActive: boolean;
-    health: string;
-    username: string | null;
-    igUserId: string | null;
-    scopes: string[];
-    webhookSubscribed: boolean;
-    connectedAt: string | null;
-    lastValidatedAt: string | null;
-    duplicateMessagingRisk: boolean;
-  };
-  reconnectHint: string | null;
-};
-
-/**
- * Messaging for Instagram: connect above or messaging setup below.
- * LinkedIn / TikTok have no compliant third-party DM API.
- */
-function messagingNote(slug: string): string {
-  if (slug === "instagram") return "via Connect above or messaging setup below";
-  return "not available — no third-party API exists";
-}
-
-function statusBadgeClass(status: ReadinessStatus): string {
-  switch (status) {
-    case "ready":
-      return "badge badge-success";
-    case "untested":
-      return "badge badge-warn";
-    case "failed":
-      return "badge badge-danger";
-    case "test_mode":
-      return "badge badge-warn";
-    case "missing":
-    default:
-      return "badge";
-  }
-}
-
-function formatTestedAt(iso: string | undefined | null): string {
-  if (!iso) return "Never tested";
-  try {
-    return `Last tested ${new Date(iso).toLocaleString()}`;
-  } catch {
-    return "Last tested —";
-  }
-}
-
 const MANYCHAT_SETUP_ID = "messaging-setup";
 
 export default function IntegrationsClient() {
@@ -143,13 +53,6 @@ export default function IntegrationsClient() {
   const messagingSetupRef = useRef<HTMLElement | null>(null);
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<MessagingStatus | null>(null);
-  const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
-  const [alternateSocial, setAlternateSocial] = useState<{
-    configured?: boolean;
-    serverConfigured?: boolean;
-    status?: string;
-  } | null>(null);
-  void alternateSocial;
   const [socialAccounts, setSocialAccounts] = useState<{
     serverConfigured?: boolean;
     status?: string;
@@ -194,11 +97,6 @@ export default function IntegrationsClient() {
   const [disconnectConfirm, setDisconnectConfirm] = useState<
     "instagram" | "linkedin" | "youtube" | null
   >(null);
-  const [metaTestContactId, setMetaTestContactId] = useState("");
-  const [metaTestConversationId, setMetaTestConversationId] = useState("");
-  const [metaTestText, setMetaTestText] = useState("");
-  const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
-  const [socialPlatforms, setSocialPlatforms] = useState<SocialPlatformStatus[] | null>(null);
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [channelActive, setChannelActive] = useState(true);
@@ -208,50 +106,6 @@ export default function IntegrationsClient() {
   const [loading, setLoading] = useState(true);
   const [oneTimeSecret, setOneTimeSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showAdvancedMesh, setShowAdvancedMesh] = useState(false);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
-  const [aiReady, setAiReady] = useState(false);
-  const [mesh, setMesh] = useState<{
-    connectors: Array<{
-      providerKey: string;
-      displayName: string;
-      connectionStatus: string;
-      customerLabel: string;
-      capabilities: Array<{
-        capability: string;
-        status: string;
-        provenance: string;
-        missingScopes: string[];
-        detail?: string;
-      }>;
-    }>;
-    recentSyncs: Array<{
-      id: string;
-      providerKey: string;
-      resource: string;
-      status: string;
-      processedCount: number;
-      startedAt: string;
-    }>;
-    limitations: string[];
-  } | null>(null);
-
-  const loadReadiness = useCallback(async () => {
-    const res = await fetch("/api/integrations/connection-tests");
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Could not load readiness");
-    setReadiness(json);
-  }, []);
-
-  const loadAlternateSocial = useCallback(async () => {
-    const res = await fetch("/api/integrations/ayrshare");
-    if (!res.ok) {
-      setAlternateSocial(null);
-      return;
-    }
-    setAlternateSocial(await res.json());
-  }, []);
 
   const loadSocialAccounts = useCallback(async () => {
     const res = await fetch("/api/integrations/zernio");
@@ -273,42 +127,11 @@ export default function IntegrationsClient() {
     setStatus(json);
   }, []);
 
-  const loadMetaInstagram = useCallback(async () => {
-    const res = await fetch("/api/integrations/meta-instagram");
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed to load Instagram (Meta)");
-    setMetaIg(json);
-  }, []);
-
-  const loadSocial = useCallback(async () => {
-    const res = await fetch("/api/social/connections");
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Could not load social connections");
-    setSocialPlatforms(json.platforms);
-  }, []);
-
-  const loadMesh = useCallback(async () => {
-    const res = await fetch("/api/integrations/mesh");
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Could not load integration mesh");
-    setMesh(json);
-  }, []);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // Social Accounts stay primary; Messaging setup loads so inbound webhook secrets can be configured.
-      const providersPromise = fetch("/api/health/providers");
       await Promise.all([loadSocialAccounts(), loadMessaging()]);
-      const providersRes = await providersPromise;
-      if (providersRes.ok) {
-        const p = await providersRes.json();
-        setAiReady(
-          Boolean(
-            p.providers?.ai?.ready || p.providers?.ai?.status === "AVAILABLE",
-          ),
-        );
-      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load integrations");
     } finally {
@@ -397,27 +220,9 @@ export default function IntegrationsClient() {
         toast.error("Instagram app is not configured on the server");
       else if (metaStatus === "denied") toast.error(metaError || "Instagram connection denied");
       else if (metaStatus === "error") toast.error(metaError || "Instagram connection failed");
-      if (metaStatus === "connected" || metaStatus === "incomplete") {
-        void loadMetaInstagram();
-      }
       router.replace("/integrations");
     })();
-  }, [searchParams, router, loadMetaInstagram, loadSocialAccounts]);
-
-  async function disconnectSocial(id: string) {
-    setDisconnectingId(id);
-    try {
-      const res = await fetch(`/api/social/connections/${id}`, { method: "DELETE" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Could not disconnect");
-      toast.success("Disconnected");
-      await loadSocial();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not disconnect");
-    } finally {
-      setDisconnectingId(null);
-    }
-  }
+  }, [searchParams, router, loadSocialAccounts]);
 
   async function saveChannel(e: FormEvent) {
     e.preventDefault();
@@ -445,17 +250,6 @@ export default function IntegrationsClient() {
 
   async function messagingAction(action: string, payload: Record<string, unknown> = {}) {
     const res = await fetch("/api/integrations/manychat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...payload }),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Request failed");
-    return json;
-  }
-
-  async function metaInstagramAction(action: string, payload: Record<string, unknown> = {}) {
-    const res = await fetch("/api/integrations/meta-instagram", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
@@ -574,33 +368,6 @@ export default function IntegrationsClient() {
     }
   }
 
-  async function testConnection(id: string) {
-    setTestingId(id);
-    try {
-      const res = await fetch("/api/integrations/connection-tests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ integration: id }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Connection test failed");
-      if (json.ok) toast.success(json.message);
-      else toast.error(json.message);
-      await loadReadiness();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Connection test failed");
-    } finally {
-      setTestingId(null);
-    }
-  }
-
-  async function testAll() {
-    if (!readiness) return;
-    for (const item of readiness.items) {
-      await testConnection(item.id);
-    }
-  }
-
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -610,7 +377,7 @@ export default function IntegrationsClient() {
     }
   }
 
-  if (loading && !status && !readiness) {
+  if (loading && !status && !socialAccounts) {
     return (
       <div className="space-y-6" aria-busy="true" aria-label="Loading integrations">
         <div className="h-8 w-48 animate-pulse rounded-lg bg-[var(--surface-2)]" />
@@ -938,11 +705,32 @@ export default function IntegrationsClient() {
             <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
               {status?.connected ? "Connected" : "Not connected"}
             </span>
+            {status?.inboundAuthRequired ||
+            status?.inboundCapabilityStatus === "AUTH_REQUIRED" ||
+            (status && !status.secretConfigured) ? (
+              <span className="badge badge-warn">AUTH_REQUIRED</span>
+            ) : null}
             {status?.connectionActive === false && (
               <span className="badge badge-warn">Disconnected</span>
             )}
           </div>
         </div>
+
+        {status && !status.secretConfigured ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/60 p-4">
+            <p className="font-medium">First-run inbound checklist</p>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Inbound receive is <span className="font-medium text-[var(--foreground)]">AUTH_REQUIRED</span>{" "}
+              until this workspace has its own webhook secret. The environment secret cannot authorize
+              another organisation&apos;s events.
+            </p>
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-[var(--muted)]">
+              <li>Copy the webhook URL and organisationId below.</li>
+              <li>Click Regenerate secret and store header x-manychat-secret on the inbound request.</li>
+              <li>Include organisationId on every payload so events land in this workspace only.</li>
+            </ol>
+          </div>
+        ) : null}
 
         <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
           <li>
@@ -954,7 +742,7 @@ export default function IntegrationsClient() {
           <li>
             <span className="font-medium text-[var(--foreground)]">Regenerate the webhook secret</span>{" "}
             — copy it once, then send header <code>x-manychat-secret</code> on the inbound request.
-            Without an organisation secret, inbound receive stays authentication-required.
+            Without an organisation secret, inbound receive stays AUTH_REQUIRED for this workspace.
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Paste your API token</span> for
@@ -1008,7 +796,9 @@ export default function IntegrationsClient() {
             <dt className="text-[var(--muted)]">Webhook secret</dt>
             <dd className="mt-1 font-mono text-xs">
               {status?.secretConfigured ? status.secretMasked : "not set"}
-              {status?.secretSource ? ` (${status.secretSource})` : ""}
+              {status?.secretSource && status.secretSource !== "none"
+                ? ` (${status.secretSource})`
+                : ""}
             </dd>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
