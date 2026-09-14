@@ -87,11 +87,15 @@ import {
   CRITIC_SAFE_BUDGET_MS,
   RESEARCH_EXTRACT_MIN_MS,
   RESEARCH_HARD_CEILING_MS,
+  RESEARCH_LAST_DITCH_MS,
   RESEARCH_QUERY_CAP,
   RESEARCH_QUICK_CEILING_MS,
+  RESEARCH_SEARCH_CAP_MS,
   RESEARCH_SOURCE_CAP,
   RESEARCH_SOURCE_FETCH_MS,
+  RESEARCH_SYNTH_RESERVE_MS,
   raceWithTimeout,
+  researchSearchBudgetMs,
   researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
 } from "@/agents/supervisor/research-deadline";
@@ -126,6 +130,16 @@ describe("research latency budgets", () => {
     expect(researchWallClockCapSeconds("QUICK")).toBeGreaterThanOrEqual(50);
     expect(researchWallClockCapSeconds("DEEP")).toBeLessThanOrEqual(60);
     expect(researchWallClockCapSeconds("EXECUTIVE")).toBeLessThanOrEqual(60);
+    expect(RESEARCH_SYNTH_RESERVE_MS).toBeGreaterThanOrEqual(12_000);
+    expect(RESEARCH_SEARCH_CAP_MS.FAST + RESEARCH_SYNTH_RESERVE_MS).toBeLessThanOrEqual(60_000);
+    expect(
+      researchSearchBudgetMs({ remainingMs: RESEARCH_QUICK_CEILING_MS, depth: "FAST" }),
+    ).toBeLessThanOrEqual(RESEARCH_SEARCH_CAP_MS.FAST);
+    expect(
+      researchSearchBudgetMs({ remainingMs: RESEARCH_QUICK_CEILING_MS, depth: "FAST" }),
+    ).toBeLessThanOrEqual(RESEARCH_QUICK_CEILING_MS - RESEARCH_SYNTH_RESERVE_MS + 50);
+    expect(RESEARCH_SOURCE_FETCH_MS.FAST_SOCIAL).toBeLessThanOrEqual(RESEARCH_SOURCE_FETCH_MS.FAST);
+    expect(RESEARCH_LAST_DITCH_MS).toBeGreaterThan(RESEARCH_SOURCE_FETCH_MS.FAST);
   });
 
   it("skips analyst/critic when remaining wall-clock cannot cover them", () => {
@@ -208,6 +222,10 @@ describe("Quick vs Deep research LLM budget", () => {
     expect(result.output.sourceCount).toBe(1);
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe(SAMPLE_SOURCE.url);
+    const timeouts = searchConfiguredSources.mock.calls.map(
+      (call) => (call[0] as { options?: { timeoutMs?: number } }).options?.timeoutMs ?? 0,
+    );
+    expect(Math.max(...timeouts)).toBeLessThanOrEqual(RESEARCH_SOURCE_FETCH_MS.FAST);
   });
 
   it("STANDARD still attempts extract when the deadline has room", async () => {

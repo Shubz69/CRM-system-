@@ -11,7 +11,12 @@ import {
   type VisibleFinding,
   type VisibleSource,
 } from "@/lib/research-visible-evidence";
-import { looksLikeResearchOutput } from "@/agents/supervisor/research-deadline";
+import {
+  looksLikeResearchOutput,
+  researchWallClockUserMessage,
+} from "@/agents/supervisor/research-deadline";
+import { shapeFinalOutputForMode } from "@/services/answer-modes/shape";
+import { buildTypedAnswers, hasCompleteTypedAnswers } from "@/services/answer-modes/typed-answers";
 
 export type SalvagedResearchPartial = {
   researchJobId?: string;
@@ -260,6 +265,35 @@ export async function salvageResearchPartialFromDb(input: {
   return researchPartialFromJobRow(job);
 }
 
+/** Persist 4-section answers even when the wall-clock fires mid-search. */
+export function shapeSalvagedAskOutput(
+  raw: unknown,
+  request: string,
+  answerMode: "QUICK" | "EXECUTIVE" | "ACTION" | "DEEP" = "QUICK",
+): unknown {
+  const shaped = shapeFinalOutputForMode(answerMode, raw, request);
+  if (shaped) return shaped;
+  const attached = attachVisibleResearchEvidence(raw);
+  const record =
+    attached && typeof attached === "object" && !Array.isArray(attached)
+      ? (attached as Record<string, unknown>)
+      : { summary: String(raw ?? "") };
+  return {
+    ...record,
+    typedAnswers: buildTypedAnswers(record, request),
+  };
+}
+
+export function salvageUserFacingError(output: unknown, salvaged: boolean, sourceCount: number): string | null {
+  return researchWallClockUserMessage({
+    salvaged,
+    sourceCount,
+    stepOutputsLength: salvaged ? 1 : 0,
+    stepsToRunLength: 1,
+    hasTypedAnswers: hasCompleteTypedAnswers(output),
+  });
+}
+
 /**
  * Read-path safety net for every organisation: blank Ask research PARTIAL
  * (legacy MAX_WALL_CLOCK with null finalOutput) still surfaces org-scoped
@@ -285,11 +319,11 @@ export async function hydrateBlankResearchFinalOutput(input: {
 
   for (const candidate of [input.finalOutput, input.lastCompletedOutput]) {
     if (!isBlankAskFinalOutput(candidate)) {
-      const attached = attachVisibleResearchEvidence(candidate);
+      const shaped = shapeSalvagedAskOutput(candidate, input.request);
       return {
-        finalOutput: attached,
+        finalOutput: shaped,
         salvaged: false,
-        sourceCount: sourceCountOf(attached),
+        sourceCount: sourceCountOf(shaped),
       };
     }
   }
@@ -299,10 +333,10 @@ export async function hydrateBlankResearchFinalOutput(input: {
     agentRunId: input.agentRunId,
   });
   const raw = salvaged ?? honestEmptyResearchPartial(input.request);
-  const attached = attachVisibleResearchEvidence(raw);
+  const shaped = shapeSalvagedAskOutput(raw, input.request);
   return {
-    finalOutput: attached,
+    finalOutput: shaped,
     salvaged: Boolean(salvaged),
-    sourceCount: salvaged?.sourceCount ?? sourceCountOf(attached),
+    sourceCount: salvaged?.sourceCount ?? sourceCountOf(shaped),
   };
 }

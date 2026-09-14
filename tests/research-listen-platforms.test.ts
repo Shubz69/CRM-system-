@@ -155,6 +155,14 @@ describe("research agent Apify listen wiring", () => {
     expect(calledPlatforms).toContain("instagram");
     expect(calledPlatforms).toContain("web");
     expect(calledPlatforms).not.toContain("tiktok");
+    const socialTimeouts = searchConfiguredSources.mock.calls
+      .filter((call) => {
+        const args = call[0] as { platforms?: string[]; options?: { timeoutMs?: number } };
+        return args.platforms?.includes("instagram");
+      })
+      .map((call) => (call[0] as { options?: { timeoutMs?: number } }).options?.timeoutMs ?? 0);
+    expect(socialTimeouts.length).toBeGreaterThan(0);
+    expect(Math.max(...socialTimeouts)).toBeLessThanOrEqual(8_000);
     expect(result.output.sources[0]?.platform).toBe("instagram");
     expect(result.output.sources[0]?.listenChannel).toBe("Apify · Instagram");
     expect(result.output.findings.length).toBeGreaterThan(0);

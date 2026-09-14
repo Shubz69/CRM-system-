@@ -40,12 +40,57 @@ export const RESEARCH_HARD_CEILING_MS = 58_000;
  */
 export const RESEARCH_SOURCE_FETCH_MS = {
   FAST: 12_000,
+  /** Apify social must not stretch the FAST wave past web search. */
+  FAST_SOCIAL: 8_000,
   STANDARD: 12_000,
   DEEP: 14_000,
 } as const;
 
 /** Skip structured extract LLM when remaining time is below this. */
 export const RESEARCH_EXTRACT_MIN_MS = 5_000;
+
+/**
+ * Hold back this much wall-clock for extract + persist + 4-section shape.
+ * Search used to race `remainingMs - 400`, which consumed the whole 60s
+ * budget and left only source cards.
+ */
+export const RESEARCH_SYNTH_RESERVE_MS = 18_000;
+
+export const RESEARCH_SEARCH_CAP_MS = {
+  FAST: 32_000,
+  STANDARD: 32_000,
+  DEEP: 34_000,
+} as const;
+
+/** Last-ditch research after the supervisor is already over budget. */
+export const RESEARCH_LAST_DITCH_MS =
+  RESEARCH_SOURCE_FETCH_MS.FAST + RESEARCH_EXTRACT_MIN_MS + 3_000;
+
+export function researchSearchBudgetMs(input: {
+  remainingMs: number;
+  depth: "FAST" | "STANDARD" | "DEEP";
+}): number {
+  const cap = RESEARCH_SEARCH_CAP_MS[input.depth];
+  const afterReserve = input.remainingMs - RESEARCH_SYNTH_RESERVE_MS;
+  return Math.max(1_200, Math.min(cap, Math.max(200, afterReserve)));
+}
+
+export function researchWallClockUserMessage(input: {
+  salvaged: boolean;
+  sourceCount: number;
+  stepOutputsLength: number;
+  stepsToRunLength: number;
+  hasTypedAnswers?: boolean;
+}): string | null {
+  if (input.hasTypedAnswers) return null;
+  if (input.salvaged || input.sourceCount > 0) {
+    return "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
+  }
+  if (input.stepOutputsLength === 0) {
+    return "I ran out of time before I could finish. Try again in a moment.";
+  }
+  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped to stay inside the time budget.`;
+}
 
 export const RESEARCH_QUERY_CAP = {
   FAST: 3,

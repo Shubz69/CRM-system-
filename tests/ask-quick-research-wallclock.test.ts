@@ -13,6 +13,8 @@ import {
   isBlankAskFinalOutput,
   researchPartialFromJobRow,
   salvageResearchPartialFromDb,
+  salvageUserFacingError,
+  shapeSalvagedAskOutput,
 } from "@/agents/supervisor/research-salvage";
 import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
 import {
@@ -169,6 +171,16 @@ describe("Quick research dispatch helpers", () => {
     expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(60);
     expect(researchWallClockCapSeconds("QUICK")).toBeGreaterThanOrEqual(50);
   });
+
+  it("treats Instagram Reels growth Asks as Quick research (in-process 60s path)", () => {
+    const q =
+      "What Instagram Reels content and posting strategy should @shubzfx use to grow";
+    expect(looksLikeResearch(q)).toBe(true);
+    expect(isQuickResearchAsk("QUICK", q)).toBe(true);
+    expect(looksLikeResearch("Summarise this: we book consults through Instagram DMs")).toBe(
+      false,
+    );
+  });
 });
 
 describe("source-backed PARTIAL salvage", () => {
@@ -193,6 +205,13 @@ describe("source-backed PARTIAL salvage", () => {
     expect(salvaged!.findings[0]?.sourceUrl).toBe(HIRE);
     expect(salvaged!.findings[0]?.claim).toMatch(/£120|plant hire/i);
     expect(salvaged!.phase).toBe("PARTIAL_WITH_SOURCES");
+    const customer = shapeSalvagedAskOutput(
+      salvaged,
+      "What Instagram Reels content and posting strategy should @shubzfx use to grow",
+    ) as { typedAnswers?: { strategy?: { title?: string }; scripts?: { title?: string } } };
+    expect(customer.typedAnswers?.strategy?.title).toBe("Strategy");
+    expect(customer.typedAnswers?.scripts?.title).toBe("Scripts");
+    expect(salvageUserFacingError(customer, true, salvaged!.sourceCount)).toBeNull();
   });
 
   it("returns null when nothing was gathered (does not invent sources)", () => {
@@ -398,6 +417,13 @@ describe("progress hydration + partial_sources_only honesty", () => {
     expect(hydrated.sourceCount).toBeGreaterThan(0);
     expect(JSON.stringify(hydrated.finalOutput)).toMatch(/hire\.example|£120/i);
     expect(isBlankAskFinalOutput(hydrated.finalOutput)).toBe(false);
+    const shaped = hydrated.finalOutput as {
+      typedAnswers?: { strategy?: { title?: string; body?: string } };
+    };
+    expect(shaped.typedAnswers?.strategy?.title).toBe("Strategy");
+    expect(shaped.typedAnswers?.strategy?.body?.length).toBeGreaterThan(8);
+    expect(salvageUserFacingError(hydrated.finalOutput, true, hydrated.sourceCount)).toBeNull();
+    expect(JSON.stringify(hydrated.finalOutput)).not.toMatch(/sources gathered/i);
   });
 
   it("blank wall-clock with no job still yields a non-null honest brief", () => {

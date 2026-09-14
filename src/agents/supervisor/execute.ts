@@ -46,10 +46,11 @@ import {
   looksLikeResearchOutput,
   remainingWallClockMs,
   researchWallClockCapSeconds,
+  researchWallClockUserMessage,
   shouldSkipOptionalEnrichment,
   raceWithTimeout,
+  RESEARCH_LAST_DITCH_MS,
   RESEARCH_QUICK_CEILING_MS,
-  RESEARCH_SOURCE_FETCH_MS,
 } from "@/agents/supervisor/research-deadline";
 import {
   honestEmptyResearchPartial,
@@ -164,22 +165,6 @@ async function shapeResearchPartial(input: {
   });
 }
 
-function researchWallClockUserMessage(input: {
-  salvaged: boolean;
-  sourceCount: number;
-  stepOutputsLength: number;
-  stepsToRunLength: number;
-  hasTypedAnswers?: boolean;
-}): string | null {
-  if (input.hasTypedAnswers) return null;
-  if (input.salvaged || input.sourceCount > 0) {
-    return "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
-  }
-  if (input.stepOutputsLength === 0) {
-    return "I ran out of time before I could finish. Try again in a moment.";
-  }
-  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped to stay inside the time budget. Everything completed so far is below.`;
-}
 
 function sourceCountFromOutput(value: unknown): number {
   if (!value || typeof value !== "object") return 0;
@@ -581,8 +566,10 @@ export async function executeAgentRun(input: {
     run.maxSpendCents ?? limits.maxSpendCentsPerRun ?? null;
   const isResearchAsk =
     isQuickResearchAsk(run.answerMode, run.request) || looksLikeResearch(run.request);
-  if (isResearchAsk) {
-    // Stored org/hard caps (often 30s) must not stretch Quick past its FAST ceiling.
+  if (run.answerMode === "QUICK" && isResearchAsk) {
+    // Stale org/run caps (12s/30s) used to abort FAST after source gathering only.
+    maxWallClockSeconds = researchWallClockCapSeconds("QUICK");
+  } else if (isResearchAsk) {
     maxWallClockSeconds = Math.min(
       maxWallClockSeconds,
       researchWallClockCapSeconds(run.answerMode),
@@ -842,10 +829,10 @@ export async function executeAgentRun(input: {
   if (stepsToRun.some((s) => isResearchPlanStepName(s.agentName))) {
     // Queue wait / format-clarification time must not consume the research ceiling.
     wallClockStartedAt = executeClockStart;
-    maxWallClockSeconds = Math.min(
-      maxWallClockSeconds,
-      researchWallClockCapSeconds(run.answerMode),
-    );
+    maxWallClockSeconds =
+      run.answerMode === "QUICK"
+        ? researchWallClockCapSeconds("QUICK")
+        : Math.min(maxWallClockSeconds, researchWallClockCapSeconds(run.answerMode));
     latencyTrace.researchCeilingSec = maxWallClockSeconds;
     latencyTrace.queueExcludedFromWallClock = 1;
   }
@@ -1324,7 +1311,7 @@ export async function executeAgentRun(input: {
       }
 
       const stepDeadlineAt = lastDitchResearch
-        ? Date.now() + RESEARCH_SOURCE_FETCH_MS.FAST + 1_500
+        ? Date.now() + RESEARCH_LAST_DITCH_MS
         : wallClockStartedAt.getTime() + maxWallClockSeconds * 1000;
       const executePromise = agent.execute(parsedInput.data as never, {
         organisationId: input.organisationId,

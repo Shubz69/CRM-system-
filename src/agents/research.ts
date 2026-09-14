@@ -27,7 +27,11 @@ import { hasWebSearchCredentials, WEB_SEARCH_MISSING_KEY_MESSAGE } from "@/adapt
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
-import { inferResearchListenPlatforms, labelResearchListenChannel } from "@/lib/research-listen-platforms";
+import {
+  inferResearchListenPlatforms,
+  isApifyListenPlatform,
+  labelResearchListenChannel,
+} from "@/lib/research-listen-platforms";
 import {
   RESEARCH_EXTRACT_MIN_MS,
   RESEARCH_HARD_CEILING_MS,
@@ -36,6 +40,7 @@ import {
   RESEARCH_SOURCE_CAP,
   RESEARCH_SOURCE_FETCH_MS,
   raceWithTimeout,
+  researchSearchBudgetMs,
 } from "@/agents/supervisor/research-deadline";
 
 export const researchInputSchema = z.object({
@@ -326,16 +331,26 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       searchOptions: {
         limit: number;
         includeDomains?: string[];
+        platforms?: SourcePlatform[];
       },
     ): Promise<{ resultCount: number; allPlatformsFailed: boolean }> {
       const started = Date.now();
       const requested = searchOptions.includeDomains?.length
         ? (["web"] as SourcePlatform[])
-        : activePlatforms;
+        : (searchOptions.platforms ?? activePlatforms);
       const usePlatforms = requested.filter((p) => !coldPlatforms.has(p));
       if (usePlatforms.length === 0) {
         return { resultCount: 0, allPlatformsFailed: true };
       }
+      const socialOnly = usePlatforms.every((p) => isApifyListenPlatform(p));
+      const adapterCap =
+        socialOnly && fast
+          ? RESEARCH_SOURCE_FETCH_MS.FAST_SOCIAL
+          : depth === "FAST"
+            ? RESEARCH_SOURCE_FETCH_MS.FAST
+            : depth === "DEEP"
+              ? RESEARCH_SOURCE_FETCH_MS.DEEP
+              : RESEARCH_SOURCE_FETCH_MS.STANDARD;
       try {
         const { results, errors, billableCents } = await searchConfiguredSources({
           query,
@@ -348,14 +363,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             nicheHint: parsed.nicheHint,
             includeDomains: searchOptions.includeDomains,
             qualityBudget: fast ? "FAST" : depth === "DEEP" ? "DEEP" : "STANDARD",
-            timeoutMs: Math.min(
-              depth === "FAST"
-                ? RESEARCH_SOURCE_FETCH_MS.FAST
-                : depth === "DEEP"
-                  ? RESEARCH_SOURCE_FETCH_MS.DEEP
-                  : RESEARCH_SOURCE_FETCH_MS.STANDARD,
-              Math.max(1_200, remainingMs() - 500),
-            ),
+            timeoutMs: Math.min(adapterCap, Math.max(1_200, remainingMs() - 500)),
           },
         });
         collected.push(...results);
@@ -426,12 +434,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       query: string;
       limit: number;
       includeDomains?: string[];
+      platforms?: SourcePlatform[];
     }> = [];
     // Authority include_domains is slow/empty on FAST — spend the budget on
     // one unconstrained web query so plant-hire style asks can return a URL.
     if (!fast && authorityDomains.length && remainingMs() > 1_200) {
       const authorityQuery = authorityFirstQueries(topic)[0] || topic;
-      for (const domain of authorityDomains.slice(0, fast ? 1 : 2)) {
+      for (const domain of authorityDomains.slice(0, 2)) {
         searchTasks.push({
           query: authorityQuery,
           limit: Math.max(3, Math.ceil(primaryReserve / Math.max(authorityDomains.length, 1))),
@@ -440,10 +449,24 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       }
     }
     const perQueryLimit = Math.ceil(maxSources / Math.max(queries.length, 1)) + 2;
+    const socialPlatforms = activePlatforms.filter((p) => isApifyListenPlatform(p));
     for (const query of queries) {
-      searchTasks.push({ query, limit: perQueryLimit });
+      if (fast && socialPlatforms.length > 0) {
+        searchTasks.push({ query, limit: perQueryLimit, platforms: ["web"] });
+        searchTasks.push({
+          query,
+          limit: Math.min(4, perQueryLimit),
+          platforms: socialPlatforms,
+        });
+      } else {
+        searchTasks.push({ query, limit: perQueryLimit });
+      }
     }
 
+    const searchBudget = researchSearchBudgetMs({
+      remainingMs: remainingMs(),
+      depth: fast ? "FAST" : depth === "DEEP" ? "DEEP" : "STANDARD",
+    });
     await raceWithTimeout(
       Promise.all(
         searchTasks.map(async (task) => {
@@ -451,10 +474,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           await runSearch(task.query, {
             limit: task.limit,
             includeDomains: task.includeDomains,
+            platforms: task.platforms,
           });
         }),
       ),
-      Math.max(200, remainingMs() - 400),
+      searchBudget,
       () => undefined,
     );
     latency.searchMs = Date.now() - tSearch0;

@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
-import { ASK_SHOW_SOURCES_BY_DEFAULT } from "@/lib/ask-result-ui";
+import { ASK_SHOW_SOURCES_BY_DEFAULT, looksLikeAskGrowthQuery } from "@/lib/ask-result-ui";
 import { hasCompleteTypedAnswers } from "@/services/answer-modes/typed-answers";
 import {
   ResearchFindingCards,
@@ -24,6 +24,7 @@ import { getImmutableWorkspaceContext, isWorkspaceContextReady, subscribeWorkspa
 
 function localAckLabel(prompt: string): string {
   const t = prompt.toLowerCase();
+  if (looksLikeAskGrowthQuery(prompt)) return "Searching sources for a full answer…";
   if (/\b(pipeline|deal|stalled|stuck)\b/.test(t)) return "Reviewing your pipeline…";
   if (/\b(inbox|reply|follow[- ]?up|conversation)\b/.test(t)) return "Checking your Inbox…";
   if (/\b(goal|kpi)\b/.test(t)) return "Checking goals and KPIs…";
@@ -506,7 +507,7 @@ export default function AskPage() {
         body: JSON.stringify({
           request: text,
           ...(referenceAssetId ? { referenceAssetId } : {}),
-          ...(/\b(research|look up|investigate|compare)\b/i.test(text)
+          ...(/\b(research|look up|investigate|compare)\b/i.test(text) || looksLikeAskGrowthQuery(text)
             ? { answerMode: "QUICK" }
             : {}),
         }),
@@ -1135,7 +1136,10 @@ export default function AskPage() {
       {/* Answer at the top */}
       {showAnswer && (
         <section className="space-y-6">
-          {isPartial && progress?.userFacingError && !typedReady && (
+          {isPartial &&
+            progress?.userFacingError &&
+            !typedReady &&
+            !/taking too long|sources gathered/i.test(progress.userFacingError) && (
             <p className="rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--foreground)]">
               {progress.userFacingError}
             </p>

@@ -265,6 +265,25 @@ function looksLikeSocialListening(request: string): boolean {
   );
 }
 
+/**
+ * Instagram/LinkedIn growth Asks (production: Reels posting strategy) must take
+ * the same in-process FAST path as "Research …" — they do not contain the word
+ * "research", so the old matcher skipped the 60s ceiling and dumped sources.
+ * Summarise/echo bodies that merely mention Instagram stay out.
+ */
+export function looksLikeGrowthStrategyAsk(request: string): boolean {
+  if (/\b(summaris[e]|summarize|echo|repeat it|say back)\b/i.test(request)) return false;
+  if (looksLikeCrmInternal(request) && !/\b(instagram|reels?|tiktok|linkedin|youtube)\b/i.test(request)) {
+    return false;
+  }
+  const namesNetwork =
+    /\b(instagram|insta|reels?|tiktok|linkedin|youtube|short[- ]form)\b/i.test(request);
+  if (!namesNetwork) return false;
+  return /\b(grow|growth|posting (plan|strategy|cadence|calendar)|content (strategy|plan|calendar)|hooks?|captions?|monetiz|followers?|personal brand|algorithm|strategy)\b/i.test(
+    request,
+  );
+}
+
 export function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
   if (looksLikeImaging(request)) return false;
@@ -295,6 +314,7 @@ export function looksLikeResearch(request: string): boolean {
   if (looksLikeCrmInternal(request) && !/\b(research|look up|investigate|compare|ico|gdpr|authority)\b/i.test(request)) {
     return false;
   }
+  if (looksLikeGrowthStrategyAsk(request)) return true;
   return (
     /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
       request,
@@ -455,10 +475,10 @@ function planResearchPipeline(
         steps: [
           {
             agentName: "research",
-            input: { topic: clean, nicheHint: intent, maxSources: 5, depth: "FAST" },
+            input: { topic: clean, nicheHint: intent, maxSources: 8, depth: "FAST" },
           },
         ],
-        plainEnglishPlan: `I'll do a fast sourced scan of “${clean.slice(0, 80)}” and give you a short answer. For a full research brief, use Deep / Research mode.`,
+        plainEnglishPlan: `I'll search thoroughly for “${clean.slice(0, 80)}” and return Strategy, Scripts, a Posting plan, and Monetization within about a minute.`,
       },
     };
   }

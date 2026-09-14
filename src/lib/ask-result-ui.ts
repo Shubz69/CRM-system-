@@ -19,3 +19,12 @@ export const ASK_TYPED_ANSWER_LABELS: Record<AskTypedAnswerType, string> = {
   posting_plan: "Posting plan",
   monetization: "Monetization",
 };
+
+/** Client-safe: Instagram/LinkedIn growth Asks should run as Quick research. */
+export function looksLikeAskGrowthQuery(text: string): boolean {
+  if (/\b(summaris[e]|summarize|echo|repeat it)\b/i.test(text)) return false;
+  return (
+    /\b(instagram|insta|reels?|tiktok|linkedin|youtube|short[- ]form)\b/i.test(text) &&
+    /\b(grow|growth|posting|strategy|content strategy|monetiz|followers?|algorithm)\b/i.test(text)
+  );
+}
