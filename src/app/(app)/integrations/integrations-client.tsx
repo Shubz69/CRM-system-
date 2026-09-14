@@ -140,7 +140,7 @@ const MANYCHAT_SETUP_ID = "messaging-setup";
 export default function IntegrationsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const messagingSetupRef = useRef<HTMLSectionElement | null>(null);
+  const messagingSetupRef = useRef<HTMLElement | null>(null);
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<MessagingStatus | null>(null);
   const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
