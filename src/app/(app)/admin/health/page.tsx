@@ -10,6 +10,10 @@ import IORedis from "ioredis";
 
 export const dynamic = "force-dynamic";
 
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
 type HealthStatus = "Operational" | "Degraded" | "Disconnected" | "Error" | "Not Configured";
 
 async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number; error?: string; value?: T }> {
@@ -23,10 +27,9 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number
 }
 
 async function loadZernioWebhookCounts() {
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   return prisma.webhookEvent.groupBy({
     by: ["status"],
-    where: { provider: "ZERNIO", createdAt: { gte: weekAgo } },
+    where: { provider: "ZERNIO", createdAt: { gte: daysAgo(7) } },
     _count: { _all: true },
   });
 }
