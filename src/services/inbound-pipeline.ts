@@ -218,7 +218,9 @@ export async function processInboundMessage(
         });
       } else if (
         inboundHandle &&
-        (!channel.instagramUsername || channel.instagramUsername.toLowerCase() === "demo_account")
+        !resolveChannelInstagramUsername({
+          existingUsername: channel.instagramUsername,
+        })
       ) {
         channel = await tx.messagingChannel.update({
           where: { id: channel.id },

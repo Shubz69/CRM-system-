@@ -18,6 +18,16 @@ describe("resolveChannelInstagramUsername", () => {
     ).toBeNull();
   });
 
+  it("treats demo_account as absent so new orgs never keep that placeholder", () => {
+    expect(resolveChannelInstagramUsername({ contactUsername: "demo_account" })).toBeNull();
+    expect(
+      resolveChannelInstagramUsername({
+        contactUsername: "demo_account",
+        existingUsername: "demo_account",
+      }),
+    ).toBeNull();
+  });
+
   it("replaces a leftover demo_account placeholder when a live handle arrives", () => {
     expect(
       resolveChannelInstagramUsername({

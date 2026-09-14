@@ -948,7 +948,8 @@ export default function IntegrationsClient() {
           <li>
             <span className="font-medium text-[var(--foreground)]">Copy the webhook URL</span> and
             include <code>organisationId</code> on every inbound payload so events land in this
-            workspace.
+            workspace. Each workspace has its own secret and organisationId — do not reuse another
+            tenant’s inbound request settings.
           </li>
           <li>
             <span className="font-medium text-[var(--foreground)]">Regenerate the webhook secret</span>{" "}

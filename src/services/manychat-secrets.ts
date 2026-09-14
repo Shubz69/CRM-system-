@@ -72,7 +72,13 @@ export async function resolveManyChatWebhookSecret(
 }
 
 export async function regenerateOrganisationManyChatSecret(organisationId: string) {
+  if (!organisationId) {
+    throw new Error("organisationId is required to regenerate a workspace webhook secret");
+  }
   const integration = await ensureManyChatIntegration(organisationId);
+  if (integration.organisationId !== organisationId) {
+    throw new Error("Integration tenant mismatch");
+  }
   const secret = `mc_${randomBytes(24).toString("hex")}`;
   await prisma.integrationCredential.upsert({
     where: {
@@ -91,7 +97,13 @@ export async function regenerateOrganisationManyChatSecret(organisationId: strin
     },
   });
   await prisma.integration.update({
-    where: { id: integration.id },
+    where: {
+      organisationId_type_name: {
+        organisationId,
+        type: IntegrationType.MANYCHAT,
+        name: "default",
+      },
+    },
     data: { isActive: true, updatedAt: new Date() },
   });
   return secret;

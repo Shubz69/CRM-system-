@@ -153,6 +153,30 @@ describe("org isolation — ManyChat webhook org resolution", () => {
       validateOrgScopedManyChatSecret("global-webhook-secret-value", "org_owner"),
     ).resolves.toBe(false);
   });
+
+  it("org A secret cannot authorize a payload claiming org B", async () => {
+    mocks.findMany.mockResolvedValue([]);
+    mocks.findUnique.mockImplementation(async (args: { where?: { organisationId_type_name?: { organisationId?: string } } }) => {
+      const orgId = args.where?.organisationId_type_name?.organisationId;
+      if (orgId === "org_a") {
+        return { credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-a" }] };
+      }
+      if (orgId === "org_b") {
+        return { credentials: [{ keyName: "webhook_secret", encryptedValue: "enc:secret-b" }] };
+      }
+      return null;
+    });
+
+    const result = await resolveManyChatWebhookOrganisation({
+      secretHeader: "secret-a",
+      payloadOrganisationId: "org_b",
+      channelExternalId: null,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(401);
+  });
 });
 
 describe("org isolation — assignee membership gate", () => {
