@@ -265,7 +265,7 @@ function looksLikeSocialListening(request: string): boolean {
   );
 }
 
-function looksLikeResearch(request: string): boolean {
+export function looksLikeResearch(request: string): boolean {
   if (looksLikeSocialListening(request)) return false;
   if (looksLikeImaging(request)) return false;
   // Synthetic / offline judgment prompts must never enter live research.
@@ -303,6 +303,14 @@ function looksLikeResearch(request: string): boolean {
     /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
     /\bcompare\b.+\band\b/i.test(request)
   );
+}
+
+/** Quick web research — in-process FAST scan, not the durable DEEP worker. */
+export function isQuickResearchAsk(
+  answerMode: string | null | undefined,
+  request: string,
+): boolean {
+  return answerMode === "QUICK" && looksLikeResearch(request);
 }
 
 function looksLikeImaging(request: string): boolean {
@@ -582,16 +590,17 @@ export function planAgentRunDeterministic(
   // Research / DEEP evidence asks must win over CRM substring collisions
   // (e.g. "Research … CRM follow-up timing … cite sources" must not become Inbox).
   if (looksLikeResearch(trimmed) || (modeEarly === "DEEP" && /\b(research|investigate|cite sources|external sources)\b/i.test(trimmed))) {
-    if (!org?.answerMode && !detectAnswerModeFromLanguage(trimmed)) {
-      return formatClarification();
-    }
+    // Simple sourced asks default to Quick FAST scan — waiting on format
+    // clarification burned the Quick wall-clock before any search ran.
+    const researchMode =
+      org?.answerMode ?? detectAnswerModeFromLanguage(trimmed) ?? "QUICK";
     const topic =
       extractQuotedOrRemainder(
         trimmed,
         /^(please\s+)?(research|look up|find out|investigate|compare|market scan)( (on|for|about))?\s*/i,
       ) || trimmed;
     return planResearchPipeline(topic, {
-      answerMode: org?.answerMode ?? detectAnswerModeFromLanguage(trimmed),
+      answerMode: researchMode,
     });
   }
 

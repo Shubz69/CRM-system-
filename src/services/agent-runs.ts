@@ -24,6 +24,8 @@ import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 import {
   looksLikeCrmInternal,
   looksLikeOperatorBrief,
+  looksLikeResearch,
+  isQuickResearchAsk,
 } from "@/agents/supervisor/plan";
 import { executeAgentRun } from "@/agents/supervisor/execute";
 import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
@@ -253,9 +255,9 @@ function remainingAllowanceNote(spentCents: number, capCents: number | null): st
 /**
  * Create an AgentRun and enqueue execution on agent-runs. Returns immediately.
  *
- * QUICK + internal CRM desk requests use an in-process sync fast-path (same
+ * QUICK CRM desk and QUICK web research use an in-process sync fast-path (same
  * executeAgentRun) to avoid BullMQ queue wait dominating first-progress/final latency.
- * Deep / Research / imaging remain queued.
+ * Deep / imaging remain queued. Wall-clock for research starts at execute, not enqueue.
  */
 export async function createAndEnqueueAgentRun(input: {
   organisationId: string;
@@ -274,6 +276,7 @@ export async function createAndEnqueueAgentRun(input: {
   acceptMs: number;
   status?: AgentRun["status"];
   finalOutput?: unknown;
+  answerMode?: AgentAnswerMode | null;
 }> {
   const acceptStarted = Date.now();
   ensureAgentsRegistered();
@@ -316,8 +319,12 @@ export async function createAndEnqueueAgentRun(input: {
     }
   }
 
-  const answerMode =
+  const detectedMode =
     parseAnswerMode(input.answerMode) ?? detectAnswerModeFromLanguage(request);
+  // Sourced web asks without an explicit mode run as Quick FAST — format
+  // clarification + queue wait was burning the 12s ceiling before any search.
+  const answerMode =
+    detectedMode ?? (looksLikeResearch(request) ? AgentAnswerMode.QUICK : null);
 
   const syntheticJudgment =
     /\bsynthetic qa\b/i.test(request) ||
@@ -331,14 +338,20 @@ export async function createAndEnqueueAgentRun(input: {
     (syntheticJudgment ||
       !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
 
+  const quickResearchSync =
+    isQuickResearchAsk(answerMode, request) && !input.referenceAssetId;
+
+  const inProcessSync = crmQuickSync || quickResearchSync;
+
   const looksLikeResearchAsk =
     !crmQuickSync &&
     (answerMode === AgentAnswerMode.DEEP ||
+      looksLikeResearch(request) ||
       /\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
 
   // Hot path: skip OrganisationAgentLimits round-trip for CRM Quick/Action sync.
   // Cache non-sync lookups briefly — rapid DEEP creates were paying a DB RTT each time.
-  const limits = crmQuickSync
+  const limits = inProcessSync
     ? null
     : await getCachedOrganisationAgentLimits(input.organisationId);
 
@@ -350,7 +363,9 @@ export async function createAndEnqueueAgentRun(input: {
         : /\b(inbox|reply|follow[- ]?up|conversation)\b/i.test(request)
           ? "Checking your inbox…"
           : "Checking your CRM…"
-    : "Preparing your answer…";
+    : quickResearchSync
+      ? `I'll do a fast sourced scan of “${request.slice(0, 80)}” and give you a short answer.`
+      : "Preparing your answer…";
 
   const run = await prisma.agentRun.create({
     data: {
@@ -383,7 +398,7 @@ export async function createAndEnqueueAgentRun(input: {
       partialResults: {
         latencyTrace: {
           enqueuedAt: Date.now(),
-          syncFastPath: crmQuickSync ? 1 : 0,
+          syncFastPath: inProcessSync ? 1 : 0,
         },
       } as Prisma.InputJsonValue,
     },
@@ -392,11 +407,13 @@ export async function createAndEnqueueAgentRun(input: {
   // SERVER_ACCEPT reflects runId-available latency including Redis.
   let acceptMs = Date.now() - acceptStarted;
 
-  if (crmQuickSync) {
+  if (inProcessSync) {
     // Operator briefs can take several seconds — accept fast via after() keepalive.
     // Light CRM facts finish in <1s of tool time; awaiting them removes the multi-second
     // after() scheduling delay that previously dominated Quick P50 (~6s with ~400ms tool).
-    const deferHeavyBrief = looksLikeOperatorBrief(request);
+    // Quick research is awaited in-request so the client gets findings without depending
+    // on BullMQ pickup (queue wait was burning the 12s research ceiling).
+    const deferHeavyBrief = crmQuickSync && looksLikeOperatorBrief(request);
 
     const runExecute = async () => {
       try {
@@ -407,17 +424,18 @@ export async function createAndEnqueueAgentRun(input: {
         await updateOrgScopedById(prisma.agentRun, {
               id: run.id,
               organisationId: input.organisationId,
-              data: { bullJobId: `sync-quick-crm:${run.id}` },
+              data: { bullJobId: quickResearchSync ? `sync-quick-research:${run.id}` : `sync-quick-crm:${run.id}` },
         });
-        logger.info("Agent run completed via Quick CRM sync fast-path", {
+        logger.info("Agent run completed via Quick sync fast-path", {
           runId: run.id,
           organisationId: input.organisationId,
           answerMode,
           deferred: deferHeavyBrief ? 1 : 0,
+          research: quickResearchSync ? 1 : 0,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Sync execute failed";
-        logger.warn("Quick CRM sync fast-path failed; falling back to queue", {
+        logger.warn("Quick sync fast-path failed; falling back to queue", {
           runId: run.id,
           message,
         });
@@ -463,10 +481,11 @@ export async function createAndEnqueueAgentRun(input: {
       });
       return {
         runId: run.id,
-        jobId: `sync-quick-crm:${run.id}`,
+        jobId: quickResearchSync ? `sync-quick-research:${run.id}` : `sync-quick-crm:${run.id}`,
         plainEnglishPlan: initialPlan,
         syncFastPath: true,
         acceptMs,
+        answerMode: answerMode ?? null,
       };
     }
 
@@ -477,24 +496,27 @@ export async function createAndEnqueueAgentRun(input: {
     });
     return {
       runId: run.id,
-      jobId: `sync-quick-crm:${run.id}`,
+      jobId: quickResearchSync ? `sync-quick-research:${run.id}` : `sync-quick-crm:${run.id}`,
       plainEnglishPlan: done?.plainEnglishPlan || initialPlan,
       syncFastPath: true,
       acceptMs,
       status: done?.status,
       finalOutput: done?.finalOutput ?? undefined,
+      answerMode: answerMode ?? null,
     };
   }
 
   try {
-    // DEEP/research: enqueue the Railway worker as the durable primary path and
-    // return immediately (SERVER_ACCEPT). Awaiting execute in-request previously
-    // exceeded client/fetch + route maxDuration and left clients stuck without a
+    // DEEP: enqueue the Railway worker as the durable primary path and
+    // return immediately (SERVER_ACCEPT). Quick research uses the in-process
+    // path above. Awaiting DEEP execute in-request previously exceeded
+    // client/fetch + route maxDuration and left clients stuck without a
     // runId to poll. after() local execute is only a fallback when enqueue fails.
     const preferDurableWorker =
-      answerMode === AgentAnswerMode.DEEP ||
-      /\b(research|gdpr|investigate|compare)\b/i.test(request) ||
-      process.env.VERCEL_ENV === "preview";
+      !quickResearchSync &&
+      (answerMode === AgentAnswerMode.DEEP ||
+        (looksLikeResearch(request) && answerMode !== AgentAnswerMode.QUICK) ||
+        process.env.VERCEL_ENV === "preview");
 
     if (preferDurableWorker) {
       try {
@@ -580,6 +602,7 @@ export async function createAndEnqueueAgentRun(input: {
           plainEnglishPlan: initialPlan,
           syncFastPath: false,
           acceptMs,
+          answerMode: answerMode ?? null,
         };
       } catch (enqueueError) {
         const enqueueMessage =
@@ -632,6 +655,7 @@ export async function createAndEnqueueAgentRun(input: {
           plainEnglishPlan: initialPlan,
           syncFastPath: true,
           acceptMs,
+          answerMode: answerMode ?? null,
         };
       }
     }
@@ -655,6 +679,7 @@ export async function createAndEnqueueAgentRun(input: {
       plainEnglishPlan: initialPlan,
       syncFastPath: false,
       acceptMs,
+      answerMode: answerMode ?? null,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Enqueue failed";
@@ -739,11 +764,14 @@ export async function clarifyAndEnqueueAgentRun(input: {
               data: {
       request: immutableRequest,
       status: "PENDING",
+      startedAt: new Date(),
       answerMode: preservedMode,
       clarificationQuestion: null,
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,
-      plainEnglishPlan: null,
+      plainEnglishPlan: isQuickResearchAsk(preservedMode, immutableRequest)
+        ? `I'll do a fast sourced scan of “${immutableRequest.slice(0, 80)}” and give you a short answer.`
+        : null,
       error: null,
       userFacingError: null,
       finishedAt: null,
@@ -755,6 +783,26 @@ export async function clarifyAndEnqueueAgentRun(input: {
       } as Prisma.InputJsonValue,
     },
   });
+
+  if (isQuickResearchAsk(preservedMode, immutableRequest)) {
+    try {
+      await executeAgentRun({
+        organisationId: input.organisationId,
+        runId: run.id,
+      });
+      await updateOrgScopedById(prisma.agentRun, {
+        id: run.id,
+        organisationId: input.organisationId,
+        data: { bullJobId: `sync-quick-research:${run.id}` },
+      });
+      return { runId: run.id, jobId: `sync-quick-research:${run.id}` };
+    } catch (error) {
+      logger.warn("Quick research clarify sync failed; falling back to queue", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
 
   const { jobId } = await enqueueAgentRunJob({
     name: "agent-framework-run",
