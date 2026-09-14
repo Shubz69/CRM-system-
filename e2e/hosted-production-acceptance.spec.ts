@@ -284,9 +284,12 @@ test.describe("Hosted production acceptance", () => {
     expect([200], "admin can list members").toContain(membersRes.status);
 
     await gotoRoute(page, "/integrations");
-    // Canonical customer surface is Social Accounts (IG/LI/YT) — not legacy ManyChat setup.
     await expect(page.getByText(/Social Accounts/i).first()).toBeVisible({ timeout: 20_000 });
+    // Legacy vendor id stays unused; Messaging setup is the inbound webhook surface.
     await expect(page.locator("#manychat-setup")).toHaveCount(0);
+    await expect(page.locator("#messaging-setup")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Regenerate secret" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Test inbound" })).toBeVisible();
 
     const adminPage = await gotoRoute(page, "/admin");
     const adminStatus = adminPage?.status() ?? 0;
@@ -528,7 +531,7 @@ test.describe("Hosted production acceptance", () => {
     await context.close();
   });
 
-  test("8) Integrations customer surface — Social Accounts only; provider APIs denied", async ({
+  test("8) Integrations customer surface — Social Accounts plus Messaging setup; provider APIs denied for read-only", async ({
     browser,
   }) => {
     const { context, page } = await newAuthedContext(browser, ADMIN);
@@ -537,7 +540,10 @@ test.describe("Hosted production acceptance", () => {
     const body = await page.locator("body").innerText();
     expect(body).toMatch(/Social Accounts/i);
     expect(body).toMatch(/Instagram|LinkedIn|YouTube/i);
-    expect(body).not.toMatch(/ManyChat|Zernio|Ayrshare|Claude|Anthropic/i);
+    expect(body).toMatch(/Messaging setup/i);
+    expect(body).toMatch(/Regenerate secret/i);
+    expect(body).toMatch(/Test inbound/i);
+    expect(body).not.toMatch(/Ayrshare|Claude|Anthropic/i);
     await context.close();
 
     const ro = await newAuthedContext(browser, READONLY);

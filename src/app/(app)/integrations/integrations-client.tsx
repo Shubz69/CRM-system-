@@ -16,6 +16,7 @@ type Channel = {
 };
 
 type MessagingStatus = {
+  organisationId?: string;
   webhookUrl: string;
   inboundAliasUrl?: string;
   secretConfigured: boolean;
@@ -139,7 +140,7 @@ const MANYCHAT_SETUP_ID = "messaging-setup";
 export default function IntegrationsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const messagingSetupRef = useRef<HTMLElement | null>(null);
+  const messagingSetupRef = useRef<HTMLSectionElement | null>(null);
   const apiTokenInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<MessagingStatus | null>(null);
   const [metaIg, setMetaIg] = useState<MetaInstagramStatus | null>(null);
@@ -263,8 +264,12 @@ export default function IntegrationsClient() {
 
   const loadMessaging = useCallback(async () => {
     const res = await fetch("/api/integrations/manychat");
+    if (res.status === 401 || res.status === 403) {
+      setStatus(null);
+      return;
+    }
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Failed to load");
+    if (!res.ok) throw new Error(json.error || "Failed to load messaging");
     setStatus(json);
   }, []);
 
@@ -292,9 +297,9 @@ export default function IntegrationsClient() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Customer surface: Social Accounts only. Provider internals stay platform-admin.
+      // Social Accounts stay primary; Messaging setup loads so inbound webhook secrets can be configured.
       const providersPromise = fetch("/api/health/providers");
-      await Promise.all([loadSocialAccounts()]);
+      await Promise.all([loadSocialAccounts(), loadMessaging()]);
       const providersRes = await providersPromise;
       if (providersRes.ok) {
         const p = await providersRes.json();
@@ -309,7 +314,7 @@ export default function IntegrationsClient() {
     } finally {
       setLoading(false);
     }
-  }, [loadSocialAccounts]);
+  }, [loadSocialAccounts, loadMessaging]);
 
   useEffect(() => {
     void load();
@@ -420,7 +425,7 @@ export default function IntegrationsClient() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        provider: "messaging",
+        provider: "manychat",
         externalId,
         displayName: displayName || externalId,
         isActive: channelActive,
@@ -710,6 +715,15 @@ export default function IntegrationsClient() {
                       ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      {platform === "instagram" ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary text-xs"
+                          onClick={() => focusMessagingSetup()}
+                        >
+                          Messaging setup
+                        </button>
+                      ) : null}
                       {connected || status === "REAUTH_REQUIRED" ? (
                         <button
                           type="button"
@@ -906,6 +920,322 @@ export default function IntegrationsClient() {
         </div>
       </section>
 
+      <section
+        id={MANYCHAT_SETUP_ID}
+        ref={messagingSetupRef}
+        tabIndex={-1}
+        className="surface scroll-mt-24 space-y-4 p-5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Messaging setup</h2>
+            <p className="text-sm text-[var(--muted)]">
+              Configure inbound Instagram DMs: organisation webhook secret, webhook URL, and API
+              token. Social Accounts above stay the primary connect surface.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={status?.connected ? "badge badge-success" : "badge badge-warn"}>
+              {status?.connected ? "Connected" : "Not connected"}
+            </span>
+            {status?.connectionActive === false && (
+              <span className="badge badge-warn">Disconnected</span>
+            )}
+          </div>
+        </div>
+
+        <ol className="list-decimal space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/40 p-4 pl-8 text-sm text-[var(--muted)]">
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Copy the webhook URL</span> and
+            include <code>organisationId</code> on every inbound payload so events land in this
+            workspace.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Regenerate the webhook secret</span>{" "}
+            — copy it once, then send header <code>x-manychat-secret</code> on the inbound request.
+            Without an organisation secret, inbound receive stays authentication-required.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Paste your API token</span> for
+            outbound replies. Tokens are stored encrypted and never shown again.
+          </li>
+          <li>
+            <span className="font-medium text-[var(--foreground)]">Test inbound</span> processes a
+            sample message inside the CRM only — nothing is sent to Instagram.
+          </li>
+        </ol>
+
+        <dl className="grid gap-3 text-sm md:grid-cols-2">
+          <div>
+            <dt className="text-[var(--muted)]">Webhook URL</dt>
+            <dd className="mt-1 break-all font-mono text-xs">{status?.webhookUrl || "—"}</dd>
+            {status?.webhookUrl && (
+              <button type="button" className="btn btn-secondary mt-2" onClick={() => copy(status.webhookUrl)}>
+                Copy URL
+              </button>
+            )}
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">organisationId</dt>
+            <dd className="mt-1 break-all font-mono text-xs">
+              {status?.organisationId ||
+                (typeof status?.setup?.examplePayload?.organisationId === "string"
+                  ? status.setup.examplePayload.organisationId
+                  : "—")}
+            </dd>
+            {(status?.organisationId ||
+              typeof status?.setup?.examplePayload?.organisationId === "string") && (
+              <button
+                type="button"
+                className="btn btn-secondary mt-2"
+                onClick={() =>
+                  copy(
+                    status.organisationId ||
+                      String(status.setup?.examplePayload?.organisationId || ""),
+                  )
+                }
+              >
+                Copy organisationId
+              </button>
+            )}
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Inbound alias</dt>
+            <dd className="mt-1 break-all font-mono text-xs">{status?.inboundAliasUrl || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Webhook secret</dt>
+            <dd className="mt-1 font-mono text-xs">
+              {status?.secretConfigured ? status.secretMasked : "not set"}
+              {status?.secretSource ? ` (${status.secretSource})` : ""}
+            </dd>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => void regenerateSecret()}
+              >
+                Regenerate secret
+              </button>
+            </div>
+            {oneTimeSecret && (
+              <p className="mt-2 rounded-lg bg-[var(--surface-2)] p-2 font-mono text-xs">
+                New secret (shown once): {oneTimeSecret}
+                <button type="button" className="btn btn-secondary ml-2" onClick={() => copy(oneTimeSecret)}>
+                  Copy
+                </button>
+              </p>
+            )}
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">API token</dt>
+            <dd className="mt-1">
+              <span className={status?.apiTokenConfigured ? "badge badge-success" : "badge badge-warn"}>
+                {status?.apiTokenStatus ||
+                  (status?.apiTokenConfigured ? "Configured" : "Not configured")}
+              </span>
+            </dd>
+            <form onSubmit={saveApiToken} className="mt-2 flex flex-wrap gap-2">
+              <input
+                ref={apiTokenInputRef}
+                className="input min-w-[12rem] flex-1 font-mono text-xs"
+                type="password"
+                autoComplete="off"
+                value={apiTokenInput}
+                onChange={(e) => setApiTokenInput(e.target.value)}
+                placeholder={
+                  status?.apiTokenConfigured ? "Paste new token to rotate" : "Paste messaging API token"
+                }
+              />
+              <button className="btn btn-primary" type="submit" disabled={busy}>
+                {status?.apiTokenConfigured ? "Rotate token" : "Save token"}
+              </button>
+            </form>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Saved tokens are encrypted. We never return the plaintext after save.
+            </p>
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Last inbound event</dt>
+            <dd className="mt-1 text-xs">
+              {status?.lastInboundEvent
+                ? `${status.lastInboundEvent.status} · ${new Date(status.lastInboundEvent.receivedAt).toLocaleString()}`
+                : "None yet"}
+            </dd>
+          </div>
+        </dl>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => void simulateInbound()}
+          >
+            Test inbound
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={busy}
+            onClick={() => void validateConfiguration()}
+          >
+            Validate configuration
+          </button>
+          {status?.connectionActive === false ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void reconnectMessaging()}
+            >
+              Reconnect messaging
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || !status?.apiTokenConfigured}
+              onClick={() => void disconnectMessaging()}
+            >
+              Disconnect messaging
+            </button>
+          )}
+        </div>
+
+        <form
+          onSubmit={sendTestMessage}
+          className="space-y-3 rounded-xl border border-[var(--border)] p-4"
+        >
+          <div>
+            <h3 className="font-semibold">Send test message</h3>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Explicit live send to a real messaging subscriber who already has a conversation here.
+              Uses the same outbound path as Inbox replies.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm md:col-span-1">
+              Subscriber ID
+              <input
+                className="input mt-1"
+                value={testContactExternalId}
+                onChange={(e) => setTestContactExternalId(e.target.value)}
+                placeholder="subscriber_id"
+                required
+              />
+            </label>
+            <label className="text-sm md:col-span-1">
+              Message (optional)
+              <input
+                className="input mt-1"
+                value={testMessageText}
+                onChange={(e) => setTestMessageText(e.target.value)}
+                placeholder="Test message from Agent Desk"
+              />
+            </label>
+            <div className="flex items-end">
+              <button className="btn btn-primary w-full" type="submit" disabled={busy}>
+                Send test message
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <p className="text-xs text-[var(--muted)]">
+          Test inbound stays inside the CRM. Validate configuration never sends a DM. Send test
+          message is the only control that delivers to Instagram.
+        </p>
+        {(status?.recentErrors?.length || 0) > 0 && (
+          <div>
+            <h3 className="font-semibold">Recent errors</h3>
+            <ul className="mt-2 space-y-1 text-xs text-[var(--danger)]">
+              {status?.recentErrors?.map((e) => (
+                <li key={e.id}>
+                  {e.status}: {e.error || "unknown"} · {new Date(e.receivedAt).toLocaleString()}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {status?.setup && (
+          <details className="rounded-xl border border-[var(--border)] p-3 text-sm">
+            <summary className="cursor-pointer font-medium">Technical payload reference</summary>
+            <p className="mt-3 text-xs text-[var(--muted)]">
+              Required fields: {status.setup.requiredFields.join(", ")}. Header:{" "}
+              {status.setup.requiredHeaders.join(", ")}.
+            </p>
+            <pre className="mt-3 overflow-x-auto rounded-lg bg-[var(--surface-2)] p-3 text-xs">
+              {JSON.stringify(status.setup.examplePayload, null, 2)}
+            </pre>
+          </details>
+        )}
+      </section>
+
+      <section className="surface p-5">
+        <h2 className="font-[family-name:var(--font-fraunces)] text-lg">Messaging channels</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Map your Instagram page or bot id so inbound DMs resolve to this workspace.
+        </p>
+        <ul className="mt-3 space-y-2 text-sm">
+          {(status?.channels || []).length === 0 && (
+            <li className="text-[var(--muted)]">No channels configured yet.</li>
+          )}
+          {(status?.channels || []).map((ch) => (
+            <li
+              key={ch.id}
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)]/50 py-2"
+            >
+              <div>
+                <p className="font-medium">{ch.displayName}</p>
+                <p className="text-[var(--muted)]">
+                  {ch.provider} · {ch.externalId || "no external id"}
+                  {ch.instagramUsername ? ` · @${ch.instagramUsername}` : ""}
+                </p>
+              </div>
+              <span className={ch.isActive ? "badge badge-success" : "badge"}>
+                {ch.isActive ? "Active" : "Inactive"}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <form onSubmit={saveChannel} className="mt-4 grid gap-3 md:grid-cols-4">
+          <label className="text-sm">
+            External ID
+            <input
+              className="input mt-1"
+              value={externalId}
+              onChange={(e) => setExternalId(e.target.value)}
+              required
+              placeholder="page or bot id"
+            />
+          </label>
+          <label className="text-sm">
+            Display name
+            <input
+              className="input mt-1"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Instagram page"
+            />
+          </label>
+          <label className="flex items-end gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mb-2 size-4"
+              checked={channelActive}
+              onChange={(e) => setChannelActive(e.target.checked)}
+            />
+            <span className="pb-2">Active</span>
+          </label>
+          <div className="flex items-end">
+            <button className="btn btn-primary w-full" type="submit">
+              Save channel
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
