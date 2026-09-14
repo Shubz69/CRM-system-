@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
-import { completeStructured, completeStructuredSafe } from "@/adapters/ai/structured";
+import { completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { assertEntitlement, recordMeteredUsage } from "@/services/entitlements";
@@ -92,109 +92,6 @@ export const researchOutputSchema = z.object({
 
 export type ResearchInput = z.infer<typeof researchInputSchema>;
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
-
-const queryExpandSchema = z.object({
-  queries: z.array(z.string().min(2).max(200)).min(2).max(8),
-});
-
-/** Coerce common Claude shapes into { queries: string[] }. */
-function coerceQueryExpand(raw: unknown): { queries: string[] } | null {
-  if (!raw || typeof raw !== "object") {
-    if (Array.isArray(raw) && raw.every((q) => typeof q === "string")) {
-      return { queries: raw as string[] };
-    }
-    return null;
-  }
-  const obj = raw as Record<string, unknown>;
-  const candidates = [obj.queries, obj.search_queries, obj.searchQueries, obj.q];
-  for (const c of candidates) {
-    if (Array.isArray(c) && c.every((q) => typeof q === "string")) {
-      return { queries: c as string[] };
-    }
-    if (typeof c === "string") {
-      const parts = c
-        .split(/\n|,/)
-        .map((q) => q.trim())
-        .filter((q) => q.length >= 2);
-      if (parts.length >= 1) return { queries: parts };
-    }
-  }
-  return null;
-}
-
-async function expandResearchQueries(input: {
-  organisationId: string;
-  topic: string;
-  nicheHint?: string;
-  model: string;
-  knowledgeContext?: string | null;
-}): Promise<string[]> {
-  const intent = (input.nicheHint || "").toLowerCase();
-  const socialish =
-    intent === "social_content" ||
-    intent === "content_gen" ||
-    /\b(viral|trending|hooks?|reels?|shorts?|algorithm)\b/i.test(input.topic);
-
-  const system = socialish
-    ? 'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.'
-    : 'You expand one business or market research question into several targeted factual search queries. Prefer statistics, reports, official sources, and recent analysis — not viral social posts unless the question asks for them. For UK GDPR / data protection topics, prefer ICO (ico.org.uk), GOV.UK, and legislation.gov.uk over blogs. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
-  const knowledgeBlock = input.knowledgeContext?.trim()
-    ? `\nInternal company context (use only to focus queries — do not invent sources from it):\n${input.knowledgeContext.slice(0, 3000)}\n`
-    : "";
-  const ukGdpr =
-    /\b(gdpr|data protection|privacy|ico|uk.*(compliance|regulation))\b/i.test(input.topic);
-  const prompt = socialish
-    ? `Topic: ${input.topic}
-Niche hint (optional): ${input.nicheHint || "(none)"}
-${knowledgeBlock}Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
-Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`
-    : `Topic: ${input.topic}
-Intent hint (optional): ${input.nicheHint || "(none)"}
-${knowledgeBlock}Produce 4-8 concrete search queries as JSON for grounded, reviewable sources (reports, news, official stats, analyst notes).
-${
-  ukGdpr
-    ? "Include at least two queries that target site:ico.org.uk, site:gov.uk, or site:legislation.gov.uk. If only weak blog sources are found, note the limitation rather than overstating confidence.\n"
-    : ""
-}Do NOT bias toward viral talk, social trends, reels, or shorts unless the topic explicitly asks for social content.`;
-
-  try {
-    const expand = await completeStructured(queryExpandSchema, {
-      organisationId: input.organisationId,
-      tier: "cheap",
-      model: input.model,
-      system,
-      prompt,
-      temperature: 0.2,
-      repairHint: 'Required shape: {"queries":["...","..."]}. The "queries" array is required.',
-    });
-    return expand.queries.map((q) => q.trim()).filter(Boolean);
-  } catch (error) {
-    // Last resort: try a raw completion + coerce so research still reaches YouTube/web.
-    try {
-      const { getAiProvider } = await import("@/adapters/ai");
-      const { tryParseJson } = await import("@/adapters/ai/structured");
-      const text = await getAiProvider().complete({
-        model: input.model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ],
-      });
-      const parsed = tryParseJson(text);
-      const coerced = coerceQueryExpand(parsed);
-      if (coerced && coerced.queries.length >= 1) {
-        return coerced.queries.map((q) => q.trim()).filter(Boolean).slice(0, 8);
-      }
-    } catch {
-      // fall through
-    }
-    logger.warn("Research query expand failed — continuing with the original topic only", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return [];
-  }
-}
 
 const FINDING_CLAIM_MAX = 800;
 
@@ -304,8 +201,8 @@ function engagementScore(r: SourceResult): number {
 }
 
 /**
- * Research agent — expands a question, searches configured sources in parallel,
- * ranks/dedupes, and records findings that each carry a source URL.
+ * Research agent — heuristic queries, parallel source search with hard timeouts,
+ * optional extract LLM (skipped on FAST / tight deadline), then source-backed findings.
  */
 export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   name: "research",

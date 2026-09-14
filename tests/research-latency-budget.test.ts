@@ -220,15 +220,19 @@ describe("Quick vs Deep research LLM budget", () => {
   });
 
   it("skips extract when remaining wall-clock is below RESEARCH_EXTRACT_MIN_MS", async () => {
-    await researchAgent.execute(
+    const result = await researchAgent.execute(
       { topic: "UK plant hire pricing", depth: "STANDARD" },
       {
         organisationId: "org-lat",
         agentRunId: "run-tight",
         agentStepId: "step-1",
-        deadlineAt: Date.now() + 800,
+        // Enough time to search, not enough for the extract LLM.
+        deadlineAt: Date.now() + 3_500,
       },
     );
+    expect(searchConfiguredSources).toHaveBeenCalled();
     expect(completeStructuredSafe).not.toHaveBeenCalled();
+    expect(result.output.sourceCount).toBe(1);
+    expect(result.output.findings.length).toBeGreaterThan(0);
   });
 });
