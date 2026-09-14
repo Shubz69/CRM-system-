@@ -59,6 +59,18 @@ export default async function AdminHealthPage() {
     where: { status: "PROCESSED" },
     orderBy: { processedAt: "desc" },
   });
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const zernioWebhookCounts = await prisma.webhookEvent.groupBy({
+    by: ["status"],
+    where: { provider: "ZERNIO", createdAt: { gte: weekAgo } },
+    _count: { _all: true },
+  });
+  const zernioWebhookSummary = zernioWebhookCounts
+    .map((row) => `${row.status} ${row._count._all}`)
+    .join(", ");
+  const placeholderChannels = await prisma.messagingChannel.count({
+    where: { instagramUsername: "demo_account" },
+  });
 
   function statusFor(opts: {
     configured: boolean;
@@ -178,7 +190,7 @@ export default async function AdminHealthPage() {
         : "Not Configured",
       summary: env.ZERNIO_API_KEY
         ? env.ZERNIO_WEBHOOK_SECRET
-          ? "Workspace Instagram/LinkedIn/YouTube connect + publish go through Zernio. Native OAuth rows below are a separate path."
+          ? `Workspace Instagram/LinkedIn/YouTube connect + publish go through Zernio. Native OAuth rows below are a separate path.${zernioWebhookSummary ? ` Last 7d webhooks: ${zernioWebhookSummary}.` : ""}${placeholderChannels ? ` ${placeholderChannels} MessagingChannel row(s) still have placeholder handle demo_account — not the live @handle.` : ""}`
           : "ZERNIO_API_KEY present but ZERNIO_WEBHOOK_SECRET missing — webhooks fail closed. Connect/publish can still work."
         : "ZERNIO_API_KEY missing — workspace Social Accounts connect is unavailable.",
     },
@@ -226,7 +238,7 @@ export default async function AdminHealthPage() {
             : "Error",
       summary:
         messaging.name === "manychat"
-          ? "Live adapter selected"
+          ? "Live ManyChat send adapter selected — not Zernio workspace connect, and not proof inbound webhooks succeed. WEBHOOK_RECEIVE stays AUTH_REQUIRED until the org webhook secret is set. Zernio IGNORED/FAILED events are a separate inbox path."
           : messaging.name === "mock"
             ? "Mock adapter (non-production only)"
             : "Not configured — production will not send",
@@ -251,7 +263,15 @@ export default async function AdminHealthPage() {
       lastFailure: lastFailure?.error,
       lastSuccess: lastWebhookOk?.processedAt?.toISOString(),
       summary: redis.ok
-        ? `Redis reachable · queues: follow-ups, agent-runs, maintenance · ${failedJobs} open failures`
+        ? `Redis reachable · queues: follow-ups, agent-runs, maintenance · ${failedJobs} open failures${
+            lastFailure?.error
+              ? ` · latest: ${lastFailure.error.slice(0, 180)}${
+                  /prisma/i.test(lastFailure.error)
+                    ? " (Prisma — research worker persist/query can fail even when Redis is up)"
+                    : ""
+                }`
+              : ""
+          }`
         : runtime === "production"
           ? `Redis REQUIRED and unavailable — worker/long jobs will fail · ${failedJobs} open failures`
           : `Redis unavailable — in-process follow-up fallback only (agent-runs + maintenance inactive) · ${failedJobs} open failures`,
