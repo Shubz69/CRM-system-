@@ -1,5 +1,12 @@
 export { listConnectorDefinitions, getConnectorDefinition } from "@/services/connectors/catalogue";
-export { evaluateOrganisationConnectors, recordProviderHealth } from "@/services/connectors/capabilities";
+export {
+  evaluateOrganisationConnectors,
+  recordProviderHealth,
+  pickSocialConnection,
+  socialConnectionViaProvider,
+  connectionGrantsPublish,
+} from "@/services/connectors/capabilities";
+export type { SocialViaProvider } from "@/services/connectors/capabilities";
 export {
   assertCircuitClosed,
   assertNotRateLimited,

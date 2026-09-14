@@ -170,29 +170,42 @@ export default async function AdminHealthPage() {
         : "APIFY_TOKEN missing — those research sources throw a clear not-configured error, never fake data",
     },
     {
-      name: "Instagram (connect/publish)",
+      name: "Zernio (workspace social)",
+      status: env.ZERNIO_API_KEY
+        ? env.ZERNIO_WEBHOOK_SECRET
+          ? "Operational"
+          : "Degraded"
+        : "Not Configured",
+      summary: env.ZERNIO_API_KEY
+        ? env.ZERNIO_WEBHOOK_SECRET
+          ? "Workspace Instagram/LinkedIn/YouTube connect + publish go through Zernio. Native OAuth rows below are a separate path."
+          : "ZERNIO_API_KEY present but ZERNIO_WEBHOOK_SECRET missing — webhooks fail closed. Connect/publish can still work."
+        : "ZERNIO_API_KEY missing — workspace Social Accounts connect is unavailable.",
+    },
+    {
+      name: "Instagram native OAuth",
       status:
         env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
           ? "Operational"
           : "Not Configured",
       summary:
         env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
-          ? "Meta App credentials set — org OAuth connect + publish available"
-          : "INSTAGRAM_APP_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above.",
+          ? "Meta App credentials set — optional native Graph connect/publish. Independent of Zernio workspace connections."
+          : "Native OAuth missing INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, INSTAGRAM_REDIRECT_URI. Workspace Instagram may still be Connected via Zernio. Listening uses Apify above.",
     },
     {
-      name: "LinkedIn (connect/publish)",
+      name: "LinkedIn native OAuth",
       status:
         env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
           ? "Operational"
           : "Not Configured",
       summary:
         env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
-          ? "LinkedIn app credentials set — personal-profile OAuth connect + publish available. Messaging is not supported on any platform (no compliant API)."
-          : "LINKEDIN_CLIENT_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported on any platform (no compliant API).",
+          ? "LinkedIn app credentials set — optional native personal-profile OAuth. Independent of Zernio. Messaging is not supported (no compliant API)."
+          : "Native OAuth missing LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_REDIRECT_URI. Workspace LinkedIn may still be Connected via Zernio. Listening uses Apify above. Messaging is not supported (no compliant API).",
     },
     {
-      name: "TikTok (connect/publish)",
+      name: "TikTok native OAuth",
       status:
         env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
           ? "Operational"
@@ -200,7 +213,7 @@ export default async function AdminHealthPage() {
       summary:
         env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
           ? "TikTok for Developers credentials set — Content Posting API connect + publish available. Messaging is not supported (no official API)."
-          : "TIKTOK_CLIENT_KEY/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported (no official API).",
+          : "Native OAuth missing TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI — Integrations will not show a TikTok Connect button until these are set. Public listen uses Apify above. Messaging is not supported (no official API).",
     },
     {
       name: "ManyChat",

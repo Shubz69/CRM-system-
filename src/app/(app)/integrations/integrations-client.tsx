@@ -640,7 +640,8 @@ export default function IntegrationsClient() {
           <div className="rounded-xl border border-[var(--border)] p-4">
             <p className="font-medium">Social Accounts</p>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Connect Instagram, LinkedIn, and YouTube. Capability readiness is shown per account.
+              Connect Instagram, LinkedIn, and YouTube through Zernio. Native Instagram/LinkedIn/TikTok
+              OAuth is a separate admin path and is not required for these accounts.
             </p>
             <div className="mt-3 space-y-3 text-sm">
               {(["instagram", "linkedin", "youtube"] as const).map((platform) => {
@@ -697,6 +698,7 @@ export default function IntegrationsClient() {
                       ) : null}
                       {connected ? (
                         <ul className="mt-2 space-y-0.5 text-xs text-[var(--muted)]">
+                          <li>Connected via Zernio</li>
                           <li>Publishing · Available</li>
                           <li>Analytics · Available</li>
                           <li>
@@ -765,6 +767,19 @@ export default function IntegrationsClient() {
                   </div>
                 );
               })}
+              <div className="flex flex-wrap items-start justify-between gap-2 border-t border-[var(--border)] pt-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>TikTok</span>
+                    <span className="badge">Not connected</span>
+                  </div>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    Native TikTok Connect is not offered here. It requires TIKTOK_CLIENT_KEY,
+                    TIKTOK_CLIENT_SECRET, and TIKTOK_REDIRECT_URI. Public listen uses Apify when
+                    configured — no invented login.
+                  </p>
+                </div>
+              </div>
               {!socialAccounts?.serverConfigured &&
               !["instagram", "linkedin", "youtube"].some((p) => {
                 const net =

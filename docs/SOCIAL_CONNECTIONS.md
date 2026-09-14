@@ -2,7 +2,20 @@
 
 Lets a tenant connect their **own** Instagram, LinkedIn, or TikTok account from
 **Settings → Integrations → Social Connections**, so listening and publishing run
-against their account, not a shared one. This is separate from:
+against their account, not a shared one.
+
+**Two independent connect paths (do not conflate them):**
+
+- **Zernio (workspace Social Accounts)** — Instagram / LinkedIn / YouTube Connect on
+  Integrations. An ACTIVE `SocialConnection` with `publish: true` is enough for
+  PUBLISH. Native OAuth scopes (`openid`, `w_member_social`, `INSTAGRAM_APP_*`)
+  are **not** required and must not be reported as `SCOPE_REQUIRED`.
+- **Native OAuth** — optional Graph / LinkedIn / TikTok apps. Enable TikTok Connect
+  only after setting `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, and
+  `TIKTOK_REDIRECT_URI`. Admin health “Not Configured” for native OAuth does **not**
+  mean the Zernio workspace account is disconnected.
+
+This is separate from:
 
 - **ManyChat** (`docs/MANYCHAT.md`) — the existing Instagram DM channel. Messaging
   stays there; it is not part of this feature.
