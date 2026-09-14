@@ -29,6 +29,7 @@ import {
 } from "@/agents/supervisor/plan";
 import { executeAgentRun } from "@/agents/supervisor/execute";
 import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
+import { hydrateBlankResearchFinalOutput } from "@/agents/supervisor/research-salvage";
 import { after } from "next/server";
 
 const orgLimitsCache = new Map<
@@ -766,6 +767,9 @@ export async function clarifyAndEnqueueAgentRun(input: {
       status: "PENDING",
       startedAt: new Date(),
       answerMode: preservedMode,
+      ...(isQuickResearchAsk(preservedMode, immutableRequest)
+        ? { maxWallClockSeconds: researchWallClockCapSeconds("QUICK") }
+        : {}),
       clarificationQuestion: null,
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,
@@ -942,7 +946,19 @@ export async function getAgentRunProgress(input: {
     run.steps.filter((s) => s.status === "COMPLETED").at(-1) ||
     null;
 
-  const started = run.startedAt?.getTime() ?? run.createdAt.getTime();
+  const progressLatency = (() => {
+    const pr = run.partialResults;
+    if (!pr || typeof pr !== "object" || Array.isArray(pr)) return null;
+    const lt = (pr as { latencyTrace?: unknown }).latencyTrace;
+    if (!lt || typeof lt !== "object" || Array.isArray(lt)) return null;
+    return lt as Record<string, unknown>;
+  })();
+  const pickupAt =
+    typeof progressLatency?.workerPickupAt === "number" &&
+    Number.isFinite(progressLatency.workerPickupAt)
+      ? progressLatency.workerPickupAt
+      : null;
+  const started = pickupAt ?? run.startedAt?.getTime() ?? run.createdAt.getTime();
   const ended = run.finishedAt?.getTime() ?? Date.now();
 
   const stepsDetailCleared = run.steps.some(
@@ -956,7 +972,29 @@ export async function getAgentRunProgress(input: {
     : [...run.steps].reverse().find((s) => s.status === "COMPLETED" && s.output != null)?.output ??
       null;
 
-  const displayOutput = run.finalOutput ?? lastCompletedOutput;
+  let finalOutput: unknown = run.finalOutput;
+  let userFacingError = run.userFacingError;
+  if (looksLikeResearch(run.request)) {
+    const hydrated = await hydrateBlankResearchFinalOutput({
+      organisationId: input.organisationId,
+      agentRunId: run.id,
+      request: run.request,
+      status: run.status,
+      finalOutput: run.finalOutput,
+      lastCompletedOutput,
+    });
+    finalOutput = hydrated.finalOutput;
+    if (
+      hydrated.salvaged &&
+      typeof userFacingError === "string" &&
+      /finished 0 of/i.test(userFacingError)
+    ) {
+      userFacingError =
+        "I stopped because this was taking too long. Sources gathered before the limit are below.";
+    }
+  }
+
+  const displayOutput = finalOutput ?? lastCompletedOutput;
   const budget = await getOrganisationAiBudget(input.organisationId);
   // Always load period spend so Ask can show usage even when no hard cap is set.
   const spentCents = await getOrganisationPeriodSpendCents(input.organisationId);
@@ -1024,8 +1062,8 @@ export async function getAgentRunProgress(input: {
     totalCostCents: run.totalCostCents,
     costNote: costNote(run.totalCostCents, run.status),
     outputSoFar: lastCompletedOutput,
-    finalOutput: run.finalOutput,
-    userFacingError: run.userFacingError,
+    finalOutput,
+    userFacingError,
     stepsDetailCleared,
     stepsDetailClearedMessage: stepsDetailCleared ? STEPS_CLEARED_MESSAGE : null,
     steps: run.steps.map((s) => ({

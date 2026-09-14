@@ -7,8 +7,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Agent } from "@/agents/types";
 import { isQuickResearchAsk, looksLikeResearch } from "@/agents/supervisor/plan";
-import { researchPartialFromJobRow } from "@/agents/supervisor/research-salvage";
+import {
+  hydrateBlankResearchFinalOutput,
+  honestEmptyResearchPartial,
+  isBlankAskFinalOutput,
+  researchPartialFromJobRow,
+  salvageResearchPartialFromDb,
+} from "@/agents/supervisor/research-salvage";
 import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
+import {
+  quotedFindingsFromResearchSources,
+  softenPartialSourcesOnlyError,
+} from "@/lib/research-job-present";
 
 const HIRE = "https://hire.example/rates";
 
@@ -281,8 +291,174 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
       );
       expect(JSON.stringify(fo)).not.toBe("null");
       expect(JSON.stringify(fo)).toMatch(/hire\.example|£120|plant hire/i);
+      expect(result.userFacingError || "").not.toMatch(/finished 0 of/i);
     } finally {
       vi.useRealTimers();
     }
   }, 15_000);
+
+  it("on wall-clock with a hanging search and no salvage, still returns a non-null honest PARTIAL", async () => {
+    vi.useFakeTimers();
+    try {
+      registerAgent(makeResearchAgent(async () => new Promise(() => undefined) as never));
+      researchJobFindFirst.mockResolvedValue(null);
+      agentRunFindFirst.mockResolvedValue(
+        baseRun({
+          startedAt: new Date(Date.now() - 68_000),
+          maxWallClockSeconds: 30,
+        }),
+      );
+
+      const pending = executeAgentRun({ organisationId: "org_a", runId: "run_quick_hire" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+
+      expect(result.status).toBe("PARTIAL");
+      expect(result.finalOutput).not.toBeNull();
+      expect(result.finalOutput).not.toBeUndefined();
+      expect(JSON.stringify(result.finalOutput)).not.toBe("null");
+      const fo = result.finalOutput as { answer?: string; summary?: string; findings?: unknown[]; sources?: unknown[] };
+      expect((fo.answer || fo.summary || "").length).toBeGreaterThan(20);
+      expect(result.userFacingError || "").not.toMatch(/finished 0 of/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  it("general path MAX_WALL_CLOCK (stored 30s cap, 68s-old startedAt) never returns blank finalOutput", async () => {
+    vi.useFakeTimers();
+    try {
+      registerAgent(makeResearchAgent(async () => new Promise(() => undefined) as never));
+      researchJobFindFirst.mockResolvedValue(null);
+      let finds = 0;
+      agentRunFindFirst.mockImplementation(async () => {
+        finds += 1;
+        if (finds === 2) return null;
+        return baseRun({
+          startedAt: new Date(Date.now() - 68_000),
+          maxWallClockSeconds: 30,
+        });
+      });
+
+      const pending = executeAgentRun({ organisationId: "org_a", runId: "run_quick_hire" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+
+      expect(result.status).toBe("PARTIAL");
+      expect(result.finalOutput).not.toBeNull();
+      expect(JSON.stringify(result.finalOutput)).not.toBe("null");
+      const fo = result.finalOutput as { answer?: string; summary?: string };
+      expect((fo.answer || fo.summary || "").length).toBeGreaterThan(20);
+      expect(result.userFacingError || "").not.toMatch(/finished 0 of/i);
+      expect(
+        agentRunUpdate.mock.calls.some((c) => {
+          const data = (c[0] as { data?: { error?: string; finalOutput?: unknown } }).data;
+          return data?.error === "MAX_WALL_CLOCK" && data.finalOutput != null;
+        }),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+});
+
+describe("progress hydration + partial_sources_only honesty", () => {
+  beforeEach(() => {
+    researchJobFindFirst.mockReset();
+    researchJobFindFirst.mockResolvedValue(null);
+  });
+
+  it("hydrates a blank PARTIAL AgentRun from an org-scoped ResearchJob", async () => {
+    researchJobFindFirst.mockResolvedValue({
+      id: "job_hire",
+      topic: "plant hire UK pricing",
+      brief: null,
+      sources: [
+        {
+          url: HIRE,
+          title: "UK plant hire day rates",
+          content: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+          platform: "web",
+          author: null,
+        },
+      ],
+      findings: [],
+    });
+    const hydrated = await hydrateBlankResearchFinalOutput({
+      organisationId: "org_a",
+      agentRunId: "run_quick_hire",
+      request: "Research plant hire UK pricing",
+      status: "PARTIAL",
+      finalOutput: null,
+    });
+    expect(hydrated.salvaged).toBe(true);
+    expect(hydrated.sourceCount).toBeGreaterThan(0);
+    expect(JSON.stringify(hydrated.finalOutput)).toMatch(/hire\.example|£120/i);
+    expect(isBlankAskFinalOutput(hydrated.finalOutput)).toBe(false);
+  });
+
+  it("blank wall-clock with no job still yields a non-null honest brief", () => {
+    const empty = honestEmptyResearchPartial("Research plant hire UK pricing");
+    expect(isBlankAskFinalOutput(null)).toBe(true);
+    expect(isBlankAskFinalOutput(empty)).toBe(false);
+    expect(empty.summary.length).toBeGreaterThan(20);
+    expect(empty.sources).toEqual([]);
+  });
+
+  it("quotes sources as findings when findings=0 (never invents stats)", () => {
+    const findings = quotedFindingsFromResearchSources([
+      {
+        id: "src_1",
+        url: HIRE,
+        title: "UK plant hire day rates",
+        snippet: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+        platform: "web",
+      },
+    ]);
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings[0]?.sourceUrl).toBe(HIRE);
+    expect(findings[0]?.claim).toMatch(/£120|plant hire/i);
+    const softened = softenPartialSourcesOnlyError({
+      error: "partial_sources_only",
+      userFacingError: "Structured findings were incomplete",
+      sourceCount: 1,
+    });
+    expect(softened.error).toBeNull();
+    expect(softened.userFacingError).toBeNull();
+  });
+});
+
+describe("multi-tenant salvage scope", () => {
+  it("scopes ResearchJob lookup by organisationId.equals (no cross-org leakage)", async () => {
+    researchJobFindFirst.mockResolvedValue(null);
+    await salvageResearchPartialFromDb({
+      organisationId: "org_a",
+      agentRunId: "run_quick_hire",
+    });
+    expect(researchJobFindFirst).toHaveBeenCalled();
+    const arg = researchJobFindFirst.mock.calls[0]?.[0] as {
+      where: {
+        organisationId: { equals: string };
+        agentRunId: { equals: string };
+      };
+      include: {
+        sources: { where: { organisationId: { equals: string } } };
+        findings: { where: { organisationId: { equals: string } } };
+      };
+    };
+    expect(arg.where.organisationId.equals).toBe("org_a");
+    expect(arg.where.agentRunId.equals).toBe("run_quick_hire");
+    expect(arg.include.sources.where.organisationId.equals).toBe("org_a");
+    expect(arg.include.findings.where.organisationId.equals).toBe("org_a");
+
+    await salvageResearchPartialFromDb({
+      organisationId: "org_b",
+      agentRunId: "run_quick_hire",
+    });
+    const other = researchJobFindFirst.mock.calls[1]?.[0] as {
+      where: { organisationId: { equals: string } };
+    };
+    expect(other.where.organisationId.equals).toBe("org_b");
+    expect(other.where.organisationId.equals).not.toBe("org_a");
+  });
 });

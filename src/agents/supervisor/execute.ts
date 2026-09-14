@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
 import type { AgentExecuteResult } from "@/agents/types";
 import { ensureAgentsRegistered, getAgent } from "@/agents";
-import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal, looksLikeResearch } from "@/agents/supervisor/plan";
+import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal, looksLikeResearch, isQuickResearchAsk } from "@/agents/supervisor/plan";
 import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
 import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 import { logger } from "@/lib/logger";
@@ -47,7 +47,11 @@ import {
   RESEARCH_QUICK_CEILING_MS,
   RESEARCH_SOURCE_FETCH_MS,
 } from "@/agents/supervisor/research-deadline";
-import { salvageResearchPartialFromDb } from "@/agents/supervisor/research-salvage";
+import {
+  honestEmptyResearchPartial,
+  isBlankAskFinalOutput,
+  salvageResearchPartialFromDb,
+} from "@/agents/supervisor/research-salvage";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -144,15 +148,94 @@ async function shapeResearchPartial(input: {
   answerMode: import("@prisma/client").AgentAnswerMode | null;
   raw: unknown;
   request: string;
+  originalUserPrompt?: string | null;
 }): Promise<unknown> {
   return finalizeModeOutput({
     organisationId: input.organisationId,
     agentRunId: input.runId,
     answerMode: input.answerMode,
     raw: input.raw,
-    originalUserPrompt: input.request,
+    originalUserPrompt: input.originalUserPrompt ?? input.request,
     request: input.request,
   });
+}
+
+function researchWallClockUserMessage(input: {
+  salvaged: boolean;
+  sourceCount: number;
+  stepOutputsLength: number;
+  stepsToRunLength: number;
+}): string {
+  if (input.salvaged || input.sourceCount > 0) {
+    return "I stopped because this was taking too long. Sources gathered before the limit are below.";
+  }
+  if (input.stepOutputsLength === 0) {
+    return "I stopped because this was taking too long, before sources came back. Try again in a moment.";
+  }
+  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped because this was taking too long. Everything completed so far is below.`;
+}
+
+function sourceCountFromOutput(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  const obj = value as Record<string, unknown>;
+  const sources = Array.isArray(obj.sources) ? obj.sources.length : 0;
+  const findings = Array.isArray(obj.findings) ? obj.findings.length : 0;
+  return sources || findings;
+}
+
+/**
+ * QUICK/research wall-clock must never persist a blank finalOutput.
+ * Salvage org-scoped sources when present; otherwise an honest empty PARTIAL.
+ */
+async function neverBlankResearchWallClockOutput(input: {
+  organisationId: string;
+  runId: string;
+  request: string;
+  answerMode: import("@prisma/client").AgentAnswerMode | null;
+  raw: unknown;
+  originalUserPrompt?: string | null;
+}): Promise<{ output: unknown; salvaged: boolean; sourceCount: number }> {
+  let raw = input.raw;
+  let salvaged = false;
+  if (isBlankAskFinalOutput(raw) || !looksLikeResearchOutput(raw)) {
+    const fromDb = await salvageResearchPartialFromDb({
+      organisationId: input.organisationId,
+      agentRunId: input.runId,
+    });
+    if (fromDb) {
+      raw = fromDb;
+      salvaged = true;
+    } else {
+      raw = honestEmptyResearchPartial(input.request);
+    }
+  }
+  let shaped = await shapeResearchPartial({
+    organisationId: input.organisationId,
+    runId: input.runId,
+    answerMode: input.answerMode ?? "QUICK",
+    raw,
+    request: input.request,
+    originalUserPrompt: input.originalUserPrompt,
+  });
+  if (isBlankAskFinalOutput(shaped) || shaped == null) {
+    shaped = await shapeResearchPartial({
+      organisationId: input.organisationId,
+      runId: input.runId,
+      answerMode: input.answerMode ?? "QUICK",
+      raw: salvaged && !isBlankAskFinalOutput(raw) ? raw : honestEmptyResearchPartial(input.request),
+      request: input.request,
+      originalUserPrompt: input.originalUserPrompt,
+    });
+  }
+  const output =
+    isBlankAskFinalOutput(shaped) || shaped == null
+      ? honestEmptyResearchPartial(input.request)
+      : shaped;
+  return {
+    output,
+    salvaged,
+    sourceCount: sourceCountFromOutput(output),
+  };
 }
 
 /**
@@ -251,30 +334,17 @@ async function tryQuickResearchFastPath(input: {
         durationMs: Date.now() - executeWallStart,
       },
     });
-    const salvaged = await salvageResearchPartialFromDb({
-      organisationId: input.organisationId,
-      agentRunId: input.run.id,
-    });
-    const raw =
-      salvaged ??
-      ({
-        summary:
-          "I ran out of time before sourced findings were ready. Nothing below was invented — try again or use Deep / Research for a longer scan.",
-        findings: [],
-        sources: [],
-        phase: "PARTIAL_WITH_SOURCES",
-      } satisfies Record<string, unknown>);
-    const shaped = await shapeResearchPartial({
+    const { output, salvaged, sourceCount } = await neverBlankResearchWallClockOutput({
       organisationId: input.organisationId,
       runId: input.run.id,
-      answerMode: "QUICK",
-      raw,
       request: input.run.request,
+      answerMode: "QUICK",
+      raw: null,
     });
     logger.warn("Quick research hit wall-clock", {
       runId: input.run.id,
       salvaged: salvaged ? 1 : 0,
-      sourceCount: salvaged?.sourceCount ?? 0,
+      sourceCount,
     });
     return finishRun({
       organisationId: input.organisationId,
@@ -283,11 +353,14 @@ async function tryQuickResearchFastPath(input: {
       status: "PARTIAL",
       totalCostCents: 0,
       partialResults: { steps: [], latencyTrace },
-      finalOutput: shaped,
+      finalOutput: output,
       error: "MAX_WALL_CLOCK",
-      userFacingError: salvaged
-        ? "I stopped because this was taking too long. Sources gathered before the limit are below."
-        : "I stopped because this was taking too long, before sources came back. Try again in a moment.",
+      userFacingError: researchWallClockUserMessage({
+        salvaged,
+        sourceCount,
+        stepOutputsLength: 0,
+        stepsToRunLength: 1,
+      }),
     });
   }
 
@@ -489,6 +562,15 @@ export async function executeAgentRun(input: {
   let maxWallClockSeconds = run.maxWallClockSeconds || limits.maxWallClockSeconds;
   const maxSpendCents =
     run.maxSpendCents ?? limits.maxSpendCentsPerRun ?? null;
+  const isResearchAsk =
+    isQuickResearchAsk(run.answerMode, run.request) || looksLikeResearch(run.request);
+  if (isResearchAsk) {
+    // Stored org/hard caps (often 30s) must not stretch Quick past its FAST ceiling.
+    maxWallClockSeconds = Math.min(
+      maxWallClockSeconds,
+      researchWallClockCapSeconds(run.answerMode),
+    );
+  }
 
   const executeWallStart = Date.now();
   const priorPartial =
@@ -512,16 +594,19 @@ export async function executeAgentRun(input: {
 
   const startedAt = run.startedAt ?? new Date();
   const executeClockStart = new Date(executeWallStart);
+  // Queue wait / format-clarification time must not consume the research ceiling.
+  const persistStartedAt = isResearchAsk ? executeClockStart : startedAt;
   // CRM Quick/Action and Quick research skip Context Resolver + Business Profile
   // (was ~9s of the wall clock on preview traces, then MAX_WALL_CLOCK with empty steps).
   const skipHeavyBizContext =
     ((run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
       looksLikeCrmInternal(run.request)) ||
-    (run.answerMode === "QUICK" && looksLikeResearch(run.request));
+    isQuickResearchAsk(run.answerMode, run.request);
   // Claim only PENDING/PLANNING — never overwrite RUNNING (lost race → exit).
   const claimData = {
     status: "PLANNING" as const,
-    startedAt,
+    startedAt: persistStartedAt,
+    ...(isResearchAsk ? { maxWallClockSeconds } : {}),
     partialResults: {
       ...priorPartial,
       latencyTrace,
@@ -907,32 +992,46 @@ export async function executeAgentRun(input: {
       isResearchPlanStepName(step.agentName);
     if (overBudget && !lastDitchResearch) {
       const originalUserPrompt = readOriginalUserPrompt(run);
-      let raw = previousOutput;
-      if (!looksLikeResearchOutput(raw)) {
-        const salvaged = await salvageResearchPartialFromDb({
+      const treatAsResearch =
+        isResearchAsk ||
+        looksLikeResearchOutput(previousOutput) ||
+        stepsToRun.some((s) => isResearchPlanStepName(s.agentName));
+      if (treatAsResearch) {
+        const { output, salvaged, sourceCount } = await neverBlankResearchWallClockOutput({
           organisationId: input.organisationId,
-          agentRunId: run.id,
+          runId: run.id,
+          request: run.request,
+          answerMode: run.answerMode,
+          raw: previousOutput,
+          originalUserPrompt,
         });
-        if (salvaged) raw = salvaged;
+        const withPhase =
+          looksLikeResearchOutput(output) &&
+          output &&
+          typeof output === "object" &&
+          (output as { researchQuality?: unknown }).researchQuality != null
+            ? {
+                ...(output as Record<string, unknown>),
+                phase: "PARTIAL_WITH_GROUNDED_QUALITY",
+              }
+            : output;
+        return finishRun({
+          organisationId: input.organisationId,
+          request: run.request,
+          runId: run.id,
+          status: "PARTIAL",
+          totalCostCents,
+          partialResults: { steps: stepOutputs },
+          finalOutput: withPhase,
+          error: "MAX_WALL_CLOCK",
+          userFacingError: researchWallClockUserMessage({
+            salvaged,
+            sourceCount,
+            stepOutputsLength: stepOutputs.length,
+            stepsToRunLength: stepsToRun.length,
+          }),
+        });
       }
-      const shapedPartial = await finalizeModeOutput({
-        organisationId: input.organisationId,
-        agentRunId: run.id,
-        answerMode: run.answerMode,
-        raw,
-        originalUserPrompt,
-        request: run.request,
-      });
-      const withPhase =
-        looksLikeResearchOutput(shapedPartial) &&
-        shapedPartial &&
-        typeof shapedPartial === "object" &&
-        (shapedPartial as { researchQuality?: unknown }).researchQuality != null
-          ? {
-              ...(shapedPartial as Record<string, unknown>),
-              phase: "PARTIAL_WITH_GROUNDED_QUALITY",
-            }
-          : shapedPartial;
       return finishRun({
         organisationId: input.organisationId,
         request: run.request,
@@ -940,12 +1039,9 @@ export async function executeAgentRun(input: {
         status: "PARTIAL",
         totalCostCents,
         partialResults: { steps: stepOutputs },
-        finalOutput: withPhase,
+        finalOutput: previousOutput,
         error: "MAX_WALL_CLOCK",
-        userFacingError:
-          looksLikeResearchOutput(withPhase)
-            ? `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Sources gathered so far are below.`
-            : `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
+        userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
       });
     }
 
@@ -1241,19 +1337,14 @@ export async function executeAgentRun(input: {
             userFacingStatus: "Stopped — time limit",
           },
         });
-        const salvaged = await salvageResearchPartialFromDb({
-          organisationId: input.organisationId,
-          agentRunId: run.id,
-        });
-        const raw = salvaged ?? previousOutput;
         const originalUserPrompt = readOriginalUserPrompt(run);
-        const shapedPartial = await finalizeModeOutput({
+        const { output, salvaged, sourceCount } = await neverBlankResearchWallClockOutput({
           organisationId: input.organisationId,
-          agentRunId: run.id,
-          answerMode: run.answerMode,
-          raw,
-          originalUserPrompt,
+          runId: run.id,
           request: run.request,
+          answerMode: run.answerMode,
+          raw: previousOutput,
+          originalUserPrompt,
         });
         return finishRun({
           organisationId: input.organisationId,
@@ -1262,11 +1353,14 @@ export async function executeAgentRun(input: {
           status: "PARTIAL",
           totalCostCents,
           partialResults: { steps: stepOutputs },
-          finalOutput: shapedPartial,
+          finalOutput: output,
           error: "MAX_WALL_CLOCK",
-          userFacingError: salvaged
-            ? "I stopped because this was taking too long. Sources gathered before the limit are below."
-            : `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
+          userFacingError: researchWallClockUserMessage({
+            salvaged,
+            sourceCount,
+            stepOutputsLength: stepOutputs.length,
+            stepsToRunLength: stepsToRun.length,
+          }),
         });
       }
       const result = raced;
