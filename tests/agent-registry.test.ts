@@ -86,7 +86,7 @@ describe("agent registry", () => {
     expect(result.costCents).toBe(0);
   });
 
-  it("plans research → analyst → critic for research requests", () => {
+  it("plans research → analyst for Deep research (no critic — 30s ceiling)", () => {
     const plan = planAgentRunDeterministic("Research plant hire equipment pricing in the UK", {
       organisationId: "org_1",
       answerMode: "DEEP",
@@ -96,7 +96,6 @@ describe("agent registry", () => {
     expect(plan.plan.steps.map((s) => s.agentName)).toEqual([
       "research",
       "analyst",
-      "critic",
     ]);
     expect(plan.plan.plainEnglishPlan).toMatch(/research/i);
   });

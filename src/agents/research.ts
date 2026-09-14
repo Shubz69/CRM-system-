@@ -26,6 +26,15 @@ import {
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
+import {
+  RESEARCH_EXTRACT_MIN_MS,
+  RESEARCH_HARD_CEILING_MS,
+  RESEARCH_QUERY_CAP,
+  RESEARCH_QUICK_CEILING_MS,
+  RESEARCH_SOURCE_CAP,
+  RESEARCH_SOURCE_FETCH_MS,
+  raceWithTimeout,
+} from "@/agents/supervisor/research-deadline";
 
 export const researchInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -324,32 +333,46 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     if (topic.length < 3) {
       throw new Error("I need a clearer research topic before I can search sources.");
     }
-    const fast = parsed.depth === "FAST";
-    const maxSources = parsed.maxSources ?? (fast ? 6 : 28);
+    const depth = parsed.depth ?? "STANDARD";
+    const fast = depth === "FAST";
+    const maxSources =
+      parsed.maxSources ??
+      (depth === "FAST"
+        ? RESEARCH_SOURCE_CAP.FAST
+        : depth === "DEEP"
+          ? RESEARCH_SOURCE_CAP.DEEP
+          : RESEARCH_SOURCE_CAP.STANDARD);
     const organisationId = asSafePrismaId(ctx.organisationId);
     await assertEntitlement(organisationId, "research");
     await assertWithinSpendCap(organisationId, researchAgent.estimateCostCents(parsed));
 
     const model = resolveModelForTier("cheap");
     let costCents = 0;
+    const executeStarted = Date.now();
+    const ownCeiling = fast ? RESEARCH_QUICK_CEILING_MS : RESEARCH_HARD_CEILING_MS;
+    const deadlineAt = Math.min(executeStarted + ownCeiling, ctx.deadlineAt ?? executeStarted + ownCeiling);
+    const remainingMs = () => deadlineAt - Date.now();
+    const latency = {
+      expandMs: 0,
+      searchMs: 0,
+      extractMs: 0,
+      persistMs: 0,
+    };
 
-    // FAST / Quick research: skip expand LLM — topic + authority queries only.
-    let expanded: string[] = [];
-    if (!fast) {
-      expanded = await expandResearchQueries({
-        organisationId: organisationId,
-        topic,
-        nicheHint: parsed.nicheHint,
-        model,
-        knowledgeContext: ctx.knowledgeContext,
-      });
-      costCents += 2;
-    }
-
+    // Skip query-expand LLM — heuristic queries stay inside the 30s / 8s ceiling.
+    const tExpand0 = Date.now();
+    const queryCap =
+      depth === "FAST"
+        ? RESEARCH_QUERY_CAP.FAST
+        : depth === "DEEP"
+          ? RESEARCH_QUERY_CAP.DEEP
+          : RESEARCH_QUERY_CAP.STANDARD;
+    const year = new Date().getFullYear();
     const queries = [
       ...authorityFirstQueries(topic),
-      ...new Set([topic, ...expanded]),
-    ].slice(0, fast ? 3 : 10);
+      ...new Set([topic, `${topic} ${year}`]),
+    ].slice(0, queryCap);
+    latency.expandMs = Date.now() - tExpand0;
 
     const job = await prisma.researchJob.create({
       data: {
@@ -373,12 +396,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     // Desk research defaults to evidence platforms — not every social scraper.
     // Apify LinkedIn/TikTok/etc. are for social listening / prospecting, and their
     // long timeouts previously stranded DEEP GDPR runs in RUNNING for minutes.
-    const defaultResearchPlatforms = (
-      isHighStakes ||
-      /\b(gdpr|ico|regulation|lawful|compliance|ofcom|gov\.uk)\b/i.test(topic)
-        ? (["web"] as SourcePlatform[])
-        : (["web", "reddit", "youtube"] as SourcePlatform[])
-    ).filter((p) => configuredPlatforms.includes(p));
+    // Desk research stays on web by default — Reddit/YouTube/Apify fan-out is what
+    // pushed production Ask runs past a minute. Callers can still pass platforms.
+    const defaultResearchPlatforms = (["web"] as SourcePlatform[]).filter((p) =>
+      configuredPlatforms.includes(p),
+    );
     const platforms =
       explicitPlatforms ??
       (defaultResearchPlatforms.length ? defaultResearchPlatforms : configuredPlatforms);
@@ -425,7 +447,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             recent: true,
             nicheHint: parsed.nicheHint,
             includeDomains: searchOptions.includeDomains,
-            qualityBudget: fast ? "FAST" : "STANDARD",
+            qualityBudget: fast ? "FAST" : depth === "DEEP" ? "DEEP" : "STANDARD",
+            timeoutMs:
+              depth === "FAST"
+                ? RESEARCH_SOURCE_FETCH_MS.FAST
+                : depth === "DEEP"
+                  ? RESEARCH_SOURCE_FETCH_MS.DEEP
+                  : RESEARCH_SOURCE_FETCH_MS.STANDARD,
           },
         });
         collected.push(...results);
@@ -482,56 +510,38 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       }
     }
 
-    // Phase 1 — dedicated provider-constrained authority searches (not site: text alone).
-    if (authorityDomains.length) {
-      const authorityQueries = authorityFirstQueries(topic);
-      for (const domain of authorityDomains) {
-        if (coldPlatforms.has("web")) break;
-        const q =
-          authorityQueries[0] ||
-          `UK GDPR personal data storage guidance`;
-        await runSearch(q, {
-          limit: Math.max(5, Math.ceil(primaryReserve / authorityDomains.length) + 1),
+    const tSearch0 = Date.now();
+    const searchTasks: Array<{
+      query: string;
+      limit: number;
+      includeDomains?: string[];
+    }> = [];
+    // One parallel authority pass (no sequential retry) — extra domain waves blew the ceiling.
+    if (authorityDomains.length && remainingMs() > 1_200) {
+      const authorityQuery = authorityFirstQueries(topic)[0] || topic;
+      for (const domain of authorityDomains.slice(0, fast ? 1 : 2)) {
+        searchTasks.push({
+          query: authorityQuery,
+          limit: Math.max(3, Math.ceil(primaryReserve / Math.max(authorityDomains.length, 1))),
           includeDomains: [domain],
         });
       }
-      // Bounded second attempt per domain if still empty for that host class.
-      const havePrimary = collected.some((r) => isPrimaryAuthorityUrl(r.url));
-      if (!havePrimary && !coldPlatforms.has("web")) {
-        for (const domain of authorityDomains) {
-          if (coldPlatforms.has("web")) break;
-          await runSearch(`UK GDPR data protection`, {
-            limit: 5,
-            includeDomains: [domain],
-          });
-        }
-      }
+    }
+    const perQueryLimit = Math.ceil(maxSources / Math.max(queries.length, 1)) + 2;
+    for (const query of queries) {
+      searchTasks.push({ query, limit: perQueryLimit });
     }
 
-    // Phase 2 — general / secondary queries (no domain filter).
-    // FAST / Quick: run remaining queries in parallel to cut wall-clock.
-    // Non-FAST: sequential with circuit-breaker — one all-platform failure wave stops
-    // further query fan-out (avoids 150s+ RUNNING while every Apify/Tavily call fails).
-    if (fast) {
-      await Promise.all(
-        queries.map((query) =>
-          runSearch(query, {
-            limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
-          }),
-        ),
-      );
-    } else {
-      for (const query of queries) {
-        if (activePlatforms.length === 0) break;
-        if (collected.length >= maxSources) break;
-        const wave = await runSearch(query, {
-          limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+    await Promise.all(
+      searchTasks.map(async (task) => {
+        if (remainingMs() < 800) return;
+        await runSearch(task.query, {
+          limit: task.limit,
+          includeDomains: task.includeDomains,
         });
-        if (wave.allPlatformsFailed || wave.resultCount === 0) {
-          break;
-        }
-      }
-    }
+      }),
+    );
+    latency.searchMs = Date.now() - tSearch0;
 
     const deduped = dedupeSourceResults(collected);
     const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
@@ -545,27 +555,30 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         ].slice(0, maxSources)
       : [...primary, ...secondary].slice(0, maxSources);
 
-    const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
-    for (const r of ranked) {
-      const persisted = await persistResearchSourceWithSnapshot({
-        organisationId: organisationId,
-        researchJobId: jobId,
-        url: r.url,
-        title: r.title,
-        platform: r.platform,
-        author: r.author,
-        publishedAt: r.publishedAt,
-        content: r.content,
-        engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-        rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
-        queryUsed: parsed.topic,
-      });
-      sourceRows.push({
-        id: persisted.sourceId,
-        url: r.url,
-        freshnessScore: persisted.freshnessScore,
-      });
-    }
+    const tPersistSources0 = Date.now();
+    const sourceRows = await Promise.all(
+      ranked.map(async (r) => {
+        const persisted = await persistResearchSourceWithSnapshot({
+          organisationId: organisationId,
+          researchJobId: jobId,
+          url: r.url,
+          title: r.title,
+          platform: r.platform,
+          author: r.author,
+          publishedAt: r.publishedAt,
+          content: r.content,
+          engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
+          queryUsed: parsed.topic,
+        });
+        return {
+          id: persisted.sourceId,
+          url: r.url,
+          freshnessScore: persisted.freshnessScore,
+        };
+      }),
+    );
+    const persistSourcesMs = Date.now() - tPersistSources0;
 
     const urlToId = new Map(sourceRows.map((s) => [s.url, s.id]));
     const urlToFreshness = new Map(sourceRows.map((s) => [s.url, s.freshnessScore]));
@@ -576,25 +589,43 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       )
       .join("\n\n----\n\n");
 
-    await assertWithinSpendCap(organisationId, 2);
     type ExtractedFinding = z.infer<typeof findingItemSchema>;
     let extractedFindings: ExtractedFinding[] = [];
     let extractionDegraded = false;
-    if (catalog) {
+    const tExtract0 = Date.now();
+    const remainingBeforeExtract = remainingMs();
+    const skipLlmExtract =
+      fast || remainingBeforeExtract < RESEARCH_EXTRACT_MIN_MS || !catalog;
+    if (!skipLlmExtract) {
+      await assertWithinSpendCap(organisationId, 2);
       const findingLimit = Math.min(maxSources, 15);
-      const extractResult = await completeStructuredSafe(findingsExtractSchema, {
-        organisationId: organisationId,
-        tier: "cheap",
-        model,
-        maxTokens: 8192,
-        jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
-        repairHint:
-          'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
-        system:
-          'Extract factual findings from the sources. Return ONLY JSON shaped as {"findings":[...]}. Every finding MUST include claim and sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION, INFERENCE, or SECONDARY. Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit that finding.',
-        prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 45_000)}\n\nReturn up to ${findingLimit} findings.`,
-        temperature: 0.1,
-      });
+      const extractBudget = Math.max(
+        1_000,
+        Math.min(remainingMs() - 1_500, 12_000),
+      );
+      const extractResult = await raceWithTimeout(
+        completeStructuredSafe(findingsExtractSchema, {
+          organisationId: organisationId,
+          tier: "cheap",
+          model,
+          maxTokens: 8192,
+          skipRepair: remainingMs() < RESEARCH_EXTRACT_MIN_MS + 4_000,
+          jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
+          repairHint:
+            'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
+          system:
+            'Extract factual findings from the sources. Return ONLY JSON shaped as {"findings":[...]}. Every finding MUST include claim and sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION, INFERENCE, or SECONDARY. Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit that finding.',
+          prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 45_000)}\n\nReturn up to ${findingLimit} findings.`,
+          temperature: 0.1,
+        }),
+        extractBudget,
+        () => ({
+          ok: false as const,
+          reason: "extract_timeout",
+          raw: undefined,
+          failureClass: "PROVIDER_FAILED" as const,
+        }),
+      );
       costCents += 2;
       if (extractResult.ok) {
         extractedFindings = extractResult.data.findings;
@@ -645,7 +676,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           phase: "STRUCTURED_EXTRACTION_FAILED",
         });
       }
+    } else if (catalog) {
+      extractionDegraded = true;
     }
+    latency.extractMs = Date.now() - tExtract0;
 
     if (ranked.length > 0 && extractedFindings.length === 0) {
       extractionDegraded = true;
@@ -683,22 +717,26 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       findings = sourceBackedFindingsFromSources(ranked);
     }
 
-    for (const f of findings) {
-      const sourceId = urlToId.get(f.sourceUrl);
-      if (!sourceId) continue;
-      await prisma.researchFinding.create({
-        data: {
-          organisationId: organisationId,
-          researchJobId: jobId,
-          researchSourceId: sourceId,
-          claim: f.claim,
-          evidenceExcerpt: f.evidenceExcerpt,
-          claimKind: parseClaimKind(f.claimKind),
-          confidence: f.confidence ?? null,
-          freshnessScore: urlToFreshness.get(f.sourceUrl) ?? null,
-        },
-      });
-    }
+    const tPersistFindings0 = Date.now();
+    await Promise.all(
+      findings.map(async (f) => {
+        const sourceId = urlToId.get(f.sourceUrl);
+        if (!sourceId) return;
+        await prisma.researchFinding.create({
+          data: {
+            organisationId: organisationId,
+            researchJobId: jobId,
+            researchSourceId: sourceId,
+            claim: f.claim,
+            evidenceExcerpt: f.evidenceExcerpt,
+            claimKind: parseClaimKind(f.claimKind),
+            confidence: f.confidence ?? null,
+            freshnessScore: urlToFreshness.get(f.sourceUrl) ?? null,
+          },
+        });
+      }),
+    );
+    latency.persistMs = persistSourcesMs + (Date.now() - tPersistFindings0);
 
     const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
     const baseSummary =
@@ -758,18 +796,38 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       } catch {
         /* metering must not fail the research output */
       }
-      try {
-        await ingestResearchJobSocialContent({
-          organisationId: organisationId,
-          researchJobId: jobId,
-        });
-      } catch (error) {
-        logger.warn("Social intelligence ingest skipped after research", {
-          researchJobId: jobId,
-          message: error instanceof Error ? error.message : "unknown",
-        });
+      if (!fast && remainingMs() > 1_500) {
+        try {
+          await ingestResearchJobSocialContent({
+            organisationId: organisationId,
+            researchJobId: jobId,
+          });
+        } catch (error) {
+          logger.warn("Social intelligence ingest skipped after research", {
+            researchJobId: jobId,
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
       }
     }
+
+    logger.info("Research latency budget", {
+      jobId,
+      expandMs: latency.expandMs,
+      searchMs: latency.searchMs,
+      extractMs: latency.extractMs,
+      persistMs: latency.persistMs,
+      totalMs: Date.now() - executeStarted,
+      remainingMs: remainingMs(),
+      ceilingMs: ownCeiling,
+      depth,
+      sourceCount: ranked.length,
+      findingCount: findings.length,
+      skipLlmExtract,
+      degraded: ranked.length < 3 || extractionDegraded,
+      extractionFailed: false,
+      extractionDegraded,
+    });
 
     return { output, model, costCents };
   },

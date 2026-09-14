@@ -156,6 +156,32 @@ export async function mapPool<T, R>(
   return results;
 }
 
+async function raceAdapterSearch(
+  promise: Promise<SourceResult[]>,
+  timeoutMs: number | undefined,
+  platform: SourcePlatform,
+): Promise<SourceResult[]> {
+  if (!timeoutMs || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<SourceResult[]>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new SourceUnavailableError(
+              platform,
+              `${platform} search timed out after ${timeoutMs}ms.`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Run configured adapters for one query in parallel (capped).
  * Unconfigured adapters are skipped with an explicit log — never fake results.
@@ -185,11 +211,16 @@ export async function searchConfiguredSources(input: {
 
   const billable = input.options._billableCents ?? { value: 0 };
   const options: SourceSearchOptions = { ...input.options, _billableCents: billable };
+  const timeoutMs = options.timeoutMs;
 
   const settled = await mapPool(platforms, concurrency, async (platform) => {
     const adapter = getSourceAdapter(platform);
     try {
-      const results = await adapter.search(input.query, options);
+      const results = await raceAdapterSearch(
+        adapter.search(input.query, options),
+        timeoutMs,
+        platform,
+      );
       return { platform, results, error: null as null | { message: string; code: string } };
     } catch (error) {
       const facing = userFacingSourceError(platform, error);

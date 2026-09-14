@@ -153,6 +153,8 @@ export type CompleteStructuredOptions = {
   maxTokens?: number;
   /** Optional explicit JSON Schema; otherwise derived from Zod. */
   jsonSchema?: Record<string, unknown>;
+  /** Skip the Zod repair LLM pass — prefer a fast schema fail / salvage. */
+  skipRepair?: boolean;
 };
 
 /**
@@ -220,6 +222,20 @@ export async function completeStructuredSafe<T>(
     firstValue = tryParseJson(firstRawText);
   } catch {
     firstValue = firstRawText;
+  }
+
+  if (options.skipRepair) {
+    const coercedFirst = coerceStructuredValue(firstValue);
+    const first = schema.safeParse(coercedFirst);
+    if (first.success) {
+      return { ok: true, data: first.data, repaired: false, raw: coercedFirst };
+    }
+    return {
+      ok: false,
+      reason: "AI output failed Zod validation (repair skipped)",
+      raw: coercedFirst,
+      failureClass: "SCHEMA_FAILED",
+    };
   }
 
   return runWithZodRepair({

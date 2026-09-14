@@ -17,6 +17,8 @@ export type AgentContext = {
   knowledgeRetrievalMode?: "hybrid" | "lexical" | "none";
   /** Prior Ask episodes + admin preferences — not approved Knowledge. */
   episodicContext?: string | null;
+  /** Absolute epoch ms when this step must stop and degrade (research latency ceiling). */
+  deadlineAt?: number;
 };
 
 export type AgentExecuteResult<TOut> = {

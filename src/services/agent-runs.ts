@@ -26,6 +26,7 @@ import {
   looksLikeOperatorBrief,
 } from "@/agents/supervisor/plan";
 import { executeAgentRun } from "@/agents/supervisor/execute";
+import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
 import { after } from "next/server";
 
 const orgLimitsCache = new Map<
@@ -330,6 +331,11 @@ export async function createAndEnqueueAgentRun(input: {
     (syntheticJudgment ||
       !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
 
+  const looksLikeResearchAsk =
+    !crmQuickSync &&
+    (answerMode === AgentAnswerMode.DEEP ||
+      /\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
+
   // Hot path: skip OrganisationAgentLimits round-trip for CRM Quick/Action sync.
   // Cache non-sync lookups briefly — rapid DEEP creates were paying a DB RTT each time.
   const limits = crmQuickSync
@@ -358,7 +364,12 @@ export async function createAndEnqueueAgentRun(input: {
       plainEnglishPlan: initialPlan,
       answerMode: answerMode ?? null,
       maxSteps: limits?.maxSteps ?? 8,
-      maxWallClockSeconds: limits?.maxWallClockSeconds ?? 600,
+      maxWallClockSeconds: looksLikeResearchAsk
+        ? Math.min(
+            limits?.maxWallClockSeconds ?? 600,
+            researchWallClockCapSeconds(answerMode),
+          )
+        : limits?.maxWallClockSeconds ?? 600,
       maxSpendCents: limits?.maxSpendCentsPerRun ?? null,
       referenceAssetId: input.referenceAssetId ?? null,
       // Immutable provenance — never overwritten with clarification chrome.
@@ -510,7 +521,10 @@ export async function createAndEnqueueAgentRun(input: {
           }
           // Reclaim only true orphans. Never touch RUNNING — that races the Railway
           // worker and was resetting DEEP runs to PLANNING mid-flight.
-          const delays = [20_000, 45_000, 75_000];
+          // First check at 8s so a missed enqueue can still finish inside the 30s
+          // research ceiling. executeAgentRun claims PENDING/PLANNING only, so a
+          // healthy worker that already moved the run to RUNNING wins.
+          const delays = [8_000, 20_000, 35_000];
           let waited = 0;
           for (const target of delays) {
             await new Promise((r) => setTimeout(r, target - waited));

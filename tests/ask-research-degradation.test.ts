@@ -154,6 +154,40 @@ describe("Ask/Research degradation + privacy", () => {
     );
   });
 
+  it("FAST research quotes sources without waiting on extract LLM", async () => {
+    searchConfiguredSources.mockResolvedValue({
+      results: [
+        {
+          url: "https://hire.example/rates",
+          title: "UK plant hire day rates",
+          platform: "web",
+          content: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+          author: null,
+          publishedAt: null,
+          engagement: null,
+          rawMetadata: {},
+        },
+      ],
+      errors: [],
+      billableCents: 3,
+    });
+
+    const result = await researchAgent.execute(
+      { topic: "UK plant hire pricing", depth: "FAST" },
+      {
+        organisationId: "org-qa",
+        agentRunId: "run-fast",
+        agentStepId: "step-1",
+      },
+    );
+
+    expect(completeStructured).not.toHaveBeenCalled();
+    expect(completeStructuredSafe).not.toHaveBeenCalled();
+    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
+    expect(result.output.findings.length).toBeGreaterThan(0);
+    expect(result.output.findings[0]?.sourceUrl).toBe("https://hire.example/rates");
+  });
+
   it("research uses source-backed findings when extract returns an empty pack", async () => {
     searchConfiguredSources.mockResolvedValue({
       results: [

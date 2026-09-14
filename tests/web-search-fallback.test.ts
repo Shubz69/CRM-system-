@@ -115,5 +115,36 @@ describe("web search provider fallback", () => {
       true,
     );
     expect(isWebProviderAvailabilityFailure(new Error("empty results"))).toBe(false);
+    expect(isWebProviderAvailabilityFailure(new Error("The operation was aborted"))).toBe(true);
+  });
+
+  it("aborts a hung primary fetch and skips Exa fallback on FAST", async () => {
+    const fetchMock = vi.fn((_url: unknown, init?: { signal?: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        const fail = () =>
+          reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+        if (signal.aborted) {
+          fail();
+          return;
+        }
+        signal.addEventListener("abort", fail);
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const started = Date.now();
+    const { searchWebWithFallback } = await import("@/adapters/sources/web");
+    await expect(
+      searchWebWithFallback("UK plant hire", {
+        organisationId: "org_1",
+        limit: 3,
+        timeoutMs: 80,
+        qualityBudget: "FAST",
+      }),
+    ).rejects.toBeTruthy();
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

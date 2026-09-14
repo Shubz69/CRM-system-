@@ -36,8 +36,10 @@ import {
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 import {
   isResearchEvidenceAgent,
+  isResearchPlanStepName,
   looksLikeResearchOutput,
   remainingWallClockMs,
+  researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
 } from "@/agents/supervisor/research-deadline";
 
@@ -268,7 +270,7 @@ export async function executeAgentRun(input: {
 
   const limits = await loadLimits(input.organisationId);
   const maxSteps = run.maxSteps || limits.maxSteps;
-  const maxWallClockSeconds = run.maxWallClockSeconds || limits.maxWallClockSeconds;
+  let maxWallClockSeconds = run.maxWallClockSeconds || limits.maxWallClockSeconds;
   const maxSpendCents =
     run.maxSpendCents ?? limits.maxSpendCentsPerRun ?? null;
 
@@ -512,6 +514,13 @@ export async function executeAgentRun(input: {
   latencyTrace.governorMs = Date.now() - tGov0;
 
   const stepsToRun = plan.steps.slice(0, governedMaxSteps);
+  if (stepsToRun.some((s) => isResearchPlanStepName(s.agentName))) {
+    maxWallClockSeconds = Math.min(
+      maxWallClockSeconds,
+      researchWallClockCapSeconds(run.answerMode),
+    );
+    latencyTrace.researchCeilingSec = maxWallClockSeconds;
+  }
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
   let totalCostCents = run.totalCostCents || 0;
@@ -961,6 +970,7 @@ export async function executeAgentRun(input: {
         knowledgeDocumentTitles,
         knowledgeRetrievalMode,
         episodicContext,
+        deadlineAt: startedAt.getTime() + maxWallClockSeconds * 1000,
       });
 
       const durationMs = Date.now() - stepStarted;

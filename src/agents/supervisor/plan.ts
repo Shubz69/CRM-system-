@@ -447,24 +447,36 @@ function planResearchPipeline(
         steps: [
           {
             agentName: "research",
-            input: { topic: clean, nicheHint: intent, maxSources: 6, depth: "FAST" },
+            input: { topic: clean, nicheHint: intent, maxSources: 5, depth: "FAST" },
           },
         ],
         plainEnglishPlan: `I'll do a fast sourced scan of “${clean.slice(0, 80)}” and give you a short answer. For a full research brief, use Deep / Research mode.`,
       },
     };
   }
+  const deep = options?.answerMode === "DEEP";
+  // Latency: critic almost never fits a 30s ceiling. Analyst only on Deep,
+  // and the supervisor still skips it when remaining time is tight.
   return {
     kind: "plan",
     plan: {
-      steps: [
-        { agentName: "research", input: { topic: clean, nicheHint: intent } },
-        { agentName: "analyst", input: { topic: clean } },
-        { agentName: "critic", input: {} },
-      ],
+      steps: deep
+        ? [
+            {
+              agentName: "research",
+              input: { topic: clean, nicheHint: intent, maxSources: 10, depth: "DEEP" },
+            },
+            { agentName: "analyst", input: { topic: clean } },
+          ]
+        : [
+            {
+              agentName: "research",
+              input: { topic: clean, nicheHint: intent, maxSources: 8, depth: "STANDARD" },
+            },
+          ],
       plainEnglishPlan: socialish
-        ? `I'll research recent high-signal posts and videos about “${clean.slice(0, 80)}”, pull example links, write a short take + full brief, then note what formats appear to be working.`
-        : `I'll research sourced facts and evidence about “${clean.slice(0, 80)}”, pull reviewable source links, write a grounded answer, then flag gaps or contradictions.`,
+        ? `I'll research recent high-signal posts about “${clean.slice(0, 80)}” and return sourced findings quickly.`
+        : `I'll research sourced facts about “${clean.slice(0, 80)}” and return a grounded answer from collected sources.`,
     },
   };
 }
@@ -477,9 +489,8 @@ function planSocialListeningPipeline(topic: string): PlanResult {
       steps: [
         { agentName: "social_listening", input: { topic: clean } },
         { agentName: "analyst", input: { topic: clean } },
-        { agentName: "critic", input: {} },
       ],
-      plainEnglishPlan: `I'll scan recent high-engagement posts about “${clean.slice(0, 80)}”, surface viral examples with links, draft a creator brief + next-algorithm takes, then verify citations.`,
+      plainEnglishPlan: `I'll scan recent high-engagement posts about “${clean.slice(0, 80)}” and surface sourced themes, hooks, and example links.`,
     },
   };
 }
@@ -734,7 +745,7 @@ export async function planAgentRun(
   const result = await completeStructuredSafe(llmPlanSchema, {
     organisationId: org.organisationId,
     tier: "cheap",
-    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research or social listening, prefer the full pipeline (research|social_listening → analyst → critic). For images, use imaging_analyze only when a referenceAssetId is known — never call imaging_generate until the user confirms a prompt. If unclear, ask ONE clarifying question with 2-4 short options.`,
+    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research, prefer a fast research-only plan (add analyst only for Deep). Skip critic. For images, use imaging_analyze only when a referenceAssetId is known — never call imaging_generate until the user confirms a prompt. If unclear, ask ONE clarifying question with 2-4 short options.`,
     prompt: `Request:\n${request}\n\nOrganisation: ${org.organisationName || org.organisationId}\nReference asset id: ${org.referenceAssetId || "(none)"}`,
     skipSpendGate: false,
   });
@@ -757,7 +768,12 @@ export async function planAgentRun(
   }
 
   const steps = (data.steps || [])
-    .filter((s) => hasAgent(s.agentName) && s.agentName !== "imaging_generate")
+    .filter(
+      (s) =>
+        hasAgent(s.agentName) &&
+        s.agentName !== "imaging_generate" &&
+        s.agentName !== "critic",
+    )
     .map((s) => {
       if (s.agentName === "summarise") {
         return {

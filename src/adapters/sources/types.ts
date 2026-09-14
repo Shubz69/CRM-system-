@@ -58,6 +58,11 @@ export type SourceSearchOptions = {
   /** After insufficient evidence, allow a broader Apify sample (still ≤ hardMaxItems). */
   broadenApify?: boolean;
   /**
+   * Hard cap for a single adapter search (ms). Hung Tavily/Exa/Apify calls
+   * must fail into PARTIAL instead of stalling the 30s Ask ceiling.
+   */
+  timeoutMs?: number;
+  /**
    * Internal sink for billable adapter costs (cents). Used by Apify adapters so
    * searchConfiguredSources can return spend without changing SourceAdapter.
    */
