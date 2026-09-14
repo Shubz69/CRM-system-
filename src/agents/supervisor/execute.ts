@@ -1,8 +1,9 @@
 import { Prisma, type AgentRunStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
+import type { AgentExecuteResult } from "@/agents/types";
 import { ensureAgentsRegistered, getAgent } from "@/agents";
-import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal } from "@/agents/supervisor/plan";
+import { planAgentRun, planAgentRunDeterministic, looksLikeCrmInternal, looksLikeResearch } from "@/agents/supervisor/plan";
 import type { AgentPlan, PlanStep } from "@/agents/supervisor/types";
 import { assertWithinSpendCap, SpendCapExceededError } from "@/services/ai-spend-gate";
 import { logger } from "@/lib/logger";
@@ -42,7 +43,11 @@ import {
   remainingWallClockMs,
   researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
+  raceWithTimeout,
+  RESEARCH_QUICK_CEILING_MS,
+  RESEARCH_SOURCE_FETCH_MS,
 } from "@/agents/supervisor/research-deadline";
+import { salvageResearchPartialFromDb } from "@/agents/supervisor/research-salvage";
 
 export type ExecuteAgentRunResult = {
   runId: string;
@@ -129,6 +134,210 @@ async function finishRun(input: {
     partialResults: input.partialResults ?? null,
     userFacingError: input.userFacingError ?? null,
   };
+}
+
+const QUICK_RESEARCH_TIMEOUT = Symbol("quick-research-timeout");
+
+async function shapeResearchPartial(input: {
+  organisationId: string;
+  runId: string;
+  answerMode: import("@prisma/client").AgentAnswerMode | null;
+  raw: unknown;
+  request: string;
+}): Promise<unknown> {
+  return finalizeModeOutput({
+    organisationId: input.organisationId,
+    agentRunId: input.runId,
+    answerMode: input.answerMode,
+    raw: input.raw,
+    originalUserPrompt: input.request,
+    request: input.request,
+  });
+}
+
+/**
+ * QUICK web research — skip governor/RAG/CoS/planning LLM. Queue wait and
+ * format-clarification time must not consume the FAST search budget.
+ */
+async function tryQuickResearchFastPath(input: {
+  organisationId: string;
+  run: {
+    id: string;
+    request: string;
+    answerMode: import("@prisma/client").AgentAnswerMode | null;
+    referenceAssetId: string | null;
+    status: string;
+  };
+}): Promise<ExecuteAgentRunResult | null> {
+  if (input.run.answerMode !== "QUICK" || input.run.referenceAssetId) return null;
+  if (!looksLikeResearch(input.run.request)) return null;
+
+  const executeWallStart = Date.now();
+  const planned = planAgentRunDeterministic(input.run.request, {
+    organisationId: input.organisationId,
+    answerMode: "QUICK",
+  });
+  if (planned.kind !== "plan") return null;
+  const step = planned.plan.steps[0];
+  if (!step || step.agentName !== "research" || planned.plan.steps.length !== 1) return null;
+
+  ensureAgentsRegistered();
+  const agent = getAgent("research");
+  const parsedInput = agent.inputSchema.safeParse(step.input);
+  if (!parsedInput.success) return null;
+
+  const claimed = await updateOrgScopedById(prisma.agentRun, {
+    id: input.run.id,
+    organisationId: input.organisationId,
+    extraWhere: { status: { in: ["PENDING", "PLANNING"] } },
+    data: {
+      status: "RUNNING",
+      startedAt: new Date(executeWallStart),
+      plan: planned.plan as unknown as Prisma.InputJsonValue,
+      plainEnglishPlan: planned.plan.plainEnglishPlan,
+      maxWallClockSeconds: researchWallClockCapSeconds("QUICK"),
+    },
+  });
+  if (claimed.count !== 1) return null;
+
+  const stepRow = await prisma.agentStep.create({
+    data: {
+      organisationId: input.organisationId,
+      agentRunId: input.run.id,
+      position: 0,
+      agentName: "research",
+      userFacingLabel: agent.userFacingLabel(parsedInput.data as never) || "Researching sources",
+      input: parsedInput.data as Prisma.InputJsonValue,
+      status: "RUNNING",
+      userFacingStatus: "In progress",
+    },
+  });
+
+  const deadlineAt = executeWallStart + RESEARCH_QUICK_CEILING_MS;
+  const raced = await raceWithTimeout<AgentExecuteResult<unknown> | typeof QUICK_RESEARCH_TIMEOUT>(
+    agent.execute(parsedInput.data as never, {
+      organisationId: input.organisationId,
+      agentRunId: input.run.id,
+      agentStepId: stepRow.id,
+      knowledgeContext: null,
+      deadlineAt,
+    }),
+    RESEARCH_QUICK_CEILING_MS + 750,
+    () => QUICK_RESEARCH_TIMEOUT,
+  );
+
+  const latencyTrace = {
+    workerPickupAt: executeWallStart,
+    queueWaitMs: 0,
+    contextLoadMs: 0,
+    contextSkipped: 1,
+    planMs: 0,
+    governorMs: 0,
+    preStepContextMs: 0,
+    knowledgeContextMs: 0,
+    memoryContextMs: 0,
+    quickResearchFastPath: 1,
+    totalMs: Date.now() - executeWallStart,
+  };
+
+  if (raced === QUICK_RESEARCH_TIMEOUT) {
+    await updateOrgScopedById(prisma.agentStep, {
+      id: stepRow.id,
+      organisationId: input.organisationId,
+      extraWhere: { agentRunId: { equals: String(asSafePrismaId(input.run.id)) } },
+      data: {
+        status: "FAILED",
+        userFacingStatus: "Stopped — time limit",
+        durationMs: Date.now() - executeWallStart,
+      },
+    });
+    const salvaged = await salvageResearchPartialFromDb({
+      organisationId: input.organisationId,
+      agentRunId: input.run.id,
+    });
+    const raw =
+      salvaged ??
+      ({
+        summary:
+          "I ran out of time before sourced findings were ready. Nothing below was invented — try again or use Deep / Research for a longer scan.",
+        findings: [],
+        sources: [],
+        phase: "PARTIAL_WITH_SOURCES",
+      } satisfies Record<string, unknown>);
+    const shaped = await shapeResearchPartial({
+      organisationId: input.organisationId,
+      runId: input.run.id,
+      answerMode: "QUICK",
+      raw,
+      request: input.run.request,
+    });
+    logger.warn("Quick research hit wall-clock", {
+      runId: input.run.id,
+      salvaged: salvaged ? 1 : 0,
+      sourceCount: salvaged?.sourceCount ?? 0,
+    });
+    return finishRun({
+      organisationId: input.organisationId,
+      request: input.run.request,
+      runId: input.run.id,
+      status: "PARTIAL",
+      totalCostCents: 0,
+      partialResults: { steps: [], latencyTrace },
+      finalOutput: shaped,
+      error: "MAX_WALL_CLOCK",
+      userFacingError: salvaged
+        ? "I stopped because this was taking too long. Sources gathered before the limit are below."
+        : "I stopped because this was taking too long, before sources came back. Try again in a moment.",
+    });
+  }
+
+  const result = raced;
+  await updateOrgScopedById(prisma.agentStep, {
+    id: stepRow.id,
+    organisationId: input.organisationId,
+    extraWhere: { agentRunId: { equals: String(asSafePrismaId(input.run.id)) } },
+    data: {
+      output: result.output as Prisma.InputJsonValue,
+      model: result.model ?? null,
+      tokensIn: result.tokensIn ?? null,
+      tokensOut: result.tokensOut ?? null,
+      costCents: result.costCents ?? 0,
+      durationMs: Date.now() - executeWallStart,
+      status: "COMPLETED",
+      userFacingStatus: "Done",
+    },
+  });
+
+  const shaped = await shapeResearchPartial({
+    organisationId: input.organisationId,
+    runId: input.run.id,
+    answerMode: "QUICK",
+    raw: result.output,
+    request: input.run.request,
+  });
+  logger.info("Ask latency trace", {
+    runId: input.run.id,
+    answerMode: "QUICK",
+    ...latencyTrace,
+  });
+  const hasEvidence =
+    looksLikeResearchOutput(result.output) &&
+    ((Array.isArray((result.output as { sources?: unknown }).sources) &&
+      ((result.output as { sources: unknown[] }).sources?.length ?? 0) > 0) ||
+      (Array.isArray((result.output as { findings?: unknown }).findings) &&
+        ((result.output as { findings: unknown[] }).findings?.length ?? 0) > 0));
+  return finishRun({
+    organisationId: input.organisationId,
+    request: input.run.request,
+    runId: input.run.id,
+    status: hasEvidence ? "COMPLETED" : "PARTIAL",
+    totalCostCents: result.costCents ?? 0,
+    partialResults: {
+      steps: [{ agentName: "research", userFacingLabel: "Research", output: result.output }],
+      latencyTrace,
+    },
+    finalOutput: shaped,
+  });
 }
 
 /**
@@ -264,6 +473,12 @@ export async function executeAgentRun(input: {
     }
   }
 
+  const quickResearch = await tryQuickResearchFastPath({
+    organisationId: input.organisationId,
+    run,
+  });
+  if (quickResearch) return quickResearch;
+
   const org = await prisma.organisation.findFirst({
     where: { id: input.organisationId, deletedAt: null },
     select: { id: true, name: true },
@@ -296,10 +511,13 @@ export async function executeAgentRun(input: {
   };
 
   const startedAt = run.startedAt ?? new Date();
-  // CRM Quick/Action sync already set a customer-facing plan — avoid an extra PLANNING write.
+  const executeClockStart = new Date(executeWallStart);
+  // CRM Quick/Action and Quick research skip Context Resolver + Business Profile
+  // (was ~9s of the wall clock on preview traces, then MAX_WALL_CLOCK with empty steps).
   const skipHeavyBizContext =
-    (run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
-    looksLikeCrmInternal(run.request);
+    ((run.answerMode === "QUICK" || run.answerMode === "ACTION") &&
+      looksLikeCrmInternal(run.request)) ||
+    (run.answerMode === "QUICK" && looksLikeResearch(run.request));
   // Claim only PENDING/PLANNING — never overwrite RUNNING (lost race → exit).
   const claimData = {
     status: "PLANNING" as const,
@@ -473,13 +691,16 @@ export async function executeAgentRun(input: {
   const provisionalSteps = plan.steps;
   const crmDeskOnlyEarly =
     provisionalSteps.length === 1 && provisionalSteps.every((s) => s.agentName === "crm_desk");
+  const skipGovernor =
+    crmDeskOnlyEarly ||
+    (run.answerMode === "QUICK" && looksLikeResearch(run.request));
 
   // Map answer mode into Compute Governor (single pipeline) and apply budgets.
   // Skip governor DB round-trip for pure CRM desk Quick/Action — budgets already fixed.
   let governedMaxSteps = maxSteps;
   let governedContextChars: number | null = null;
   const tGov0 = Date.now();
-  if (run.answerMode && !crmDeskOnlyEarly) {
+  if (run.answerMode && !skipGovernor) {
     try {
       const hints = computeHintsForAnswerMode(run.answerMode);
       const computePlan = await planCompute({
@@ -515,12 +736,16 @@ export async function executeAgentRun(input: {
   latencyTrace.governorMs = Date.now() - tGov0;
 
   const stepsToRun = plan.steps.slice(0, governedMaxSteps);
+  let wallClockStartedAt = startedAt;
   if (stepsToRun.some((s) => isResearchPlanStepName(s.agentName))) {
+    // Queue wait / format-clarification time must not consume the research ceiling.
+    wallClockStartedAt = executeClockStart;
     maxWallClockSeconds = Math.min(
       maxWallClockSeconds,
       researchWallClockCapSeconds(run.answerMode),
     );
     latencyTrace.researchCeilingSec = maxWallClockSeconds;
+    latencyTrace.queueExcludedFromWallClock = 1;
   }
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
@@ -531,6 +756,10 @@ export async function executeAgentRun(input: {
   // RAG / episodic / CoS assembly that dominated Quick latency on the internal path.
   const crmDeskOnly =
     stepsToRun.length === 1 && stepsToRun.every((s) => s.agentName === "crm_desk");
+  const quickResearchOnly =
+    stepsToRun.length === 1 &&
+    stepsToRun[0]?.agentName === "research" &&
+    run.answerMode === "QUICK";
 
   // Phase 2: organisational knowledge as working memory for this mission (never invents facts).
   let knowledgeContext: string | null = null;
@@ -550,7 +779,7 @@ export async function executeAgentRun(input: {
   let episodicContext: string | null = null;
 
   const tCtx0 = Date.now();
-  if (!crmDeskOnly) {
+  if (!crmDeskOnly && !quickResearchOnly) {
   const knowledgePolicy = evaluateToolPolicy("knowledge.retrieve", {
     organisationId: input.organisationId,
   });
@@ -665,16 +894,32 @@ export async function executeAgentRun(input: {
   latencyTrace.memoryContextMs = pendingMemoryTool?.durationMs ?? 0;
   latencyTrace.preStepContextMs = Date.now() - tCtx0;
   latencyTrace.crmDeskFastPath = crmDeskOnly ? 1 : 0;
+  latencyTrace.quickResearchFastPath = quickResearchOnly ? 1 : 0;
 
   for (let i = 0; i < stepsToRun.length; i++) {
-    const elapsedSec = (Date.now() - startedAt.getTime()) / 1000;
-    if (elapsedSec > maxWallClockSeconds) {
+    const step = stepsToRun[i]!;
+    const elapsedSec = (Date.now() - wallClockStartedAt.getTime()) / 1000;
+    const overBudget = elapsedSec > maxWallClockSeconds;
+    const lastDitchResearch =
+      overBudget &&
+      i === 0 &&
+      stepOutputs.length === 0 &&
+      isResearchPlanStepName(step.agentName);
+    if (overBudget && !lastDitchResearch) {
       const originalUserPrompt = readOriginalUserPrompt(run);
+      let raw = previousOutput;
+      if (!looksLikeResearchOutput(raw)) {
+        const salvaged = await salvageResearchPartialFromDb({
+          organisationId: input.organisationId,
+          agentRunId: run.id,
+        });
+        if (salvaged) raw = salvaged;
+      }
       const shapedPartial = await finalizeModeOutput({
         organisationId: input.organisationId,
         agentRunId: run.id,
         answerMode: run.answerMode,
-        raw: previousOutput,
+        raw,
         originalUserPrompt,
         request: run.request,
       });
@@ -697,7 +942,10 @@ export async function executeAgentRun(input: {
         partialResults: { steps: stepOutputs },
         finalOutput: withPhase,
         error: "MAX_WALL_CLOCK",
-        userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
+        userFacingError:
+          looksLikeResearchOutput(withPhase)
+            ? `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Sources gathered so far are below.`
+            : `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
       });
     }
 
@@ -726,11 +974,9 @@ export async function executeAgentRun(input: {
       });
     }
 
-    const step = stepsToRun[i]!;
-
     // Optional analyst/critic must not starve mandatory RQS after grounded evidence.
     const remainingMs = remainingWallClockMs({
-      startedAt,
+      startedAt: wallClockStartedAt,
       maxWallClockSeconds,
     });
     if (
@@ -963,7 +1209,10 @@ export async function executeAgentRun(input: {
         pendingMemoryTool = null;
       }
 
-      const result = await agent.execute(parsedInput.data as never, {
+      const stepDeadlineAt = lastDitchResearch
+        ? Date.now() + RESEARCH_SOURCE_FETCH_MS.FAST + 1_500
+        : wallClockStartedAt.getTime() + maxWallClockSeconds * 1000;
+      const executePromise = agent.execute(parsedInput.data as never, {
         organisationId: input.organisationId,
         agentRunId: run.id,
         agentStepId: stepRow.id,
@@ -971,8 +1220,56 @@ export async function executeAgentRun(input: {
         knowledgeDocumentTitles,
         knowledgeRetrievalMode,
         episodicContext,
-        deadlineAt: startedAt.getTime() + maxWallClockSeconds * 1000,
+        deadlineAt: stepDeadlineAt,
       });
+      const raced = isResearchPlanStepName(agent.name)
+        ? await raceWithTimeout<AgentExecuteResult<unknown> | typeof QUICK_RESEARCH_TIMEOUT>(
+            executePromise,
+            Math.max(400, stepDeadlineAt - Date.now() + 500),
+            () => QUICK_RESEARCH_TIMEOUT,
+          )
+        : await executePromise;
+      if (raced === QUICK_RESEARCH_TIMEOUT) {
+        const durationMs = Date.now() - stepStarted;
+        await updateOrgScopedById(prisma.agentStep, {
+          id: stepRow.id,
+          organisationId: input.organisationId,
+          extraWhere: { agentRunId: { equals: String(asSafePrismaId(run.id)) } },
+          data: {
+            durationMs,
+            status: "FAILED",
+            userFacingStatus: "Stopped — time limit",
+          },
+        });
+        const salvaged = await salvageResearchPartialFromDb({
+          organisationId: input.organisationId,
+          agentRunId: run.id,
+        });
+        const raw = salvaged ?? previousOutput;
+        const originalUserPrompt = readOriginalUserPrompt(run);
+        const shapedPartial = await finalizeModeOutput({
+          organisationId: input.organisationId,
+          agentRunId: run.id,
+          answerMode: run.answerMode,
+          raw,
+          originalUserPrompt,
+          request: run.request,
+        });
+        return finishRun({
+          organisationId: input.organisationId,
+          request: run.request,
+          runId: run.id,
+          status: "PARTIAL",
+          totalCostCents,
+          partialResults: { steps: stepOutputs },
+          finalOutput: shapedPartial,
+          error: "MAX_WALL_CLOCK",
+          userFacingError: salvaged
+            ? "I stopped because this was taking too long. Sources gathered before the limit are below."
+            : `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
+        });
+      }
+      const result = raced;
 
       const durationMs = Date.now() - stepStarted;
       const costCents = result.costCents ?? 0;

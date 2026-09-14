@@ -428,14 +428,18 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       searchTasks.push({ query, limit: perQueryLimit });
     }
 
-    await Promise.all(
-      searchTasks.map(async (task) => {
-        if (remainingMs() < 800) return;
-        await runSearch(task.query, {
-          limit: task.limit,
-          includeDomains: task.includeDomains,
-        });
-      }),
+    await raceWithTimeout(
+      Promise.all(
+        searchTasks.map(async (task) => {
+          if (remainingMs() < 800) return;
+          await runSearch(task.query, {
+            limit: task.limit,
+            includeDomains: task.includeDomains,
+          });
+        }),
+      ),
+      Math.max(200, remainingMs() - 400),
+      () => undefined,
     );
     latency.searchMs = Date.now() - tSearch0;
 
