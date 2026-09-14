@@ -14,6 +14,11 @@ import { getQueueOpsSnapshot } from "@/services/queue-ops";
 import { getOutboxOpsSnapshot } from "@/services/domain-events";
 import { getIntegrationOpsForAiOps } from "@/services/connectors";
 import { getEnterpriseOpsPanel } from "@/services/enterprise-ops";
+import {
+  hostedWorkerOpsMessage,
+  isWorkerHeartbeatFresh,
+  readWorkerHeartbeat,
+} from "@/services/worker-heartbeat";
 
 /** Throttle Redis getJobCounts — do not hammer Redis for admin UI. */
 let cachedAgentQueueCounts: {
@@ -217,6 +222,8 @@ async function getAgentRunsCountsCached() {
 export async function getAiOpsSnapshot(organisationId?: string) {
   const redisOk = await pingRedis().catch(() => false);
   const queueOps = getQueueOpsSnapshot();
+  const workerBeat = redisOk ? await readWorkerHeartbeat().catch(() => null) : null;
+  const hostedWorkerLive = isWorkerHeartbeatFresh(workerBeat?.ts ?? null);
 
   const failedWhere = organisationId
     ? { organisationId, resolvedAt: null }
@@ -315,7 +322,18 @@ export async function getAiOpsSnapshot(organisationId?: string) {
   return {
     redisOk,
     queuePrefix: getQueuePrefix(),
-    workerRequiredForAsk: true,
+    // True only when DEEP would miss a live worker. QUICK Ask never requires it.
+    workerRequiredForAsk: !hostedWorkerLive,
+    hostedWorkerLive,
+    workerHeartbeat: workerBeat
+      ? {
+          ts: workerBeat.ts,
+          ageMs: Date.now() - workerBeat.ts,
+          instanceId: workerBeat.instanceId,
+          prefix: workerBeat.prefix,
+          fresh: hostedWorkerLive,
+        }
+      : null,
     openFailedJobs,
     recentFailedJobs,
     recentRuns,
@@ -337,9 +355,7 @@ export async function getAiOpsSnapshot(organisationId?: string) {
       connectorMesh: "postgres-capability-eval",
       cronFallback: "CRON_FALLBACK_ENABLED only",
     },
-    message: redisOk
-      ? "Redis reachable — confirm hosted worker (npm run worker). Follow-ups/retention/outbox/detectors do not poll Redis."
-      : "Redis down — Ask agent-runs will not process until Redis + worker are healthy. Durable state + outbox remain in Postgres.",
+    message: hostedWorkerOpsMessage({ redisOk, hostedWorkerLive }),
   };
 }
 

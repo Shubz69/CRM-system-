@@ -32,6 +32,7 @@ Then open `.env` and set **real** values. Do not leave the example placeholders.
 | Variable | What to put |
 |---|---|
 | `REDIS_URL` | Local Docker: `redis://localhost:6379` |
+| Worker | Local: second terminal `npm run worker`. Production: Railway/Render **must** run `npm run worker` / `worker:prod` for DEEP Ask. QUICK research does not wait on it. |
 | `AI_PROVIDER` | `anthropic` for real research, or `mock` for local UI testing |
 | `ANTHROPIC_API_KEY` | Your Anthropic key. Research, Ask, and setup assistant stay mock/empty without this |
 

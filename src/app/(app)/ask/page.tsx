@@ -504,6 +504,9 @@ export default function AskPage() {
         body: JSON.stringify({
           request: text,
           ...(referenceAssetId ? { referenceAssetId } : {}),
+          ...(/\b(research|look up|investigate|compare)\b/i.test(text)
+            ? { answerMode: "QUICK" }
+            : {}),
         }),
       });
       const json = await res.json();
@@ -1288,13 +1291,19 @@ export default function AskPage() {
       )}
 
       {(() => {
-        const qualitySummary =
+        const qualitySummaryRaw =
           answerSource &&
           typeof answerSource === "object" &&
           typeof (answerSource as { researchQualitySummary?: unknown }).researchQualitySummary ===
             "string"
             ? (answerSource as { researchQualitySummary: string }).researchQualitySummary
             : null;
+        const qualitySummary =
+          qualitySummaryRaw &&
+          /quality gate failed|not enough verifiable/i.test(qualitySummaryRaw) &&
+          sources.length > 0
+            ? "Sources collected — structured claims were incomplete; listed URLs are leads, not a 0% failure."
+            : qualitySummaryRaw;
         const breakdown =
           answerSource &&
           typeof answerSource === "object" &&

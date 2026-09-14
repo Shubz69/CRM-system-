@@ -8,9 +8,13 @@ client and services. Do not fork the codebase.
 
 | Process | Host | Responsibility |
 |---------|------|----------------|
-| Next.js app | Vercel | HTTP, enqueue only (`src/jobs/*`) |
-| Worker | Railway / Render / Fly / local | Consume `follow-ups` + `agent-runs` |
-| Redis | Upstash (or Docker) | Shared via `REDIS_URL` |
+| Next.js app | Vercel | HTTP. **QUICK Ask (CRM + web research) runs in the web process** — it does not wait on BullMQ. |
+| Worker | Railway / Render / Fly / local | Consume `agent-runs` for **DEEP** Ask and other durable jobs. Start: `npm run worker` / `npm run worker:prod`. |
+| Redis | Upstash (or Docker) | Shared via `REDIS_URL` **and the same `QUEUE_PREFIX`** as Vercel |
+
+**If the hosted worker is not running:** QUICK Ask still returns sourced findings in-process. DEEP Ask used to sit in Redis until wall-clock fired with **0 steps / empty output**. The web app now detects a stale worker heartbeat and runs DEEP locally via `after()` instead of burning the budget in an empty queue.
+
+Admin → AI Ops shows **Hosted worker live** vs **Hosted worker down** from a Redis heartbeat (not “Redis ping = worker is up”).
 
 ### Queues
 
@@ -86,9 +90,10 @@ the HTTP request.
 
 | Feature | Effect |
 |---------|--------|
-| Follow-up sends | Queue backs up; Vercel cron may still help if wired |
-| `agent-runs` (sleep-test / future agents) | Jobs sit in Redis until a worker starts |
-| Inbound DM AI replies | Unaffected (still synchronous in the request path for now) |
-| Health check (production) | Unhealthy if Redis itself is down |
+| QUICK Ask (CRM + “Research …”) | Still runs in the Vercel/web process |
+| DEEP Ask / queued `agent-runs` | Web falls back to in-process `after()` when the worker heartbeat is stale; otherwise jobs would sit in Redis until wall-clock with 0 steps |
+| Follow-up sends | Postgres sweep on the worker host; cron only if `CRON_FALLBACK_ENABLED` |
+| Health / AI Ops | Redis OK ≠ worker up. Heartbeat must be fresh. |
 
-Redis down in production is a **hard failure** for health — not a warning.
+Redis down in production is a **hard failure** for `/api/health` — not a warning. Worker-down is **degraded DEEP Ask**, not a 503 on the web app.
+

@@ -5,10 +5,15 @@ import { z } from "zod";
 import { requirePermission, jsonError } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { labelResearchListenChannel } from "@/lib/research-listen-platforms";
+import {
+  quotedFindingsFromResearchSources,
+  softenPartialSourcesOnlyError,
+} from "@/lib/research-job-present";
 
 /**
  * GET /api/research — list ResearchJob rows with findings, sources, critic flags.
- * Never invents findings; empty when none exist.
+ * Never invents statistics. When findings are empty but sources exist, quote
+ * stored snippets as source-backed findings (partial_sources_only honesty).
  */
 export async function GET() {
   try {
@@ -84,23 +89,28 @@ export async function GET() {
     }
 
     return Response.json({
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        kind: job.kind,
-        topic: job.topic,
-        status: job.status,
-        queries: job.queries,
-        brief: job.brief,
-        contradictions: job.contradictions,
-        gaps: job.gaps,
-        criticReport: job.criticReport,
-        error: job.error,
-        userFacingError: job.userFacingError,
-        agentRunId: job.agentRunId,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-        createdAt: job.createdAt,
-        findings: job.findings.map((f) => ({
+      jobs: jobs.map((job) => {
+        const sources = job.sources.map((s) => ({
+          ...s,
+          listenChannel: labelResearchListenChannel(s.platform) ?? null,
+          snippet: s.content ? s.content.replace(/\s+/g, " ").trim().slice(0, 280) : null,
+          content: undefined,
+        }));
+        let findings: Array<{
+          id: string;
+          claim: string;
+          evidenceExcerpt: string | null;
+          confidence: unknown;
+          claimKind: unknown;
+          freshnessScore: unknown;
+          verifiedByCritic: boolean;
+          flaggedUnsupported: boolean;
+          flaggedUngrounded: boolean;
+          sourceUrl: string | null;
+          sourcePlatform: string | null;
+          listenChannel: string | null;
+          source: Record<string, unknown> | null;
+        }> = job.findings.map((f) => ({
           id: f.id,
           claim: f.claim,
           evidenceExcerpt: f.evidenceExcerpt,
@@ -123,15 +133,36 @@ export async function GET() {
                 content: undefined,
               }
             : null,
-        })),
-        sources: job.sources.map((s) => ({
-          ...s,
-          listenChannel: labelResearchListenChannel(s.platform) ?? null,
-          snippet: s.content ? s.content.replace(/\s+/g, " ").trim().slice(0, 280) : null,
-          content: undefined,
-        })),
-        qualityAssessment: byJob.get(job.id) ?? null,
-      })),
+        }));
+        if (findings.length === 0 && sources.length > 0) {
+          findings = quotedFindingsFromResearchSources(sources);
+        }
+        const honesty = softenPartialSourcesOnlyError({
+          error: job.error,
+          userFacingError: job.userFacingError,
+          sourceCount: sources.length,
+        });
+        return {
+          id: job.id,
+          kind: job.kind,
+          topic: job.topic,
+          status: job.status,
+          queries: job.queries,
+          brief: job.brief,
+          contradictions: job.contradictions,
+          gaps: job.gaps,
+          criticReport: job.criticReport,
+          error: honesty.error,
+          userFacingError: honesty.userFacingError,
+          agentRunId: job.agentRunId,
+          startedAt: job.startedAt,
+          finishedAt: job.finishedAt,
+          createdAt: job.createdAt,
+          findings,
+          sources,
+          qualityAssessment: byJob.get(job.id) ?? null,
+        };
+      }),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";

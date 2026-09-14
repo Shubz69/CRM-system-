@@ -6,6 +6,7 @@
 import { prisma } from "@/lib/db";
 import { asSafePrismaId } from "@/lib/safe-prisma-id";
 import {
+  attachVisibleResearchEvidence,
   sourceBackedFindingsFromSources,
   type VisibleFinding,
   type VisibleSource,
@@ -13,15 +14,63 @@ import {
 import { looksLikeResearchOutput } from "@/agents/supervisor/research-deadline";
 
 export type SalvagedResearchPartial = {
-  researchJobId: string;
+  researchJobId?: string;
   topic: string;
   summary: string;
+  answer?: string;
   findings: VisibleFinding[];
   sources: VisibleSource[];
   sourceCount: number;
   phase: "PARTIAL_WITH_SOURCES";
   caveats: string[];
 };
+
+/** Honest non-null PARTIAL when the wall clock fires before any source is persisted. */
+export function honestEmptyResearchPartial(request?: string): SalvagedResearchPartial {
+  const topic = (request || "").replace(/\s+/g, " ").trim().slice(0, 500) || "Research";
+  const summary =
+    "I ran out of time before sourced findings were ready. Nothing below was invented — try again or use Deep / Research for a longer scan.";
+  return {
+    topic,
+    summary,
+    answer: summary,
+    findings: [],
+    sources: [],
+    sourceCount: 0,
+    phase: "PARTIAL_WITH_SOURCES",
+    caveats: ["This run hit the time limit before sources were persisted."],
+  };
+}
+
+/** True when Ask would render a blank brief (null output or empty steps with no text/sources). */
+export function isBlankAskFinalOutput(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return !value.trim();
+  if (typeof value !== "object" || Array.isArray(value)) return true;
+  const obj = value as Record<string, unknown>;
+  const text = [
+    obj.answer,
+    obj.summary,
+    obj.shortAnswer,
+    obj.brief,
+    obj.keyFinding,
+    obj.executiveSummary,
+  ]
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .join("");
+  const findings = Array.isArray(obj.findings) ? obj.findings : [];
+  const sources = Array.isArray(obj.sources) ? obj.sources : [];
+  const claims = Array.isArray(obj.claims) ? obj.claims : [];
+  return !text && findings.length === 0 && sources.length === 0 && claims.length === 0;
+}
+
+function sourceCountOf(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  const obj = value as Record<string, unknown>;
+  const sources = Array.isArray(obj.sources) ? obj.sources.length : 0;
+  const findings = Array.isArray(obj.findings) ? obj.findings.length : 0;
+  return sources || findings;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -196,4 +245,51 @@ export async function salvageResearchPartialFromDb(input: {
   });
   if (!job) return null;
   return researchPartialFromJobRow(job);
+}
+
+/**
+ * Read-path safety net for every organisation: blank Ask research PARTIAL
+ * (legacy MAX_WALL_CLOCK with null finalOutput) still surfaces org-scoped
+ * sources when a ResearchJob exists, otherwise an honest empty brief.
+ */
+export async function hydrateBlankResearchFinalOutput(input: {
+  organisationId: string;
+  agentRunId: string;
+  request: string;
+  status: string;
+  finalOutput: unknown;
+  lastCompletedOutput?: unknown;
+}): Promise<{ finalOutput: unknown; salvaged: boolean; sourceCount: number }> {
+  const terminal =
+    input.status === "PARTIAL" || input.status === "COMPLETED" || input.status === "FAILED";
+  if (!terminal) {
+    return {
+      finalOutput: input.finalOutput,
+      salvaged: false,
+      sourceCount: sourceCountOf(input.finalOutput),
+    };
+  }
+
+  for (const candidate of [input.finalOutput, input.lastCompletedOutput]) {
+    if (!isBlankAskFinalOutput(candidate)) {
+      const attached = attachVisibleResearchEvidence(candidate);
+      return {
+        finalOutput: attached,
+        salvaged: false,
+        sourceCount: sourceCountOf(attached),
+      };
+    }
+  }
+
+  const salvaged = await salvageResearchPartialFromDb({
+    organisationId: input.organisationId,
+    agentRunId: input.agentRunId,
+  });
+  const raw = salvaged ?? honestEmptyResearchPartial(input.request);
+  const attached = attachVisibleResearchEvidence(raw);
+  return {
+    finalOutput: attached,
+    salvaged: Boolean(salvaged),
+    sourceCount: salvaged?.sourceCount ?? sourceCountOf(attached),
+  };
 }

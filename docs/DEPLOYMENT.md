@@ -13,7 +13,7 @@ Recommended production stack:
 1. **Next.js web app** (`npm run build` / `npm run start`)
 2. **PostgreSQL 16+** via **Supabase** (UTF-8)
 3. **Redis 7+** for BullMQ when not using the cron fallback
-4. **Worker process** (`npm run worker`) or Vercel Cron → `/api/cron`
+4. **Worker process** (`npm run worker` / `worker:prod` on Railway) — required for **DEEP** Ask and durable queues. **QUICK Ask research runs in the Vercel web process** and does not wait on that worker. Use the same `REDIS_URL` (and `QUEUE_PREFIX` if set) on Vercel and Railway.
 
 ## Environment
 
