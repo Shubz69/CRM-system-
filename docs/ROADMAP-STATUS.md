@@ -47,4 +47,4 @@ These are **optional / deeper** — cores are done; these need real executors or
 2. **Trend page** that calls `/api/trends` (no fake charts).
 3. **Drag-drop builder** only if operators outgrow NL + viewer.
 
-**Ops reminder:** production Ask needs Redis + hosted `npm run worker` (Railway/Render configs are in-repo).
+**Ops reminder:** production **DEEP** Ask needs Redis + hosted `npm run worker` (Railway `railway.toml` / Render). **QUICK** Ask (including “Research …”) runs in the Vercel web process and must not wait on that worker. Redis ping ≠ worker up — AI Ops shows a heartbeat.

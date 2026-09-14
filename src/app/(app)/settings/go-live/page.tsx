@@ -123,8 +123,8 @@ export default function GoLivePage() {
           label: "Hosted worker + Redis",
           status: redisOk ? "ready" : "needs_attention",
           detail: redisOk
-            ? "Redis reachable — keep `npm run worker` running (Railway/Render/Fly) for Ask"
-            : "Redis down — Ask agent-runs will not process. Cron only covers short follow-ups.",
+            ? "Redis reachable — keep `npm run worker` running on Railway/Render for DEEP Ask (QUICK Ask is in-process and does not wait on the worker)"
+            : "Redis down — DEEP Ask cannot queue. QUICK Ask still runs in the web process.",
         },
         {
           key: "webhooks",

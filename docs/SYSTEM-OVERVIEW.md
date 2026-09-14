@@ -77,12 +77,13 @@ From `src/lib/navigation.ts`:
 
 | Process | Host | Responsibility |
 |---------|------|----------------|
-| **Web app** | Vercel | HTTP, auth, UI, webhooks, **enqueue** Ask/jobs |
-| **Worker** | Railway / Render / Fly / local PC | **Consume** long jobs (Ask research, retention, follow-ups) |
-| **Redis** | Upstash (prod) or Docker | Job queues + locks |
+| **Web app** | Vercel | HTTP, auth, UI, webhooks. **QUICK Ask (CRM + research) runs here.** |
+| **Worker** | Railway / Render / Fly / local PC | **DEEP** Ask + durable `agent-runs`; follow-ups/retention via Postgres intervals. Start: `npm run worker` |
+| **Redis** | Upstash (prod) or Docker | Job queues + worker heartbeat (same URL + prefix as Vercel) |
 | **Postgres** | Supabase (prod) or Docker / embedded | System of record |
 
-**Critical:** Without a running worker sharing the same `DATABASE_URL` + `REDIS_URL`, Ask jobs sit in Redis and never finish.
+**Critical:** Redis ping ≠ worker up. Without a hosted worker, DEEP Ask used to sit until wall-clock with 0 steps; the web app now falls back in-process when the heartbeat is stale. QUICK research must not wait on the worker.
+
 
 Vercel cron (`vercel.json`, every 5 minutes → `/api/cron`) is a **follow-up fallback**, not a replacement for the Ask worker.
 
@@ -265,7 +266,7 @@ Options:
 2. Embedded Postgres (`npm run db:dev`) + local Redis  
 3. Point `.env` at Supabase + Upstash (same as production)
 
-Always run **two** processes for Ask: `npm run dev` and `npm run worker`.
+Always run **two** processes for full Ask: `npm run dev` (QUICK research runs here) and `npm run worker` (DEEP / durable `agent-runs`). QUICK research must not wait on the worker.
 
 ---
 
@@ -335,7 +336,7 @@ As operated for Shubz69 / Agent Desk:
 | App | Vercel project `crm-system` → `crm-system-eight-wine.vercel.app` |
 | DB | Supabase Postgres (eu-west-2 pooler) |
 | Redis | Upstash |
-| Worker | Must run separately (local `npm run worker` or Railway/Render/Fly) |
+| Worker | Railway/Render: `npm run worker` / `worker:prod` (DEEP Ask). QUICK Ask is in-process on Vercel. |
 | Repo | `https://github.com/Shubz69/CRM-system-.git` |
 
 ---

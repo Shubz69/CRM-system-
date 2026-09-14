@@ -29,6 +29,13 @@ import {
 } from "@/agents/supervisor/plan";
 import { executeAgentRun } from "@/agents/supervisor/execute";
 import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
+import {
+  hydrateBlankResearchFinalOutput,
+  honestEmptyResearchPartial,
+  salvageResearchPartialFromDb,
+} from "@/agents/supervisor/research-salvage";
+import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
+import { isHostedWorkerLive, shouldEnqueueDurableAgentRun } from "@/services/worker-heartbeat";
 import { after } from "next/server";
 
 const orgLimitsCache = new Map<
@@ -435,39 +442,39 @@ export async function createAndEnqueueAgentRun(input: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Sync execute failed";
-        logger.warn("Quick sync fast-path failed; falling back to queue", {
+        logger.warn("Quick sync fast-path failed; retrying in-process (not queue)", {
           runId: run.id,
           message,
         });
         try {
-          const stillOpen = await prisma.agentRun.findFirst({
-            where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) }, status: { in: ["PENDING", "PLANNING", "RUNNING"] } },
-            select: { id: true },
+          await executeAgentRun({
+            organisationId: input.organisationId,
+            runId: run.id,
           });
-          if (stillOpen) {
-            const { jobId } = await enqueueAgentRunJob({
-              name: "agent-framework-run",
-              organisationId: input.organisationId,
-              payload: { agentRunId: run.id },
-            });
-            await updateOrgScopedById(prisma.agentRun, {
-              id: run.id,
-              organisationId: input.organisationId,
-              data: { bullJobId: jobId },
-            });
-          }
-        } catch (fallbackError) {
-          const fallbackMessage =
-            fallbackError instanceof Error ? fallbackError.message : "Enqueue failed";
+        } catch (retryError) {
+          const retryMessage =
+            retryError instanceof Error ? retryError.message : "Retry execute failed";
+          logger.warn("Quick sync retry failed; writing honest PARTIAL (not enqueue)", {
+            runId: run.id,
+            message: retryMessage,
+          });
+          const salvaged = await salvageResearchPartialFromDb({
+            organisationId: input.organisationId,
+            agentRunId: run.id,
+          }).catch(() => null);
+          const raw = salvaged ?? honestEmptyResearchPartial(request);
           await updateOrgScopedById(prisma.agentRun, {
-              id: run.id,
-              organisationId: input.organisationId,
-              data: {
-              status: "FAILED",
+            id: run.id,
+            organisationId: input.organisationId,
+            extraWhere: { status: { in: ["PENDING", "PLANNING", "RUNNING"] } },
+            data: {
+              status: "PARTIAL",
               finishedAt: new Date(),
-              error: fallbackMessage,
-              userFacingError:
-                "I couldn't finish that request. Please try again in a moment.",
+              error: "SYNC_EXECUTE_FAILED",
+              finalOutput: attachVisibleResearchEvidence(raw) as Prisma.InputJsonValue,
+              userFacingError: salvaged
+                ? "I stopped before the full scan finished. Sources gathered so far are below."
+                : "I couldn't finish that sourced scan in time. Nothing below was invented — try again in a moment.",
             },
           });
         }
@@ -507,16 +514,17 @@ export async function createAndEnqueueAgentRun(input: {
   }
 
   try {
-    // DEEP: enqueue the Railway worker as the durable primary path and
-    // return immediately (SERVER_ACCEPT). Quick research uses the in-process
-    // path above. Awaiting DEEP execute in-request previously exceeded
-    // client/fetch + route maxDuration and left clients stuck without a
-    // runId to poll. after() local execute is only a fallback when enqueue fails.
-    const preferDurableWorker =
-      !quickResearchSync &&
-      (answerMode === AgentAnswerMode.DEEP ||
-        (looksLikeResearch(request) && answerMode !== AgentAnswerMode.QUICK) ||
-        process.env.VERCEL_ENV === "preview");
+    // DEEP: enqueue the Railway worker only when its heartbeat is fresh on this
+    // Redis prefix. Preview used to force-queue all research; if Railway was
+    // listening on prod prefix (or not running), jobs sat until after() reclaim
+    // hit MAX_WALL_CLOCK with 0 steps. QUICK research never reaches this branch.
+    const hostedWorkerLive = await isHostedWorkerLive();
+    const preferDurableWorker = shouldEnqueueDurableAgentRun({
+      inProcessSync: false,
+      answerMode,
+      looksLikeResearch: looksLikeResearch(request),
+      hostedWorkerLive,
+    });
 
     if (preferDurableWorker) {
       try {
@@ -546,7 +554,9 @@ export async function createAndEnqueueAgentRun(input: {
           // First check at 8s so a missed enqueue can still finish inside the 30s
           // research ceiling. executeAgentRun claims PENDING/PLANNING only, so a
           // healthy worker that already moved the run to RUNNING wins.
-          const delays = [8_000, 20_000, 35_000];
+          // First check at 2s for research so a missed pickup cannot burn the
+          // 30s ceiling before any step runs (production: 0/1 steps, no tools).
+          const delays = looksLikeResearchAsk ? [2_000, 8_000, 18_000] : [8_000, 20_000, 35_000];
           let waited = 0;
           for (const target of delays) {
             await new Promise((r) => setTimeout(r, target - waited));
@@ -660,24 +670,56 @@ export async function createAndEnqueueAgentRun(input: {
       }
     }
 
-    const { jobId } = await enqueueAgentRunJob({
-      name: "agent-framework-run",
+    // Worker heartbeat stale or this path is not DEEP-durable: execute locally
+    // via after() so queue wait cannot burn the wall-clock with 0 steps.
+    logger.warn("Ask running locally — hosted worker not live or not required", {
+      runId: run.id,
       organisationId: input.organisationId,
-      payload: { agentRunId: run.id },
+      hostedWorkerLive,
+      answerMode,
     });
-
-    await updateOrgScopedById(prisma.agentRun, {
-              id: run.id,
-              organisationId: input.organisationId,
-              data: { bullJobId: jobId },
+    const runLocal = async () => {
+      try {
+        await executeAgentRun({
+          organisationId: input.organisationId,
+          runId: run.id,
+        });
+        await updateOrgScopedById(prisma.agentRun, {
+          id: run.id,
+          organisationId: input.organisationId,
+          extraWhere: { bullJobId: null },
+          data: { bullJobId: `sync-local:${run.id}` },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Execute failed";
+        logger.error("Local agent-run execute failed", {
+          runId: run.id,
+          organisationId: input.organisationId,
+          error: message,
+        });
+        await updateOrgScopedById(prisma.agentRun, {
+          id: run.id,
+          organisationId: input.organisationId,
+          data: {
+            status: "FAILED",
+            finishedAt: new Date(),
+            error: message,
+            userFacingError:
+              "I couldn't finish that request. Please try again in a moment.",
+          },
+        });
+      }
+    };
+    const execPromise = runLocal();
+    after(async () => {
+      await execPromise;
     });
-
     acceptMs = Date.now() - acceptStarted;
     return {
       runId: run.id,
-      jobId,
+      jobId: `sync-local:${run.id}`,
       plainEnglishPlan: initialPlan,
-      syncFastPath: false,
+      syncFastPath: true,
       acceptMs,
       answerMode: answerMode ?? null,
     };
@@ -766,6 +808,9 @@ export async function clarifyAndEnqueueAgentRun(input: {
       status: "PENDING",
       startedAt: new Date(),
       answerMode: preservedMode,
+      ...(isQuickResearchAsk(preservedMode, immutableRequest)
+        ? { maxWallClockSeconds: researchWallClockCapSeconds("QUICK") }
+        : {}),
       clarificationQuestion: null,
       clarificationOptions: Prisma.DbNull,
       plan: Prisma.DbNull,
@@ -797,10 +842,47 @@ export async function clarifyAndEnqueueAgentRun(input: {
       });
       return { runId: run.id, jobId: `sync-quick-research:${run.id}` };
     } catch (error) {
-      logger.warn("Quick research clarify sync failed; falling back to queue", {
+      logger.warn("Quick research clarify sync failed; retrying in-process (not queue)", {
         runId: run.id,
         message: error instanceof Error ? error.message : "unknown",
       });
+      try {
+        await executeAgentRun({
+          organisationId: input.organisationId,
+          runId: run.id,
+        });
+        await updateOrgScopedById(prisma.agentRun, {
+          id: run.id,
+          organisationId: input.organisationId,
+          data: { bullJobId: `sync-quick-research:${run.id}` },
+        });
+        return { runId: run.id, jobId: `sync-quick-research:${run.id}` };
+      } catch (retryError) {
+        logger.warn("Quick research clarify retry failed; writing honest PARTIAL", {
+          runId: run.id,
+          message: retryError instanceof Error ? retryError.message : "unknown",
+        });
+        const salvaged = await salvageResearchPartialFromDb({
+          organisationId: input.organisationId,
+          agentRunId: run.id,
+        }).catch(() => null);
+        const raw = salvaged ?? honestEmptyResearchPartial(immutableRequest);
+        await updateOrgScopedById(prisma.agentRun, {
+          id: run.id,
+          organisationId: input.organisationId,
+          extraWhere: { status: { in: ["PENDING", "PLANNING", "RUNNING"] } },
+          data: {
+            status: "PARTIAL",
+            finishedAt: new Date(),
+            error: "SYNC_EXECUTE_FAILED",
+            finalOutput: attachVisibleResearchEvidence(raw) as Prisma.InputJsonValue,
+            userFacingError: salvaged
+              ? "I stopped before the full scan finished. Sources gathered so far are below."
+              : "I couldn't finish that sourced scan in time. Nothing below was invented — try again in a moment.",
+          },
+        });
+        return { runId: run.id, jobId: `sync-quick-research:${run.id}` };
+      }
     }
   }
 
@@ -942,7 +1024,19 @@ export async function getAgentRunProgress(input: {
     run.steps.filter((s) => s.status === "COMPLETED").at(-1) ||
     null;
 
-  const started = run.startedAt?.getTime() ?? run.createdAt.getTime();
+  const progressLatency = (() => {
+    const pr = run.partialResults;
+    if (!pr || typeof pr !== "object" || Array.isArray(pr)) return null;
+    const lt = (pr as { latencyTrace?: unknown }).latencyTrace;
+    if (!lt || typeof lt !== "object" || Array.isArray(lt)) return null;
+    return lt as Record<string, unknown>;
+  })();
+  const pickupAt =
+    typeof progressLatency?.workerPickupAt === "number" &&
+    Number.isFinite(progressLatency.workerPickupAt)
+      ? progressLatency.workerPickupAt
+      : null;
+  const started = pickupAt ?? run.startedAt?.getTime() ?? run.createdAt.getTime();
   const ended = run.finishedAt?.getTime() ?? Date.now();
 
   const stepsDetailCleared = run.steps.some(
@@ -956,7 +1050,29 @@ export async function getAgentRunProgress(input: {
     : [...run.steps].reverse().find((s) => s.status === "COMPLETED" && s.output != null)?.output ??
       null;
 
-  const displayOutput = run.finalOutput ?? lastCompletedOutput;
+  let finalOutput: unknown = run.finalOutput;
+  let userFacingError = run.userFacingError;
+  if (looksLikeResearch(run.request)) {
+    const hydrated = await hydrateBlankResearchFinalOutput({
+      organisationId: input.organisationId,
+      agentRunId: run.id,
+      request: run.request,
+      status: run.status,
+      finalOutput: run.finalOutput,
+      lastCompletedOutput,
+    });
+    finalOutput = hydrated.finalOutput;
+    if (
+      hydrated.salvaged &&
+      typeof userFacingError === "string" &&
+      /finished 0 of/i.test(userFacingError)
+    ) {
+      userFacingError =
+        "I stopped because this was taking too long. Sources gathered before the limit are below.";
+    }
+  }
+
+  const displayOutput = finalOutput ?? lastCompletedOutput;
   const budget = await getOrganisationAiBudget(input.organisationId);
   // Always load period spend so Ask can show usage even when no hard cap is set.
   const spentCents = await getOrganisationPeriodSpendCents(input.organisationId);
@@ -1024,8 +1140,8 @@ export async function getAgentRunProgress(input: {
     totalCostCents: run.totalCostCents,
     costNote: costNote(run.totalCostCents, run.status),
     outputSoFar: lastCompletedOutput,
-    finalOutput: run.finalOutput,
-    userFacingError: run.userFacingError,
+    finalOutput,
+    userFacingError,
     stepsDetailCleared,
     stepsDetailClearedMessage: stepsDetailCleared ? STEPS_CLEARED_MESSAGE : null,
     steps: run.steps.map((s) => ({

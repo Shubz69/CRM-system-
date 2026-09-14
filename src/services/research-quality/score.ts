@@ -607,15 +607,18 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
 }
 
 export function customerQualitySummary(report: ResearchQualityReport): string {
-  if (!report.accepted && report.overall === 0 && report.hardGateFailures.length) {
-    return "Quality gate failed — not enough verifiable evidence to score.";
-  }
-  if (
+  const sourcesOnly =
     !report.accepted &&
     report.claimConfidences.length === 0 &&
-    report.breakdown.sourceQuality > 0
-  ) {
-    return `Research quality: ${report.overall}% · Partial — sources collected, claims incomplete`;
+    (report.breakdown.sourceQuality > 0 ||
+      report.limitations.some((l) => /sources were collected/i.test(l)));
+  if (sourcesOnly) {
+    return report.overall > 0
+      ? `Research quality: ${report.overall}% · Partial — sources collected, claims incomplete`
+      : "Sources collected — structured claims were incomplete; listed URLs are leads, not a 0% failure.";
+  }
+  if (!report.accepted && report.overall === 0 && report.hardGateFailures.length) {
+    return "Quality gate failed — not enough verifiable evidence to score.";
   }
   return `Research quality: ${report.overall}% · ${report.confidenceLabel}`;
 }

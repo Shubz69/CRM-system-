@@ -53,6 +53,7 @@ import {
   markWorkerStopped,
   recordQueueOp,
 } from "@/services/queue-ops";
+import { writeWorkerHeartbeat } from "@/services/worker-heartbeat";
 import {
   getAiProviderConfigPreflight,
   probeAiProviderAuth,
@@ -422,6 +423,14 @@ async function startRedisWorkers() {
     queues: [queueName],
     prefix: getQueuePrefix(),
   });
+  const heartbeatInstanceId = `${process.pid}-${Date.now()}`;
+  const pulseHeartbeat = () =>
+    writeWorkerHeartbeat({
+      instanceId: heartbeatInstanceId,
+      queues: [queueName],
+    });
+  await pulseHeartbeat();
+  intervals.push(setInterval(() => void pulseHeartbeat(), 15_000));
 
   // AI provider preflight — config sync, cheap auth probe once (internal only).
   {

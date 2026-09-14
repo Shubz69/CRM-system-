@@ -225,7 +225,8 @@ export default function ResearchPage() {
                 <span className="meta">{new Date(job.createdAt).toLocaleString()}</span>
               </div>
 
-              {(job.status === "FAILED" || job.userFacingError) && (
+              {(job.status === "FAILED" ||
+                (job.userFacingError && job.findings.length === 0 && job.sources.length === 0)) && (
                 <p className="text-sm text-[var(--danger)]">
                   {job.userFacingError || "Research could not finish. Try again from Ask."}
                 </p>

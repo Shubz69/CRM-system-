@@ -26,12 +26,13 @@ Related: `docs/DEPLOYMENT.md`, `docs/WORKER.md`, `docs/CREDENTIAL-ROTATION.md`, 
 
 ## WORKER DOWN
 
-1. Railway service status + logs for `agent-runs` / interval sweeps.
-2. Confirm **replicas = 1** (never scale BullMQ agent-runs horizontally without redesign).
-3. Confirm `NODE_ENV=production` and same secrets as Vercel for DB/Redis/encryption.
-4. If Redis quota circuit OPEN: worker **pauses** agent-runs (does not crash-loop). Wait for quota recovery; do not spam restarts.
-5. Restart Railway service once after config fix.
-6. Confirm outbox / follow-ups resume via logs (`Outbox dispatch batch complete`, follow-up sweep).
+1. Railway service status + logs for `agent-runs` / interval sweeps. Start command must be `npm run worker:prod` (see `railway.toml`).
+2. Admin → AI Ops: **Hosted worker down** with Redis OK means the web app can ping Redis but **no worker has written a heartbeat** on this `QUEUE_PREFIX`. Confirm Railway and Vercel share `REDIS_URL` (preview uses `agentdesk-preview`; production worker must not be the only listener if you test preview).
+3. **QUICK Ask still runs** in the Vercel function. **DEEP Ask** should fall back to in-process execute when the heartbeat is stale — it must not sit until MAX_WALL_CLOCK with 0 steps.
+4. Confirm **replicas = 1** (never scale BullMQ agent-runs horizontally without redesign).
+5. Confirm `NODE_ENV=production` and same secrets as Vercel for DB/Redis/encryption.
+6. If Redis quota circuit OPEN: worker **pauses** agent-runs (does not crash-loop). Wait for quota recovery; do not spam restarts.
+7. Restart Railway service once after config fix.
 
 ## DATABASE AUTH FAILURE
 
