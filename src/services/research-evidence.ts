@@ -198,3 +198,38 @@ export async function persistResearchSourceWithSnapshot(input: {
 
   return { sourceId: source.id, snapshotId: snapshot.id, freshnessScore };
 }
+
+export type SourceBackedFinding = {
+  claim: string;
+  sourceUrl: string;
+  evidenceExcerpt?: string;
+  claimKind: "OBSERVATION";
+  confidence: number;
+};
+
+/**
+ * Honest source-backed findings from collected titles/excerpts.
+ * Does not invent statistics or URLs — quotes what the source already contains.
+ */
+export function sourceBackedFindingsFromSources(
+  sources: Array<{ url: string; title?: string | null; content?: string | null }>,
+  limit = 8,
+): SourceBackedFinding[] {
+  const out: SourceBackedFinding[] = [];
+  for (const source of sources) {
+    if (!source.url || out.length >= limit) continue;
+    const excerpt = (source.content || "").replace(/\s+/g, " ").trim().slice(0, 220);
+    const title = (source.title || "").trim();
+    const claim = excerpt
+      ? `${title || source.url}: ${excerpt}`
+      : title || `Source recorded: ${source.url}`;
+    out.push({
+      claim: claim.slice(0, 800),
+      sourceUrl: source.url,
+      evidenceExcerpt: excerpt || undefined,
+      claimKind: "OBSERVATION",
+      confidence: excerpt ? 0.45 : 0.35,
+    });
+  }
+  return out;
+}

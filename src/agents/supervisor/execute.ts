@@ -27,9 +27,10 @@ import {
 import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
 import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
-import { scoreResearchQuality } from "@/services/research-quality";
+import { customerQualitySummary, scoreResearchQuality } from "@/services/research-quality";
 import {
   extractCanonicalGroundedClaims,
+  mergeResearchEvidence,
   toScoreResearchClaims,
 } from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
@@ -1296,6 +1297,12 @@ async function finalizeModeOutput(input: {
     }
   }
 
+  // QUICK / EXECUTIVE / ACTION shapers drop sources, findings, and hooks.
+  // Carry them back from raw so RQS and the Ask UI still see gathered evidence.
+  if (input.raw && base && base !== input.raw) {
+    base = mergeResearchEvidence(base, input.raw);
+  }
+
   // Shape builders omit deadline metadata — preserve mandatory quality flags.
   if (
     input.raw &&
@@ -1316,7 +1323,8 @@ async function finalizeModeOutput(input: {
       (raw.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
         raw.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
         raw.phase === "QUALITY_SCORING_FAILED" ||
-        raw.phase === "ANALYST_ENRICHMENT_FAILED")
+        raw.phase === "ANALYST_ENRICHMENT_FAILED" ||
+        raw.phase === "PARTIAL_WITH_SOURCES")
     ) {
       out.phase = raw.phase;
     }
@@ -1419,10 +1427,7 @@ function attachResearchQualityIfApplicable(input: {
     const withQuality: Record<string, unknown> = {
       ...obj,
       researchQuality: report,
-      researchQualitySummary:
-        report.overall === 0 && !report.accepted
-          ? "Quality gate failed — not enough verifiable evidence to score."
-          : `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
+      researchQualitySummary: customerQualitySummary(report),
       groundedClaimCount: grounded.length,
       ...(analystEnrichmentFailed
         ? { analystEnrichmentFailed: true }
@@ -1436,7 +1441,8 @@ function attachResearchQualityIfApplicable(input: {
     if (
       obj.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
       obj.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
-      obj.phase === "QUALITY_SCORING_FAILED"
+      obj.phase === "QUALITY_SCORING_FAILED" ||
+      obj.phase === "PARTIAL_WITH_SOURCES"
     ) {
       withQuality.phase = obj.phase;
     } else if (analystEnrichmentFailed) {

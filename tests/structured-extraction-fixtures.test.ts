@@ -106,11 +106,13 @@ describe("structured extraction fixtures (Round 7B)", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("D — genuinely required field missing fails", () => {
+  it("D — genuinely required field missing is dropped (pack stays valid, empty)", () => {
     const parsed = findingsExtractSchema.safeParse({
       findings: [{ sourceUrl: "https://ico.org.uk/x" }],
     });
-    expect(parsed.success).toBe(false);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.findings).toHaveLength(0);
   });
 
   it("E — invalid source reference is filtered by contract consumers", () => {
@@ -152,8 +154,7 @@ describe("structured extraction fixtures (Round 7B)", () => {
     expect(result.repaired).toBe(true);
   });
 
-  it("H — mixed valid + invalid claims: retain only schema-valid when partial parse of items", () => {
-    // Contract: top-level must validate; partial retention is done after Zod by URL allow-list.
+  it("H — mixed valid + invalid claims: retain only schema-valid items", () => {
     const raw = {
       findings: [
         {
@@ -168,8 +169,10 @@ describe("structured extraction fixtures (Round 7B)", () => {
       ],
     };
     const parsed = findingsExtractSchema.safeParse(raw);
-    expect(parsed.success).toBe(false);
-    // When whole pack fails Zod, repair path is required — not silent drop to empty success.
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.findings).toHaveLength(1);
+    expect(parsed.data.findings[0]?.claim).toBe("Valid");
   });
 
   it("unwraps double-encoded JSON strings (root Expected object, received string)", () => {

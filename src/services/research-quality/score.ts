@@ -454,35 +454,46 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
   const freshness = scoreFreshness(input);
   const uncertainty = scoreUncertainty(input);
 
-  // Sources collected but no claim→source linkage: do not invent a mid-band % (e.g. 48).
-  // Still preserve prompt-fidelity / contamination hard fails from above.
+  // Sources collected but no claim→source linkage: score the evidence that exists.
+  // Never invent a hardcoded mid-band (e.g. 48) and never zero every dimension.
+  // This remains not-accepted — operators get a usable PARTIAL, not a dead-end 0% gate.
   if (!input.claims.length && input.sources.length > 0) {
+    const breakdown = {
+      promptFidelity: fidelity.score,
+      businessRelevance: clamp(businessRelevance),
+      factualAccuracy: factual.score,
+      sourceQuality: clamp(sourceQuality),
+      crossVerification: clamp(crossVerification),
+      freshness: clamp(freshness),
+      uncertainty: clamp(uncertainty),
+    };
+    const weighted = clamp(
+      breakdown.promptFidelity * RESEARCH_QUALITY_WEIGHTS.promptFidelity +
+        breakdown.businessRelevance * RESEARCH_QUALITY_WEIGHTS.businessRelevance +
+        breakdown.factualAccuracy * RESEARCH_QUALITY_WEIGHTS.factualAccuracy +
+        breakdown.sourceQuality * RESEARCH_QUALITY_WEIGHTS.sourceQuality +
+        breakdown.crossVerification * RESEARCH_QUALITY_WEIGHTS.crossVerification +
+        breakdown.freshness * RESEARCH_QUALITY_WEIGHTS.freshness +
+        breakdown.uncertainty * RESEARCH_QUALITY_WEIGHTS.uncertainty,
+    );
     const hardGateFailures: ResearchHardGateFailure[] = [...fidelity.failures];
     hardGateFailures.push({
       code: "UNSUPPORTED_DEFINITIVE_CLAIM",
       message:
-        "Quality gate failed — sources were collected but no verifiable claims were linked for scoring.",
+        "Sources were collected but no verifiable claims were linked — treating this as a partial, source-backed result.",
     });
     return {
       version: 1,
-      overall: 0,
+      overall: weighted,
       confidenceLabel: "Not accepted",
-      breakdown: {
-        promptFidelity: fidelity.score,
-        businessRelevance: clamp(businessRelevance),
-        factualAccuracy: 0,
-        sourceQuality: clamp(sourceQuality),
-        crossVerification: clamp(crossVerification),
-        freshness: clamp(freshness),
-        uncertainty: clamp(uncertainty),
-      },
+      breakdown,
       hardGateFailures: Array.from(
         new Map(hardGateFailures.map((f) => [f.code + f.message, f])).values(),
       ),
       accepted: false,
       claimConfidences: [],
       limitations: [
-        "Quality gate failed — sources were collected but claim-to-source linkage was missing.",
+        "Sources were collected but structured claims were not extracted — treat listed sources as leads for verification.",
         ...fidelity.failures.map((f) => f.message),
       ],
       originalUserPrompt: stripClarificationMetadata(input.originalUserPrompt),
@@ -598,6 +609,13 @@ export function scoreResearchQuality(input: ScoreResearchInput): ResearchQuality
 export function customerQualitySummary(report: ResearchQualityReport): string {
   if (!report.accepted && report.overall === 0 && report.hardGateFailures.length) {
     return "Quality gate failed — not enough verifiable evidence to score.";
+  }
+  if (
+    !report.accepted &&
+    report.claimConfidences.length === 0 &&
+    report.breakdown.sourceQuality > 0
+  ) {
+    return `Research quality: ${report.overall}% · Partial — sources collected, claims incomplete`;
   }
   return `Research quality: ${report.overall}% · ${report.confidenceLabel}`;
 }

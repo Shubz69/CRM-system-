@@ -176,9 +176,13 @@ function extractFindings(value: unknown): Array<{
 }> {
   if (!value || typeof value !== "object") return [];
   const obj = value as Record<string, unknown>;
-  if (!Array.isArray(obj.findings)) return [];
+  const rows = Array.isArray(obj.findings) && obj.findings.length > 0
+    ? obj.findings
+    : Array.isArray(obj.claims)
+      ? obj.claims
+      : [];
   const out: Array<{ claim: string; sourceUrl?: string; evidenceExcerpt?: string }> = [];
-  for (const item of obj.findings) {
+  for (const item of rows) {
     if (!item || typeof item !== "object") continue;
     const f = item as { claim?: unknown; sourceUrl?: unknown; evidenceExcerpt?: unknown };
     if (typeof f.claim !== "string") continue;

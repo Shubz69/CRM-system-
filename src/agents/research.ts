@@ -11,6 +11,7 @@ import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
   parseClaimKind,
   persistResearchSourceWithSnapshot,
+  sourceBackedFindingsFromSources,
 } from "@/services/research-evidence";
 import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
@@ -186,22 +187,81 @@ ${
   }
 }
 
-/** Extraction contract used by research findings / claim structuring. */
-export const findingsExtractSchema = z.object({
-  findings: z
-    .array(
-      z.object({
-        claim: z.string().min(1).max(500),
-        sourceUrl: flexibleSourceUrl,
-        evidenceExcerpt: z.string().max(800).optional(),
-        claimKind: z
-          .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
-          .optional(),
-        confidence: z.number().min(0).max(1).optional(),
-      }),
-    )
-    .max(40),
+const FINDING_CLAIM_MAX = 800;
+
+const findingItemSchema = z.object({
+  claim: z.string().min(1).max(FINDING_CLAIM_MAX),
+  sourceUrl: flexibleSourceUrl,
+  evidenceExcerpt: z.string().max(800).optional(),
+  claimKind: z
+    .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
+    .optional(),
+  confidence: z.number().min(0).max(1).optional(),
 });
+
+function coerceFindingConfidence(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 1 && value <= 100) return Math.max(0, Math.min(1, value / 100));
+    return Math.max(0, Math.min(1, value));
+  }
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value.trim());
+    if (!Number.isFinite(n)) return undefined;
+    if (n > 1 && n <= 100) return Math.max(0, Math.min(1, n / 100));
+    return Math.max(0, Math.min(1, n));
+  }
+  return undefined;
+}
+
+/**
+ * Keep schema-valid findings when the model mix includes invalid items.
+ * Does not invent claims — only retains items that already have claim + URL.
+ */
+export function salvageExtractedFindings(
+  raw: unknown,
+): z.infer<typeof findingItemSchema>[] {
+  let arr: unknown[] | null = null;
+  if (Array.isArray(raw)) arr = raw;
+  else if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (Array.isArray(obj.findings)) arr = obj.findings;
+    else if (Array.isArray(obj.claims)) arr = obj.claims;
+  }
+  if (!arr) return [];
+  const out: z.infer<typeof findingItemSchema>[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const claim = typeof rec.claim === "string" ? rec.claim.trim().slice(0, FINDING_CLAIM_MAX) : "";
+    if (!claim) continue;
+    const excerpt =
+      typeof rec.evidenceExcerpt === "string" ? rec.evidenceExcerpt.trim().slice(0, 800) : undefined;
+    const parsed = findingItemSchema.safeParse({
+      claim,
+      sourceUrl: rec.sourceUrl,
+      evidenceExcerpt: excerpt || undefined,
+      claimKind: rec.claimKind,
+      confidence: coerceFindingConfidence(rec.confidence),
+    });
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out.slice(0, 40);
+}
+
+type FindingsExtract = { findings: z.infer<typeof findingItemSchema>[] };
+
+/** Extraction contract used by research findings / claim structuring. */
+export const findingsExtractSchema: z.ZodType<FindingsExtract> = z.preprocess((raw) => {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  const arr = Array.isArray(obj.findings)
+    ? obj.findings
+    : Array.isArray(obj.claims)
+      ? obj.claims
+      : null;
+  if (!arr) return raw;
+  return { findings: salvageExtractedFindings({ findings: arr }) };
+}, z.object({ findings: z.array(findingItemSchema).max(40) })) as z.ZodType<FindingsExtract>;
 
 /** Hand-written JSON Schema for Anthropic native structured output (matches findingsExtractSchema). */
 export const FINDINGS_EXTRACT_JSON_SCHEMA = {
@@ -517,7 +577,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       .join("\n\n----\n\n");
 
     await assertWithinSpendCap(organisationId, 2);
-    let extractedFindings: z.infer<typeof findingsExtractSchema>["findings"] = [];
+    type ExtractedFinding = z.infer<typeof findingItemSchema>;
+    let extractedFindings: ExtractedFinding[] = [];
+    let extractionDegraded = false;
     if (catalog) {
       const findingLimit = Math.min(maxSources, 15);
       const extractResult = await completeStructuredSafe(findingsExtractSchema, {
@@ -540,7 +602,6 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         const {
           isAiProviderAuthError,
           RESEARCH_SYNTHESIS_FAILED_CUSTOMER,
-          RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
         } = await import("@/services/ai-provider-preflight");
         if (isAiProviderAuthError(extractResult.reason)) {
           logger.warn("Research findings extract failed — provider authentication", {
@@ -571,36 +632,24 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
           throw err;
         }
-        // Sources were collected — return an honest PARTIAL-style brief instead of failing the Ask run.
+        // Salvage any valid items from the failed pack, then fall back to source quotes.
+        extractionDegraded = true;
+        extractedFindings = salvageExtractedFindings(extractResult.raw);
         logger.warn("Research findings extract failed after sources collected — degrading to source-backed partial", {
           researchJobId: jobId,
           organisationId: organisationId,
           reason: extractResult.reason,
           failureClass: extractResult.failureClass,
           sourceCount: ranked.length,
+          salvagedCount: extractedFindings.length,
           phase: "STRUCTURED_EXTRACTION_FAILED",
         });
-        extractedFindings = [];
-        await updateOrgScopedById(prisma.researchJob, {
-            id: jobId,
-            organisationId,
-            data: {
-            status: "PARTIAL",
-            brief: {
-              phase: "STRUCTURED_EXTRACTION_FAILED",
-              evidenceGathered: true,
-              sourceCount: ranked.length,
-              failureClass: extractResult.failureClass || "SCHEMA_FAILED",
-              degraded: true,
-              customerNote: RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
-            } as unknown as Prisma.InputJsonValue,
-            totalCostCents: costCents,
-            finishedAt: new Date(),
-            userFacingError: null,
-            error: "structured_extraction_degraded",
-          },
-          });
       }
+    }
+
+    if (ranked.length > 0 && extractedFindings.length === 0) {
+      extractionDegraded = true;
+      extractedFindings = sourceBackedFindingsFromSources(ranked);
     }
 
     const normalizeUrlKey = (u: string) => {
@@ -616,7 +665,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const allowedByNormalized = new Map(
       ranked.map((r) => [normalizeUrlKey(r.url), r.url] as const),
     );
-    const findings = extractedFindings
+    let findings = extractedFindings
       .map((f) => {
         const exact = allowedByNormalized.get(normalizeUrlKey(f.sourceUrl));
         return exact ? { ...f, sourceUrl: exact } : null;
@@ -624,36 +673,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       .filter((f): f is NonNullable<typeof f> => f != null);
 
     if (ranked.length > 0 && extractedFindings.length > 0 && findings.length === 0) {
-      const { RESEARCH_GROUNDING_FAILED_CUSTOMER } = await import(
-        "@/services/ai-provider-preflight"
-      );
-      // Keep source list for the customer instead of hard-failing the Ask run.
+      extractionDegraded = true;
       logger.warn("Research findings had no usable source linkage — degrading to source-backed partial", {
         researchJobId: jobId,
         organisationId: organisationId,
         extractedCount: extractedFindings.length,
         phase: "GROUNDING_FAILED",
       });
-      await updateOrgScopedById(prisma.researchJob, {
-            id: jobId,
-            organisationId,
-            data: {
-          status: "PARTIAL",
-          brief: {
-            phase: "GROUNDING_FAILED",
-            evidenceGathered: true,
-            sourceCount: ranked.length,
-            extractedCount: extractedFindings.length,
-            degraded: true,
-            customerNote: RESEARCH_GROUNDING_FAILED_CUSTOMER,
-          } as unknown as Prisma.InputJsonValue,
-          totalCostCents: costCents,
-          finishedAt: new Date(),
-          userFacingError: null,
-          error: "grounding_degraded",
-        },
-          });
-      // Drop unlinked findings; continue with sources + honest summary.
+      findings = sourceBackedFindingsFromSources(ranked);
     }
 
     for (const f of findings) {
@@ -675,12 +702,15 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
     const baseSummary =
-      findings.length > 0
+      findings.length > 0 && !extractionDegraded
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
-        : ranked.length > 0
-          ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
-          : "No sources were returned from the configured adapters.";
+        : findings.length > 0
+          ? `Research gathered ${ranked.length} sources on ${topic}. Structured extraction was incomplete, so the findings below quote source titles and excerpts for verification — they are not fully synthesised claims.`
+          : ranked.length > 0
+            ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
+            : "No sources were returned from the configured adapters.";
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
+    const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
 
     const output: ResearchOutput = {
       researchJobId: jobId,
@@ -691,11 +721,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       sources: ranked.map((r) => ({ url: r.url, title: r.title, platform: r.platform })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
-      ...(ranked.length > 0 && findings.length === 0
+      ...(partialWithSources
         ? {
             phase: "PARTIAL_WITH_SOURCES",
             caveats: [
-              "Structured finding extraction did not complete — treat listed sources as leads for verification, not verified claims.",
+              "Structured finding extraction did not complete — treat listed sources and quoted excerpts as leads for verification, not verified claims.",
             ],
           }
         : {}),
@@ -705,14 +735,16 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             id: jobId,
             organisationId,
             data: {
-        status: ranked.length ? (findings.length ? "COMPLETED" : "PARTIAL") : "FAILED",
+        status: ranked.length ? (findings.length && !extractionDegraded ? "COMPLETED" : "PARTIAL") : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
         finishedAt: new Date(),
         userFacingError: ranked.length
           ? null
           : "I couldn't reach any research sources. Check that YouTube, Reddit, or web search keys are configured.",
-        error: ranked.length ? (findings.length ? null : "partial_sources_only") : "no_sources",
+        // Never persist an internal degrade code that the /research UI treats as "could not finish"
+        // when sources (or source-backed findings) were actually gathered.
+        error: ranked.length ? null : "no_sources",
       },
           });
 

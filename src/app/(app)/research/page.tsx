@@ -218,7 +218,7 @@ export default function ResearchPage() {
                 <span className="meta">{new Date(job.createdAt).toLocaleString()}</span>
               </div>
 
-              {(job.error || job.userFacingError) && (
+              {(job.status === "FAILED" || job.userFacingError) && (
                 <p className="text-sm text-[var(--danger)]">
                   {job.userFacingError || "Research could not finish. Try again from Ask."}
                 </p>
@@ -227,6 +227,11 @@ export default function ResearchPage() {
               {job.findings.length > 0 ? (
                 <div>
                   <h4 className="card-title">Key findings</h4>
+                  {job.status === "PARTIAL" ? (
+                    <p className="meta mt-1">
+                      Partial result — quotes from collected sources; treat as leads, not verified claims.
+                    </p>
+                  ) : null}
                   <ul className="mt-2 space-y-2 text-sm">
                     {job.findings.slice(0, 8).map((f) => (
                       <li key={f.id} className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
@@ -241,6 +246,11 @@ export default function ResearchPage() {
                     ))}
                   </ul>
                 </div>
+              ) : job.sources.length > 0 ? (
+                <p className="text-sm text-[var(--muted)]">
+                  Structured findings were incomplete — review the sources below as leads for
+                  verification, not verified claims.
+                </p>
               ) : (
                 <p className="text-sm text-[var(--muted)]">
                   No findings yet — run Research with Ask to populate sources.
