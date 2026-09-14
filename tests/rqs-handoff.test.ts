@@ -203,19 +203,19 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
     expect(report.overall).toBeGreaterThan(0);
   });
 
-  it("F: zero grounded findings → honest reject", () => {
+  it("F: empty extract with sources → source-backed findings, not a silent reject", () => {
     const { claims, report } = scoreFromDeepShaped({
       findings: [],
       claims: [],
       sources: AUTH_SOURCES,
     });
-    expect(claims.length).toBe(0);
+    // Empty extract must still surface each fetched source as a quoted finding
+    // (never invent stats; never drop sources). That is not a verified brief.
+    expect(claims.length).toBe(AUTH_SOURCES.length);
+    expect(claims.every((c) => Boolean(c.sourceUrl))).toBe(true);
     expect(report.accepted).toBe(false);
     expect(report.overall).toBeGreaterThan(0);
     expect(report.breakdown.sourceQuality).toBeGreaterThan(0);
-    expect(
-      report.hardGateFailures.some((f) => f.code === "UNSUPPORTED_DEFINITIVE_CLAIM"),
-    ).toBe(true);
   });
 
   it("G: mixed supported/unsupported — supported survive, unsupported penalise", () => {
