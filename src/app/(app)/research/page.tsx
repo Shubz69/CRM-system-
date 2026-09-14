@@ -20,6 +20,7 @@ type Source = {
   url: string;
   title: string | null;
   platform: string;
+  listenChannel?: string | null;
   snippet?: string | null;
   author?: string | null;
   freshnessScore: number | null;
@@ -243,6 +244,7 @@ export default function ResearchPage() {
                       sourceUrl: f.source?.url,
                       evidenceExcerpt: f.evidenceExcerpt ?? undefined,
                       sourceTitle: f.source?.title ?? undefined,
+                      sourcePlatform: f.source?.listenChannel ?? f.source?.platform,
                     }))}
                   />
                   {job.findings.some((f) => f.flaggedUnsupported || f.flaggedUngrounded) ? (
@@ -267,7 +269,7 @@ export default function ResearchPage() {
                     title: s.title ?? undefined,
                     snippet: s.snippet ?? undefined,
                     author: s.author ?? undefined,
-                    platform: s.platform,
+                    platform: s.listenChannel ?? s.platform,
                   }))}
                 />
               ) : null}

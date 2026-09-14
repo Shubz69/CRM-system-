@@ -4,11 +4,14 @@
  * Never invents URLs or statistics.
  */
 
+import { labelResearchListenChannel } from "@/lib/research-listen-platforms";
+
 export type SourceBackedFinding = {
   claim: string;
   sourceUrl: string;
   evidenceExcerpt?: string;
   sourceTitle?: string;
+  sourcePlatform?: string;
   claimKind: "OBSERVATION";
   confidence: number;
 };
@@ -26,6 +29,7 @@ export type VisibleFinding = {
   sourceUrl: string;
   evidenceExcerpt?: string;
   sourceTitle?: string;
+  sourcePlatform?: string;
   claimKind?: string;
   confidence?: number;
 };
@@ -52,7 +56,12 @@ function sourceSnippet(rec: Record<string, unknown>): string | undefined {
 }
 
 export function sourceBackedFindingsFromSources(
-  sources: Array<{ url: string; title?: string | null; content?: string | null }>,
+  sources: Array<{
+    url: string;
+    title?: string | null;
+    content?: string | null;
+    platform?: string | null;
+  }>,
   limit = 8,
 ): SourceBackedFinding[] {
   const out: SourceBackedFinding[] = [];
@@ -68,6 +77,7 @@ export function sourceBackedFindingsFromSources(
       sourceUrl: source.url,
       evidenceExcerpt: excerpt || undefined,
       sourceTitle: title || undefined,
+      sourcePlatform: labelResearchListenChannel(source.platform) || source.platform || undefined,
       claimKind: "OBSERVATION",
       confidence: excerpt ? 0.45 : 0.35,
     });
@@ -84,12 +94,13 @@ export function normalizeVisibleSources(output: unknown): VisibleSource[] {
     if (!url || seen.has(url)) return;
     seen.add(url);
     const author = trimText(rec?.author, 200);
+    const rawPlatform = trimText(rec?.listenChannel, 80) || trimText(rec?.platform, 40);
     out.push({
       url,
       title: trimText(rec?.title, 300),
       snippet: rec ? sourceSnippet(rec) : undefined,
       author: author || undefined,
-      platform: trimText(rec?.platform, 40),
+      platform: labelResearchListenChannel(rawPlatform) || rawPlatform,
     });
   };
   if (obj && Array.isArray(obj.sources)) {
@@ -110,6 +121,7 @@ export function normalizeVisibleSources(output: unknown): VisibleSource[] {
       url,
       title: trimText(rec?.sourceTitle, 300),
       snippet: rec ? sourceSnippet(rec) : undefined,
+      platform: labelResearchListenChannel(trimText(rec?.sourcePlatform, 80) || trimText(rec?.platform, 40)),
     });
   }
   return out;
@@ -144,6 +156,9 @@ export function normalizeVisibleFindings(
       sourceUrl,
       evidenceExcerpt: trimText(rec?.evidenceExcerpt, 400) || matched?.snippet,
       sourceTitle: trimText(rec?.sourceTitle, 300) || matched?.title,
+      sourcePlatform:
+        labelResearchListenChannel(trimText(rec?.sourcePlatform, 80) || matched?.platform) ||
+        matched?.platform,
       claimKind: trimText(rec?.claimKind, 40),
       confidence:
         typeof rec?.confidence === "number" && Number.isFinite(rec.confidence)
@@ -157,6 +172,7 @@ export function normalizeVisibleFindings(
         url: s.url,
         title: s.title,
         content: s.snippet,
+        platform: s.platform,
       })),
     );
   }

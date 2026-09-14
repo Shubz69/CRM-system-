@@ -4,6 +4,7 @@ import { ResearchJobKind, ResearchJobStatus } from "@prisma/client";
 import { z } from "zod";
 import { requirePermission, jsonError } from "@/lib/session";
 import { prisma } from "@/lib/db";
+import { labelResearchListenChannel } from "@/lib/research-listen-platforms";
 
 /**
  * GET /api/research — list ResearchJob rows with findings, sources, critic flags.
@@ -110,9 +111,12 @@ export async function GET() {
           flaggedUnsupported: f.flaggedUnsupported,
           flaggedUngrounded: f.flaggedUngrounded,
           sourceUrl: f.source?.url ?? null,
+          sourcePlatform: f.source?.platform ?? null,
+          listenChannel: labelResearchListenChannel(f.source?.platform) ?? null,
           source: f.source
             ? {
                 ...f.source,
+                listenChannel: labelResearchListenChannel(f.source.platform) ?? null,
                 snippet: f.source.content
                   ? f.source.content.replace(/\s+/g, " ").trim().slice(0, 280)
                   : null,
@@ -122,6 +126,7 @@ export async function GET() {
         })),
         sources: job.sources.map((s) => ({
           ...s,
+          listenChannel: labelResearchListenChannel(s.platform) ?? null,
           snippet: s.content ? s.content.replace(/\s+/g, " ").trim().slice(0, 280) : null,
           content: undefined,
         })),

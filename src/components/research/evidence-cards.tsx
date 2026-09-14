@@ -16,6 +16,7 @@ export function ResearchFindingCards({
     sourceUrl?: string;
     evidenceExcerpt?: string;
     sourceTitle?: string;
+    sourcePlatform?: string;
   }>;
 }) {
   if (!findings.length) return null;
@@ -44,6 +45,9 @@ export function ResearchFindingCards({
                 >
                   {f.sourceTitle || domainFromUrl(f.sourceUrl) || f.sourceUrl}
                 </a>
+                {"sourcePlatform" in f && f.sourcePlatform ? (
+                  <span className="ml-2 text-xs text-[var(--muted)]">{f.sourcePlatform}</span>
+                ) : null}
               </p>
             ) : null}
           </li>

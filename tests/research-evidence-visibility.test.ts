@@ -58,6 +58,27 @@ describe("visible research evidence", () => {
     expect(attached.sources[0]?.url).toBe(HIRE);
   });
 
+  it("labels Apify social listen sources so a human can see which network was used", () => {
+    const attached = attachVisibleResearchEvidence({
+      researchJobId: "job_ig",
+      sources: [
+        {
+          url: "https://www.instagram.com/p/abc/",
+          title: "Growth reel",
+          platform: "instagram",
+          snippet: "Weekly reel cadence from a public post.",
+        },
+      ],
+      findings: [],
+    }) as {
+      sources: Array<{ platform?: string }>;
+      findings: Array<{ sourceUrl: string; sourcePlatform?: string }>;
+    };
+    expect(attached.sources[0]?.platform).toBe("Apify · Instagram");
+    expect(attached.findings[0]?.sourceUrl).toBe("https://www.instagram.com/p/abc/");
+    expect(attached.findings[0]?.sourcePlatform).toBe("Apify · Instagram");
+  });
+
   it("does not invent findings for CRM desk answers", () => {
     const crm = attachVisibleResearchEvidence({
       source: "internal_crm",

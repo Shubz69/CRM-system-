@@ -26,6 +26,7 @@ import {
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
+import { inferResearchListenPlatforms, labelResearchListenChannel } from "@/lib/research-listen-platforms";
 import {
   RESEARCH_EXTRACT_MIN_MS,
   RESEARCH_HARD_CEILING_MS,
@@ -82,6 +83,7 @@ export const researchOutputSchema = z.object({
       url: z.string().url(),
       title: z.string(),
       platform: z.string(),
+      listenChannel: z.string().optional(),
       snippet: z.string().optional(),
       author: z.string().nullable().optional(),
     }),
@@ -293,17 +295,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       : null;
     const authorityDomains = ukPrimaryAuthorityDomains(topic);
     const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
-    // Desk research defaults to evidence platforms — not every social scraper.
-    // Apify LinkedIn/TikTok/etc. are for social listening / prospecting, and their
-    // long timeouts previously stranded DEEP GDPR runs in RUNNING for minutes.
-    // Desk research stays on web by default — Reddit/YouTube/Apify fan-out is what
-    // pushed production Ask runs past a minute. Callers can still pass platforms.
-    const defaultResearchPlatforms = (["web"] as SourcePlatform[]).filter((p) =>
-      configuredPlatforms.includes(p),
-    );
+    // Desk research stays web-only unless the topic names a social network
+    // (or the caller passes platforms). Apify IG/LI/TT adapters stay wired
+    // and time-bounded — do not fan out every scraper on GDPR/plant-hire asks.
     const platforms =
-      explicitPlatforms ??
-      (defaultResearchPlatforms.length ? defaultResearchPlatforms : configuredPlatforms);
+      explicitPlatforms ?? inferResearchListenPlatforms(topic, configuredPlatforms);
 
     const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
     const collected: SourceResult[] = [];
@@ -660,6 +656,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         url: r.url,
         title: r.title,
         platform: r.platform,
+        listenChannel: labelResearchListenChannel(r.platform),
         snippet: (r.content || "").replace(/\s+/g, " ").trim().slice(0, 280) || undefined,
         author: r.author ?? undefined,
       })),
