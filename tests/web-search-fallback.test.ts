@@ -85,6 +85,106 @@ describe("web search provider fallback", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("throws AUTH_REQUIRED with Vercel key names when Tavily and Exa are unset", async () => {
+    envState.TAVILY_API_KEY = undefined;
+    envState.EXA_API_KEY = undefined;
+    const { searchWebWithFallback } = await import("@/adapters/sources/web");
+    const { SourceAuthRequiredError } = await import("@/adapters/sources/types");
+    await expect(
+      searchWebWithFallback("Research plant hire UK pricing", { organisationId: "org_1", limit: 5 }),
+    ).rejects.toBeInstanceOf(SourceAuthRequiredError);
+    try {
+      await searchWebWithFallback("Research plant hire UK pricing", { organisationId: "org_1" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toMatch(/AUTH_REQUIRED/);
+      expect(message).toMatch(/TAVILY_API_KEY/);
+      expect(message).toMatch(/EXA_API_KEY/);
+      expect(message).toMatch(/Vercel/i);
+    }
+  });
+
+  it("returns plant-hire URL + snippet on the mocked Tavily success path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            url: "https://hire.example/rates",
+            title: "UK plant hire day rates",
+            content: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+            score: 0.91,
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchWebWithFallback } = await import("@/adapters/sources/web");
+    const results = await searchWebWithFallback("Research plant hire UK pricing", {
+      organisationId: "org_1",
+      limit: 5,
+      qualityBudget: "FAST",
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.url).toBe("https://hire.example/rates");
+    expect(results[0]?.content).toMatch(/£120 per day/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("tavily.com");
+  });
+
+  it("maps 401 to AUTH_REQUIRED when no fallback key is configured", async () => {
+    envState.EXA_API_KEY = undefined;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "invalid api key",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchWebWithFallback } = await import("@/adapters/sources/web");
+    const { SourceAuthRequiredError } = await import("@/adapters/sources/types");
+    await expect(
+      searchWebWithFallback("plant hire", { organisationId: "org_1", limit: 3 }),
+    ).rejects.toBeInstanceOf(SourceAuthRequiredError);
+  });
+
+  it("falls back to Exa on FAST when Tavily returns 401", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => "unauthorized",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          results: [
+            {
+              url: "https://hire.example/rates",
+              title: "UK plant hire day rates",
+              text: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+              score: 0.88,
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { searchWebWithFallback } = await import("@/adapters/sources/web");
+    const results = await searchWebWithFallback("Research plant hire UK pricing", {
+      organisationId: "org_1",
+      limit: 5,
+      qualityBudget: "FAST",
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.url).toBe("https://hire.example/rates");
+    expect(results[0]?.content).toMatch(/£120/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("exa.ai");
+  });
+
   it("surfaces provider-agnostic unavailable errors (no vendor names)", async () => {
     envState.EXA_API_KEY = undefined;
     const fetchMock = vi.fn().mockResolvedValue({

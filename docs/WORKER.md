@@ -58,7 +58,9 @@ Copy-paste configs in-repo:
 1. Create a worker service from the **same** Git repo.
 2. Start command: `npm run worker` (or `npx tsx src/workers/index.ts`).
 3. Set env: `DATABASE_URL`, `DIRECT_URL` (if needed), `REDIS_URL` (same as
-   Vercel), `ENCRYPTION_KEY`, AI keys as needed.
+   Vercel), `ENCRYPTION_KEY`, AI keys as needed. **`TAVILY_API_KEY` / `EXA_API_KEY`
+   on Railway do not serve Quick Ask** — copy those keys to Vercel Production
+   as well (Quick web research runs in the Next.js process).
 4. On Vercel: set the same `REDIS_URL` (Production + Preview).
 5. Health: `GET /api/health` — in production, Redis `down` → **503 unhealthy**.
 6. Ops UI: `/admin/ai-ops` shows queue depths + failed jobs (real BullMQ counts).
@@ -85,6 +87,25 @@ curl "$APP_URL/api/admin/jobs/sleep-test?jobId=<id>" -H "Cookie: …"
 
 Confirm `state` becomes `completed` on the **worker host** logs, not inside
 the HTTP request.
+
+## QUICK Ask empty sources (`error=no_sources`)
+
+In-process Quick Ask after PR #16 runs on **Vercel**. Production ResearchJobs
+`cmu149j980005la04wfakopf8` and `cmu145m9g0005ic04zrfcgnzl` (plant hire UK
+pricing, 2026-09-14) finished `FAILED` / `error=no_sources` / `sources=0`.
+The same topic on the **Railway worker** path (2026-09-13) returned `sources=6`.
+
+That split means `TAVILY_API_KEY` / `EXA_API_KEY` are on Railway and missing
+(or rejected) on Vercel. Copy those keys from Railway → Vercel Production +
+Preview, then redeploy. **Do not invent API keys.**
+
+After this fix, a missing-key Quick run persists `error=AUTH_REQUIRED` and a
+customer/ops message naming the Vercel env vars — not a quality-gate 0%.
+
+**QUICK Ask web research runs in the Vercel web process.** If Tavily/Exa keys
+exist only on Railway, Quick Ask returns `AUTH_REQUIRED` (set `TAVILY_API_KEY`
+or `EXA_API_KEY` on Vercel Production + Preview). DEEP Ask on the worker can
+use the Railway copies of the same keys.
 
 ## What breaks if the worker is down
 

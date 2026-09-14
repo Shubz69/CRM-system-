@@ -7,6 +7,7 @@
 - [ ] Admin → AI Ops shows **Hosted worker live** (heartbeat), not only “Redis OK”
 - [ ] Webhooks require explicit `organisationId` or unique channel mapping (no demo fallback)
 - [ ] `MANYCHAT_WEBHOOK_SECRET` and `BOOKING_WEBHOOK_SECRET` rotated (app refuses `dev-*` defaults in production)
+- [ ] `TAVILY_API_KEY` (and optional `EXA_API_KEY`) set on **Vercel Production + Preview**. Railway-only copies are invisible to in-process Quick Ask. Do not invent keys — copy from Railway if that worker already has them.
 - [ ] AI provider keys stored only server-side
 - [ ] No demo organisation / demo user in the database
 - [ ] Migrations applied (`prisma migrate deploy` only — never `db push`)

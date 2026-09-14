@@ -62,6 +62,24 @@ describe("source adapters — stubs and config", () => {
     expect(platforms).not.toContain("instagram");
     expect(platforms).not.toContain("linkedin");
     expect(platforms).not.toContain("tiktok");
+
+    const { searchConfiguredSources, SourceAuthRequiredError } = await import("@/adapters/sources");
+    await expect(
+      searchConfiguredSources({
+        query: "Research plant hire UK pricing",
+        options: { organisationId: "org_1", limit: 5, qualityBudget: "FAST" },
+      }),
+    ).rejects.toBeInstanceOf(SourceAuthRequiredError);
+    try {
+      await searchConfiguredSources({
+        query: "Research plant hire UK pricing",
+        options: { organisationId: "org_1" },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toMatch(/AUTH_REQUIRED/);
+      expect(message).toMatch(/TAVILY_API_KEY/);
+    }
   });
 
   it("dedupes and ranks sources by engagement", () => {

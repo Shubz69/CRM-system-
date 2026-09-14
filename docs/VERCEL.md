@@ -24,6 +24,8 @@ This app is a Next.js frontend + API on Vercel. **Postgres is hosted on [Supabas
 | `BOOKING_WEBHOOK_SECRET` | Strong random (not `dev-*`) |
 | `AI_PROVIDER` | `anthropic` (Claude primary). OpenAI not required |
 | `ANTHROPIC_API_KEY` | **Required for live AI** |
+| `TAVILY_API_KEY` | **Required for Quick Ask web research** (in-process on Vercel). Railway-only keys are not enough. |
+| `EXA_API_KEY` | Optional fallback web search if Tavily fails auth/quota. Also needed on Vercel for Quick Ask. |
 | `ANTHROPIC_DEFAULT_MODEL` | Optional — default `claude-sonnet-4-20250514` |
 | `ANTHROPIC_ECONOMY_MODEL` | Optional — default `claude-3-5-haiku-latest` |
 | `ANTHROPIC_ADVANCED_MODEL` | Optional — default `claude-opus-4-20250514` |

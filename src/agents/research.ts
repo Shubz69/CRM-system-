@@ -23,6 +23,7 @@ import {
   type SourcePlatform,
   type SourceResult,
 } from "@/adapters/sources";
+import { hasWebSearchCredentials, WEB_SEARCH_MISSING_KEY_MESSAGE } from "@/adapters/sources/web";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
@@ -93,6 +94,8 @@ export const researchOutputSchema = z.object({
   /** Honest degrade markers when sources exist but findings are incomplete. */
   phase: z.string().optional(),
   caveats: z.array(z.string()).optional(),
+  /** Persistable failure code — AUTH_REQUIRED vs no_sources. Never invent keys. */
+  error: z.string().optional(),
 });
 
 export type ResearchInput = z.infer<typeof researchInputSchema>;
@@ -303,7 +306,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
 
     const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
     const collected: SourceResult[] = [];
-    const adapterErrors: Array<{ platform: string; message: string }> = [];
+    const adapterErrors: Array<{ platform: string; message: string; code?: string }> = [];
     /** Reserve evidence budget for primary authorities before secondary fill. */
     const primaryReserve = isHighStakes ? Math.min(12, Math.max(6, Math.floor(maxSources / 2))) : 0;
     /** Platforms that failed hard this run — do not re-hit on later queries. */
@@ -313,6 +316,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       "SOURCE_UNAVAILABLE",
       "SOURCE_RATE_LIMITED",
       "SOURCE_NOT_CONFIGURED",
+      "AUTH_REQUIRED",
       "APIFY_DENIED",
       "APIFY_RUN_FAILED",
     ]);
@@ -344,19 +348,24 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             nicheHint: parsed.nicheHint,
             includeDomains: searchOptions.includeDomains,
             qualityBudget: fast ? "FAST" : depth === "DEEP" ? "DEEP" : "STANDARD",
-            timeoutMs:
+            timeoutMs: Math.min(
               depth === "FAST"
                 ? RESEARCH_SOURCE_FETCH_MS.FAST
                 : depth === "DEEP"
                   ? RESEARCH_SOURCE_FETCH_MS.DEEP
                   : RESEARCH_SOURCE_FETCH_MS.STANDARD,
+              Math.max(1_200, remainingMs() - 500),
+            ),
           },
         });
         collected.push(...results);
         costCents += billableCents;
         for (const err of errors) {
-          adapterErrors.push({ platform: err.platform, message: err.message });
-          if (COLD_CODES.has(err.code)) {
+          adapterErrors.push({ platform: err.platform, message: err.message, code: err.code });
+          // Timeouts must not permanently cold-cache web on FAST — one hung
+          // include_domains pass used to skip the unconstrained plant-hire search.
+          const coldOnTimeout = err.code === "SOURCE_UNAVAILABLE" && err.platform === "web" && fast;
+          if (COLD_CODES.has(err.code) && !coldOnTimeout) {
             coldPlatforms.add(err.platform);
           }
         }
@@ -386,8 +395,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         return { resultCount: results.length, allPlatformsFailed };
       } catch (error) {
         const message = error instanceof Error ? error.message : "search failed";
-        adapterErrors.push({ platform: "web", message });
-        coldPlatforms.add("web");
+        const code =
+          error && typeof error === "object" && "code" in error
+            ? String((error as { code: unknown }).code)
+            : "SOURCE_UNAVAILABLE";
+        adapterErrors.push({ platform: "web", message, code });
+        if (code !== "SOURCE_UNAVAILABLE" || !fast) {
+          coldPlatforms.add("web");
+        }
         activePlatforms = activePlatforms.filter((p) => !coldPlatforms.has(p));
         await recordResearchToolCall({
           organisationId: organisationId,
@@ -412,8 +427,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       limit: number;
       includeDomains?: string[];
     }> = [];
-    // One parallel authority pass (no sequential retry) — extra domain waves blew the ceiling.
-    if (authorityDomains.length && remainingMs() > 1_200) {
+    // Authority include_domains is slow/empty on FAST — spend the budget on
+    // one unconstrained web query so plant-hire style asks can return a URL.
+    if (!fast && authorityDomains.length && remainingMs() > 1_200) {
       const authorityQuery = authorityFirstQueries(topic)[0] || topic;
       for (const domain of authorityDomains.slice(0, fast ? 1 : 2)) {
         searchTasks.push({
@@ -639,6 +655,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     latency.persistMs = persistSourcesMs + (Date.now() - tPersistFindings0);
 
     const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
+    const authRequired = adapterErrors.find(
+      (e) => e.code === "AUTH_REQUIRED" || (e.platform === "web" && e.code === "SOURCE_NOT_CONFIGURED"),
+    );
+    const missingWebKeys = !hasWebSearchCredentials() && ranked.length === 0;
+    const emptyReason =
+      authRequired?.message ||
+      (missingWebKeys ? WEB_SEARCH_MISSING_KEY_MESSAGE : null) ||
+      "No sources were returned from the configured adapters.";
     const baseSummary =
       findings.length > 0 && !extractionDegraded
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
@@ -646,10 +670,12 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           ? `Research gathered ${ranked.length} sources on ${topic}. Structured extraction was incomplete, so the findings below quote source titles and excerpts for verification — they are not fully synthesised claims.`
           : ranked.length > 0
             ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
-            : "No sources were returned from the configured adapters.";
+            : emptyReason;
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
     const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
 
+    const jobError =
+      ranked.length > 0 ? null : authRequired || missingWebKeys ? "AUTH_REQUIRED" : "no_sources";
     const output: ResearchOutput = {
       researchJobId: jobId,
       topic,
@@ -666,6 +692,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
+      ...(jobError ? { error: jobError } : {}),
       ...(partialWithSources
         ? {
             phase: "PARTIAL_WITH_SOURCES",
@@ -686,10 +713,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         finishedAt: new Date(),
         userFacingError: ranked.length
           ? null
-          : "I couldn't reach any research sources. Check that YouTube, Reddit, or web search keys are configured.",
-        // Never persist an internal degrade code that the /research UI treats as "could not finish"
-        // when sources (or source-backed findings) were actually gathered.
-        error: ranked.length ? null : "no_sources",
+          : jobError === "AUTH_REQUIRED"
+            ? emptyReason
+            : "I couldn't reach any research sources. Check that TAVILY_API_KEY or EXA_API_KEY is set on Vercel (Quick Ask runs there in-process), not only on the Railway worker.",
+        // AUTH_REQUIRED is the ops-visible code for missing Vercel web keys
+        // (production plant-hire jobs cmu149j980005la04wfakopf8 / cmu145m9g0005ic04zrfcgnzl
+        // stored generic no_sources and looked like an adapter empty, not a key gap).
+        error: jobError,
       },
           });
 

@@ -1,4 +1,5 @@
 import {
+  SourceAuthRequiredError,
   SourceNotConfiguredError,
   SourceRateLimitError,
   SourceUnavailableError,
@@ -24,6 +25,22 @@ import { logger } from "@/lib/logger";
 
 type WebProvider = "tavily" | "exa";
 
+/** Customer-facing — env var names are intentional so ops can fix Vercel vs Railway. */
+export const WEB_SEARCH_MISSING_KEY_MESSAGE =
+  "Web research is not configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app — Quick Ask runs in-process there, not only on the Railway worker.";
+
+export const WEB_SEARCH_AUTH_REJECTED_MESSAGE =
+  "Web research API credentials were rejected (AUTH_REQUIRED). Check TAVILY_API_KEY and EXA_API_KEY on Vercel Production (not only Railway).";
+
+export function trimmedCredential(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function hasWebSearchCredentials(env: ReturnType<typeof getEnv> = getEnv()): boolean {
+  return Boolean(trimmedCredential(env.TAVILY_API_KEY) || trimmedCredential(env.EXA_API_KEY));
+}
+
 function acquire(organisationId: string): void {
   const ok = tryAcquireRateLimit({
     key: `web:${organisationId}`,
@@ -33,10 +50,39 @@ function acquire(organisationId: string): void {
   if (!ok) throw new SourceRateLimitError("web");
 }
 
+/** True when the provider rejected credentials — missing/invalid key, not a timeout. */
+export function isWebProviderAuthFailure(error: unknown): boolean {
+  if (error instanceof SourceAuthRequiredError) return true;
+  if (error instanceof SourceNotConfiguredError) return true;
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  if (/\b(401|403)\b/.test(msg)) return true;
+  if (
+    /unauthorized|invalid api key|invalid key|forbidden|authentication|api key not found|missing api key/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** HTTP failures that return immediately — safe to try the other provider on FAST. */
+function isQuickHttpProviderFailure(error: unknown): boolean {
+  if (isWebProviderAuthFailure(error)) return true;
+  if (error instanceof SourceRateLimitError) return true;
+  if (!(error instanceof Error)) return false;
+  if (/aborted|timeout|etimedout|econnreset|fetch failed|network/i.test(error.message)) {
+    return false;
+  }
+  return /\b(402|429|432|500|502|503|504)\b/.test(error.message);
+}
+
 /** True when the failure is quota / auth / hard unavailability — not empty results. */
 export function isWebProviderAvailabilityFailure(error: unknown): boolean {
   if (error instanceof SourceRateLimitError) return true;
   if (error instanceof SourceUnavailableError) return true;
+  if (error instanceof SourceAuthRequiredError) return true;
   if (!(error instanceof Error)) return false;
   const msg = error.message.toLowerCase();
   // Match status / quota signals without requiring a specific vendor string in the check.
@@ -61,7 +107,11 @@ function abortSignalFor(timeoutMs?: number): AbortSignal | undefined {
 }
 
 function toCustomerSafeWebError(error: unknown): Error {
+  if (error instanceof SourceAuthRequiredError) return error;
   if (error instanceof SourceNotConfiguredError) return error;
+  if (isWebProviderAuthFailure(error)) {
+    return new SourceAuthRequiredError("web", WEB_SEARCH_AUTH_REJECTED_MESSAGE);
+  }
   if (error instanceof SourceRateLimitError) {
     return new SourceRateLimitError(
       "web",
@@ -94,6 +144,10 @@ function toCustomerSafeWebError(error: unknown): Error {
   );
 }
 
+function webSearchFetchInit(init: RequestInit): RequestInit {
+  return { ...init, cache: "no-store" };
+}
+
 async function searchTavily(
   query: string,
   options: SourceSearchOptions,
@@ -111,12 +165,18 @@ async function searchTavily(
   if (options.includeDomains?.length) {
     body.include_domains = options.includeDomains;
   }
-  const res = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: abortSignalFor(options.timeoutMs),
-  });
+  const res = await fetch(
+    "https://api.tavily.com/search",
+    webSearchFetchInit({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: abortSignalFor(options.timeoutMs),
+    }),
+  );
   if (!res.ok) {
     const text = await res.text();
     // Keep status in the thrown Error for internal availability classification;
@@ -167,15 +227,18 @@ async function searchExa(
   if (options.includeDomains?.length) {
     body.includeDomains = options.includeDomains;
   }
-  const res = await fetch("https://api.exa.ai/search", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-    },
-    body: JSON.stringify(body),
-    signal: abortSignalFor(options.timeoutMs),
-  });
+  const res = await fetch(
+    "https://api.exa.ai/search",
+    webSearchFetchInit({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: abortSignalFor(options.timeoutMs),
+    }),
+  );
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Web search secondary failed (${res.status}): ${text.slice(0, 200)}`);
@@ -219,7 +282,9 @@ function providerOrder(primary: WebProvider): WebProvider[] {
 }
 
 function keyFor(provider: WebProvider, env: ReturnType<typeof getEnv>): string | undefined {
-  return provider === "exa" ? env.EXA_API_KEY : env.TAVILY_API_KEY;
+  return provider === "exa"
+    ? trimmedCredential(env.EXA_API_KEY)
+    : trimmedCredential(env.TAVILY_API_KEY);
 }
 
 async function runProvider(
@@ -245,10 +310,7 @@ export async function searchWebWithFallback(
   const order = providerOrder(primary).filter((p) => Boolean(keyFor(p, env)));
 
   if (!order.length) {
-    throw new SourceNotConfiguredError(
-      "web",
-      "Web research is not configured for this workspace.",
-    );
+    throw new SourceAuthRequiredError("web", WEB_SEARCH_MISSING_KEY_MESSAGE);
   }
 
   let lastError: unknown = null;
@@ -267,15 +329,18 @@ export async function searchWebWithFallback(
       return results;
     } catch (error) {
       lastError = error;
-      // FAST path: one provider attempt only — Exa fallback doubled hung searches.
+      // FAST: skip Exa after a hung/timeout primary (would double the wait).
+      // Still fall back on immediate auth/quota/5xx so a bad Tavily key on
+      // Vercel does not hide a working EXA_API_KEY.
       const canFallback =
-        options.qualityBudget !== "FAST" &&
         i < order.length - 1 &&
-        isWebProviderAvailabilityFailure(error);
+        isWebProviderAvailabilityFailure(error) &&
+        (options.qualityBudget !== "FAST" || isQuickHttpProviderFailure(error));
       logger.warn("Web search provider attempt failed", {
         organisationId: options.organisationId,
         attempt: i,
         availabilityFailure: isWebProviderAvailabilityFailure(error),
+        authFailure: isWebProviderAuthFailure(error),
         willFallback: canFallback,
         // Never log raw vendor body / keys.
         statusHint: error instanceof Error ? error.message.replace(/https?:\/\/\S+/g, "[url]").slice(0, 120) : "unknown",
@@ -312,7 +377,7 @@ export const webSourceAdapter: SourceAdapter = {
     if (cached) return cached.slice(0, limit);
 
     const results = await searchWebWithFallback(query, options);
-    setCachedSourceResults(cacheKey, results);
+    if (results.length) setCachedSourceResults(cacheKey, results);
     return results;
   },
 };

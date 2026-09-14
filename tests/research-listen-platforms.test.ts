@@ -29,6 +29,12 @@ describe("inferResearchListenPlatforms", () => {
   it("does not invent an unconfigured social adapter", () => {
     expect(inferResearchListenPlatforms("Instagram growth", ["web"])).toEqual(["web"]);
   });
+
+  it("still requests web when only social adapters are configured (honest AUTH_REQUIRED)", () => {
+    expect(inferResearchListenPlatforms("UK plant hire pricing", ["instagram", "linkedin"])).toEqual([
+      "web",
+    ]);
+  });
 });
 
 describe("labelResearchListenChannel", () => {

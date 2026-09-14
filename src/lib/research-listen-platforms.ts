@@ -32,13 +32,13 @@ export function inferResearchListenPlatforms(
     .map((hint) => hint.platform)
     .filter((platform) => configuredSet.has(platform));
 
-  const selected: SourcePlatform[] = [];
-  if (configuredSet.has("web")) selected.push("web");
+  // Always request web for desk research so a missing TAVILY/EXA key fails
+  // AUTH_REQUIRED instead of silently fanning out YouTube/Apify adapters.
+  const selected: SourcePlatform[] = ["web"];
   for (const platform of mentioned) {
     if (!selected.includes(platform)) selected.push(platform);
   }
-  if (selected.length > 0) return selected;
-  return configuredSet.has("web") ? (["web"] as SourcePlatform[]) : configured;
+  return selected;
 }
 
 export function labelResearchListenChannel(
