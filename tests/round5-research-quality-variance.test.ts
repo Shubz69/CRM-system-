@@ -353,6 +353,7 @@ describe("Round 5 research quality variance", () => {
       true,
     );
     expect(customerQualitySummary(report)).toMatch(/sources collected|Partial/i);
+    expect(customerQualitySummary(report)).not.toMatch(/quality gate failed/i);
     // Must not invent a hardcoded mid-band percentage like 48%.
     expect(report.overall).not.toBe(48);
     expect(customerQualitySummary(report)).not.toMatch(/48%/);

@@ -322,7 +322,8 @@ export async function getAiOpsSnapshot(organisationId?: string) {
   return {
     redisOk,
     queuePrefix: getQueuePrefix(),
-    workerRequiredForAsk: true,
+    // True only when DEEP would miss a live worker. QUICK Ask never requires it.
+    workerRequiredForAsk: !hostedWorkerLive,
     hostedWorkerLive,
     workerHeartbeat: workerBeat
       ? {

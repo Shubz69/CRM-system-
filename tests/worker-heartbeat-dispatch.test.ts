@@ -70,5 +70,7 @@ describe("Ask durable enqueue vs in-process", () => {
     expect(msg).toMatch(/hosted worker is not running/i);
     expect(msg).toMatch(/QUICK Ask still runs/i);
     expect(msg).toMatch(/npm run worker/);
+    expect(msg).not.toMatch(/QUICK Ask.*(blocked|required|stall)/i);
+    expect(msg).toMatch(/falls back to local after/i);
   });
 });

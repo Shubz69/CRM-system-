@@ -119,5 +119,5 @@ export function hostedWorkerOpsMessage(input: {
   if (input.hostedWorkerLive) {
     return "Hosted worker heartbeat is fresh. QUICK Ask runs in-process; DEEP Ask uses Railway/Render `npm run worker`.";
   }
-  return "Redis reachable but hosted worker is not running (heartbeat stale). QUICK Ask still runs in the web process. DEEP Ask will stall until you start `npm run worker` on Railway/Render (same REDIS_URL + QUEUE_PREFIX as Vercel).";
+  return "Redis reachable but hosted worker is not running (heartbeat stale). QUICK Ask still runs in the web process. DEEP Ask falls back to local after() (may hit the web timeout on long jobs) — start `npm run worker` on Railway/Render with the same REDIS_URL + QUEUE_PREFIX as Vercel.";
 }
