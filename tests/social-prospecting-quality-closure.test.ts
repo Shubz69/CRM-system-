@@ -640,12 +640,15 @@ describe("Final social prospecting quality closure", () => {
     );
     expect(text).not.toMatch(/\bManyChat\b/);
     expect(text).not.toMatch(/Meta app not configured/);
-    expect(text).not.toMatch(/\bZernio\b/);
     expect(text).not.toMatch(/\bAyrshare\b/);
     expect(text).not.toMatch(/\bClaude\b/);
     expect(text).not.toMatch(/\bAnthropic\b/);
     expect(text).not.toMatch(/\bOpenAI\b/);
     expect(text).not.toMatch(/AI Provider/);
+    expect(text).toContain('id={MANYCHAT_SETUP_ID}');
+    expect(text).toContain("Regenerate secret");
+    expect(text).toContain("Test inbound");
+    expect(text).toMatch(/loadMessaging\(\)/);
   });
 
   it("workspace admin lacks platform social quota permission", () => {

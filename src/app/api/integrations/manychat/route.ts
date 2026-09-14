@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getEnv } from "@/lib/env";
 import { prisma } from "@/lib/db";
-import { jsonError, requirePlatformAccess } from "@/lib/session";
+import { jsonError, requirePermission } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
   getOrganisationManyChatSecret,
@@ -25,7 +25,7 @@ function apiTokenStatusLabel(configured: boolean): "Configured" | "Not configure
 
 export async function GET() {
   try {
-    const session = await requirePlatformAccess();
+    const session = await requirePermission("integrations:manage");
     const env = getEnv();
     const appUrl = env.APP_URL || env.NEXTAUTH_URL || "http://localhost:3000";
 
@@ -69,6 +69,7 @@ export async function GET() {
     const recentErrors = recentEvents.filter((e) => e.status === "FAILED" || e.error);
 
     return Response.json({
+      organisationId: session.organisationId,
       webhookUrl: `${appUrl.replace(/\/$/, "")}/api/webhooks/manychat`,
       inboundAliasUrl: `${appUrl.replace(/\/$/, "")}/api/integrations/manychat/inbound`,
       secretConfigured,
@@ -229,7 +230,7 @@ async function validateManyChatConfiguration(organisationId: string): Promise<{
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await requirePlatformAccess();
+    const session = await requirePermission("integrations:manage");
     const body = actionSchema.parse(await req.json());
 
     if (body.action === "regenerate_secret") {

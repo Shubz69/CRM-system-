@@ -400,7 +400,10 @@ describe("ManyChat connection completion", () => {
         }),
       );
       expect(json.apiTokenStatus).toBe("Configured");
+      expect(json.organisationId).toBe("org-a");
       expect(JSON.stringify(json)).not.toContain("tok");
+      expect(mocks.requirePermission).toHaveBeenCalledWith("integrations:manage");
+      expect(mocks.requirePlatformAccess).not.toHaveBeenCalled();
     });
 
     it("send_test_message looks up contact within session org only", async () => {
@@ -516,6 +519,61 @@ describe("ManyChat connection completion", () => {
           metadata: expect.objectContaining({ isActive: false }),
         }),
       );
+    });
+  });
+
+  describe("regenerate secret + test inbound", () => {
+    it("returns the new secret once from regenerate_secret", async () => {
+      mocks.regenerateOrganisationManyChatSecret.mockResolvedValue("mc_shown_once_only");
+
+      const res = await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "regenerate_secret" }),
+        }) as never,
+      );
+      const json = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(json.secret).toBe("mc_shown_once_only");
+      expect(mocks.writeAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "integration.secret_regenerated" }),
+      );
+      expect(mocks.requirePermission).toHaveBeenCalledWith("integrations:manage");
+    });
+
+    it("test_inbound stays inside the CRM via processInboundMessage", async () => {
+      mocks.processInboundMessage.mockResolvedValue({
+        duplicate: false,
+        conversationId: "conv-test",
+      });
+
+      const res = await manychatPost(
+        new Request("http://localhost/api/integrations/manychat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "test_inbound" }),
+        }) as never,
+      );
+      const json = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(mocks.processInboundMessage).toHaveBeenCalled();
+      expect(mocks.dispatchOutboundMessage).not.toHaveBeenCalled();
+      expect(mocks.writeAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "integration.test_inbound" }),
+      );
+    });
+
+    it("denies callers without integrations:manage", async () => {
+      mocks.requirePermission.mockRejectedValue(
+        new Error("Forbidden: missing permission integrations:manage"),
+      );
+      const res = await manychatGet();
+      expect(res.status).toBe(403);
     });
   });
 });

@@ -471,6 +471,9 @@ export default function InboxPage() {
             <a href="/integrations" className="btn btn-primary">
               Connect Instagram
             </a>
+            <a href="/integrations?setup=messaging" className="btn btn-secondary">
+              Messaging setup
+            </a>
             <a href="/simulator" className="btn btn-secondary">
               Try a test conversation
             </a>
