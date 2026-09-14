@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { Agent } from "@/agents/types";
-import { completeStructured, completeStructuredSafe } from "@/adapters/ai/structured";
+import { completeStructuredSafe } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
 import { assertEntitlement, recordMeteredUsage } from "@/services/entitlements";
@@ -11,6 +11,7 @@ import { recordResearchToolCall } from "@/services/research-tool-calls";
 import {
   parseClaimKind,
   persistResearchSourceWithSnapshot,
+  sourceBackedFindingsFromSources,
 } from "@/services/research-evidence";
 import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
@@ -25,6 +26,16 @@ import {
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains, classifyResearchStakes } from "@/lib/research-authority";
+import { inferResearchListenPlatforms, labelResearchListenChannel } from "@/lib/research-listen-platforms";
+import {
+  RESEARCH_EXTRACT_MIN_MS,
+  RESEARCH_HARD_CEILING_MS,
+  RESEARCH_QUERY_CAP,
+  RESEARCH_QUICK_CEILING_MS,
+  RESEARCH_SOURCE_CAP,
+  RESEARCH_SOURCE_FETCH_MS,
+  raceWithTimeout,
+} from "@/agents/supervisor/research-deadline";
 
 export const researchInputSchema = z.object({
   topic: z.string().min(3).max(2000),
@@ -54,6 +65,7 @@ const findingSchema = z.object({
   claim: z.string().min(1),
   sourceUrl: flexibleSourceUrl,
   evidenceExcerpt: z.string().optional(),
+  sourceTitle: z.string().optional(),
   claimKind: z
     .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
     .optional(),
@@ -71,6 +83,9 @@ export const researchOutputSchema = z.object({
       url: z.string().url(),
       title: z.string(),
       platform: z.string(),
+      listenChannel: z.string().optional(),
+      snippet: z.string().optional(),
+      author: z.string().nullable().optional(),
     }),
   ),
   summary: z.string(),
@@ -83,125 +98,81 @@ export const researchOutputSchema = z.object({
 export type ResearchInput = z.infer<typeof researchInputSchema>;
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
 
-const queryExpandSchema = z.object({
-  queries: z.array(z.string().min(2).max(200)).min(2).max(8),
+const FINDING_CLAIM_MAX = 800;
+
+const findingItemSchema = z.object({
+  claim: z.string().min(1).max(FINDING_CLAIM_MAX),
+  sourceUrl: flexibleSourceUrl,
+  evidenceExcerpt: z.string().max(800).optional(),
+  claimKind: z
+    .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
+    .optional(),
+  confidence: z.number().min(0).max(1).optional(),
 });
 
-/** Coerce common Claude shapes into { queries: string[] }. */
-function coerceQueryExpand(raw: unknown): { queries: string[] } | null {
-  if (!raw || typeof raw !== "object") {
-    if (Array.isArray(raw) && raw.every((q) => typeof q === "string")) {
-      return { queries: raw as string[] };
-    }
-    return null;
+function coerceFindingConfidence(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 1 && value <= 100) return Math.max(0, Math.min(1, value / 100));
+    return Math.max(0, Math.min(1, value));
   }
-  const obj = raw as Record<string, unknown>;
-  const candidates = [obj.queries, obj.search_queries, obj.searchQueries, obj.q];
-  for (const c of candidates) {
-    if (Array.isArray(c) && c.every((q) => typeof q === "string")) {
-      return { queries: c as string[] };
-    }
-    if (typeof c === "string") {
-      const parts = c
-        .split(/\n|,/)
-        .map((q) => q.trim())
-        .filter((q) => q.length >= 2);
-      if (parts.length >= 1) return { queries: parts };
-    }
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value.trim());
+    if (!Number.isFinite(n)) return undefined;
+    if (n > 1 && n <= 100) return Math.max(0, Math.min(1, n / 100));
+    return Math.max(0, Math.min(1, n));
   }
-  return null;
+  return undefined;
 }
 
-async function expandResearchQueries(input: {
-  organisationId: string;
-  topic: string;
-  nicheHint?: string;
-  model: string;
-  knowledgeContext?: string | null;
-}): Promise<string[]> {
-  const intent = (input.nicheHint || "").toLowerCase();
-  const socialish =
-    intent === "social_content" ||
-    intent === "content_gen" ||
-    /\b(viral|trending|hooks?|reels?|shorts?|algorithm)\b/i.test(input.topic);
-
-  const system = socialish
-    ? 'You expand one research question into several targeted search queries for recent viral social content. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.'
-    : 'You expand one business or market research question into several targeted factual search queries. Prefer statistics, reports, official sources, and recent analysis — not viral social posts unless the question asks for them. For UK GDPR / data protection topics, prefer ICO (ico.org.uk), GOV.UK, and legislation.gov.uk over blogs. Return ONLY a JSON object shaped exactly like {"queries":["query one","query two","query three"]}. No markdown.';
-  const knowledgeBlock = input.knowledgeContext?.trim()
-    ? `\nInternal company context (use only to focus queries — do not invent sources from it):\n${input.knowledgeContext.slice(0, 3000)}\n`
-    : "";
-  const ukGdpr =
-    /\b(gdpr|data protection|privacy|ico|uk.*(compliance|regulation))\b/i.test(input.topic);
-  const prompt = socialish
-    ? `Topic: ${input.topic}
-Niche hint (optional): ${input.nicheHint || "(none)"}
-${knowledgeBlock}Produce 4-8 concrete search queries as JSON that find the MOST RECENT viral / trending posts and videos (YouTube, TikTok, Instagram, Reddit, news).
-Include query variants with words like: this week, trending, viral, algorithm, shorts, reel, what people are saying.`
-    : `Topic: ${input.topic}
-Intent hint (optional): ${input.nicheHint || "(none)"}
-${knowledgeBlock}Produce 4-8 concrete search queries as JSON for grounded, reviewable sources (reports, news, official stats, analyst notes).
-${
-  ukGdpr
-    ? "Include at least two queries that target site:ico.org.uk, site:gov.uk, or site:legislation.gov.uk. If only weak blog sources are found, note the limitation rather than overstating confidence.\n"
-    : ""
-}Do NOT bias toward viral talk, social trends, reels, or shorts unless the topic explicitly asks for social content.`;
-
-  try {
-    const expand = await completeStructured(queryExpandSchema, {
-      organisationId: input.organisationId,
-      tier: "cheap",
-      model: input.model,
-      system,
-      prompt,
-      temperature: 0.2,
-      repairHint: 'Required shape: {"queries":["...","..."]}. The "queries" array is required.',
-    });
-    return expand.queries.map((q) => q.trim()).filter(Boolean);
-  } catch (error) {
-    // Last resort: try a raw completion + coerce so research still reaches YouTube/web.
-    try {
-      const { getAiProvider } = await import("@/adapters/ai");
-      const { tryParseJson } = await import("@/adapters/ai/structured");
-      const text = await getAiProvider().complete({
-        model: input.model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ],
-      });
-      const parsed = tryParseJson(text);
-      const coerced = coerceQueryExpand(parsed);
-      if (coerced && coerced.queries.length >= 1) {
-        return coerced.queries.map((q) => q.trim()).filter(Boolean).slice(0, 8);
-      }
-    } catch {
-      // fall through
-    }
-    logger.warn("Research query expand failed — continuing with the original topic only", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return [];
+/**
+ * Keep schema-valid findings when the model mix includes invalid items.
+ * Does not invent claims — only retains items that already have claim + URL.
+ */
+export function salvageExtractedFindings(
+  raw: unknown,
+): z.infer<typeof findingItemSchema>[] {
+  let arr: unknown[] | null = null;
+  if (Array.isArray(raw)) arr = raw;
+  else if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    if (Array.isArray(obj.findings)) arr = obj.findings;
+    else if (Array.isArray(obj.claims)) arr = obj.claims;
   }
+  if (!arr) return [];
+  const out: z.infer<typeof findingItemSchema>[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const claim = typeof rec.claim === "string" ? rec.claim.trim().slice(0, FINDING_CLAIM_MAX) : "";
+    if (!claim) continue;
+    const excerpt =
+      typeof rec.evidenceExcerpt === "string" ? rec.evidenceExcerpt.trim().slice(0, 800) : undefined;
+    const parsed = findingItemSchema.safeParse({
+      claim,
+      sourceUrl: rec.sourceUrl,
+      evidenceExcerpt: excerpt || undefined,
+      claimKind: rec.claimKind,
+      confidence: coerceFindingConfidence(rec.confidence),
+    });
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out.slice(0, 40);
 }
+
+type FindingsExtract = { findings: z.infer<typeof findingItemSchema>[] };
 
 /** Extraction contract used by research findings / claim structuring. */
-export const findingsExtractSchema = z.object({
-  findings: z
-    .array(
-      z.object({
-        claim: z.string().min(1).max(500),
-        sourceUrl: flexibleSourceUrl,
-        evidenceExcerpt: z.string().max(800).optional(),
-        claimKind: z
-          .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
-          .optional(),
-        confidence: z.number().min(0).max(1).optional(),
-      }),
-    )
-    .max(40),
-});
+export const findingsExtractSchema: z.ZodType<FindingsExtract> = z.preprocess((raw) => {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  const arr = Array.isArray(obj.findings)
+    ? obj.findings
+    : Array.isArray(obj.claims)
+      ? obj.claims
+      : null;
+  if (!arr) return raw;
+  return { findings: salvageExtractedFindings({ findings: arr }) };
+}, z.object({ findings: z.array(findingItemSchema).max(40) })) as z.ZodType<FindingsExtract>;
 
 /** Hand-written JSON Schema for Anthropic native structured output (matches findingsExtractSchema). */
 export const FINDINGS_EXTRACT_JSON_SCHEMA = {
@@ -235,8 +206,8 @@ function engagementScore(r: SourceResult): number {
 }
 
 /**
- * Research agent — expands a question, searches configured sources in parallel,
- * ranks/dedupes, and records findings that each carry a source URL.
+ * Research agent — heuristic queries, parallel source search with hard timeouts,
+ * optional extract LLM (skipped on FAST / tight deadline), then source-backed findings.
  */
 export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   name: "research",
@@ -264,32 +235,46 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     if (topic.length < 3) {
       throw new Error("I need a clearer research topic before I can search sources.");
     }
-    const fast = parsed.depth === "FAST";
-    const maxSources = parsed.maxSources ?? (fast ? 6 : 28);
+    const depth = parsed.depth ?? "STANDARD";
+    const fast = depth === "FAST";
+    const maxSources =
+      parsed.maxSources ??
+      (depth === "FAST"
+        ? RESEARCH_SOURCE_CAP.FAST
+        : depth === "DEEP"
+          ? RESEARCH_SOURCE_CAP.DEEP
+          : RESEARCH_SOURCE_CAP.STANDARD);
     const organisationId = asSafePrismaId(ctx.organisationId);
     await assertEntitlement(organisationId, "research");
     await assertWithinSpendCap(organisationId, researchAgent.estimateCostCents(parsed));
 
     const model = resolveModelForTier("cheap");
     let costCents = 0;
+    const executeStarted = Date.now();
+    const ownCeiling = fast ? RESEARCH_QUICK_CEILING_MS : RESEARCH_HARD_CEILING_MS;
+    const deadlineAt = Math.min(executeStarted + ownCeiling, ctx.deadlineAt ?? executeStarted + ownCeiling);
+    const remainingMs = () => deadlineAt - Date.now();
+    const latency = {
+      expandMs: 0,
+      searchMs: 0,
+      extractMs: 0,
+      persistMs: 0,
+    };
 
-    // FAST / Quick research: skip expand LLM — topic + authority queries only.
-    let expanded: string[] = [];
-    if (!fast) {
-      expanded = await expandResearchQueries({
-        organisationId: organisationId,
-        topic,
-        nicheHint: parsed.nicheHint,
-        model,
-        knowledgeContext: ctx.knowledgeContext,
-      });
-      costCents += 2;
-    }
-
+    // Skip query-expand LLM — heuristic queries stay inside the 30s / 8s ceiling.
+    const tExpand0 = Date.now();
+    const queryCap =
+      depth === "FAST"
+        ? RESEARCH_QUERY_CAP.FAST
+        : depth === "DEEP"
+          ? RESEARCH_QUERY_CAP.DEEP
+          : RESEARCH_QUERY_CAP.STANDARD;
+    const year = new Date().getFullYear();
     const queries = [
       ...authorityFirstQueries(topic),
-      ...new Set([topic, ...expanded]),
-    ].slice(0, fast ? 3 : 10);
+      ...new Set([topic, `${topic} ${year}`]),
+    ].slice(0, queryCap);
+    latency.expandMs = Date.now() - tExpand0;
 
     const job = await prisma.researchJob.create({
       data: {
@@ -310,18 +295,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       : null;
     const authorityDomains = ukPrimaryAuthorityDomains(topic);
     const isHighStakes = classifyResearchStakes(topic) === "HIGH_STAKES_REGULATORY";
-    // Desk research defaults to evidence platforms — not every social scraper.
-    // Apify LinkedIn/TikTok/etc. are for social listening / prospecting, and their
-    // long timeouts previously stranded DEEP GDPR runs in RUNNING for minutes.
-    const defaultResearchPlatforms = (
-      isHighStakes ||
-      /\b(gdpr|ico|regulation|lawful|compliance|ofcom|gov\.uk)\b/i.test(topic)
-        ? (["web"] as SourcePlatform[])
-        : (["web", "reddit", "youtube"] as SourcePlatform[])
-    ).filter((p) => configuredPlatforms.includes(p));
+    // Desk research stays web-only unless the topic names a social network
+    // (or the caller passes platforms). Apify IG/LI/TT adapters stay wired
+    // and time-bounded — do not fan out every scraper on GDPR/plant-hire asks.
     const platforms =
-      explicitPlatforms ??
-      (defaultResearchPlatforms.length ? defaultResearchPlatforms : configuredPlatforms);
+      explicitPlatforms ?? inferResearchListenPlatforms(topic, configuredPlatforms);
 
     const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
     const collected: SourceResult[] = [];
@@ -365,7 +343,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             recent: true,
             nicheHint: parsed.nicheHint,
             includeDomains: searchOptions.includeDomains,
-            qualityBudget: fast ? "FAST" : "STANDARD",
+            qualityBudget: fast ? "FAST" : depth === "DEEP" ? "DEEP" : "STANDARD",
+            timeoutMs:
+              depth === "FAST"
+                ? RESEARCH_SOURCE_FETCH_MS.FAST
+                : depth === "DEEP"
+                  ? RESEARCH_SOURCE_FETCH_MS.DEEP
+                  : RESEARCH_SOURCE_FETCH_MS.STANDARD,
           },
         });
         collected.push(...results);
@@ -422,56 +406,38 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       }
     }
 
-    // Phase 1 — dedicated provider-constrained authority searches (not site: text alone).
-    if (authorityDomains.length) {
-      const authorityQueries = authorityFirstQueries(topic);
-      for (const domain of authorityDomains) {
-        if (coldPlatforms.has("web")) break;
-        const q =
-          authorityQueries[0] ||
-          `UK GDPR personal data storage guidance`;
-        await runSearch(q, {
-          limit: Math.max(5, Math.ceil(primaryReserve / authorityDomains.length) + 1),
+    const tSearch0 = Date.now();
+    const searchTasks: Array<{
+      query: string;
+      limit: number;
+      includeDomains?: string[];
+    }> = [];
+    // One parallel authority pass (no sequential retry) — extra domain waves blew the ceiling.
+    if (authorityDomains.length && remainingMs() > 1_200) {
+      const authorityQuery = authorityFirstQueries(topic)[0] || topic;
+      for (const domain of authorityDomains.slice(0, fast ? 1 : 2)) {
+        searchTasks.push({
+          query: authorityQuery,
+          limit: Math.max(3, Math.ceil(primaryReserve / Math.max(authorityDomains.length, 1))),
           includeDomains: [domain],
         });
       }
-      // Bounded second attempt per domain if still empty for that host class.
-      const havePrimary = collected.some((r) => isPrimaryAuthorityUrl(r.url));
-      if (!havePrimary && !coldPlatforms.has("web")) {
-        for (const domain of authorityDomains) {
-          if (coldPlatforms.has("web")) break;
-          await runSearch(`UK GDPR data protection`, {
-            limit: 5,
-            includeDomains: [domain],
-          });
-        }
-      }
+    }
+    const perQueryLimit = Math.ceil(maxSources / Math.max(queries.length, 1)) + 2;
+    for (const query of queries) {
+      searchTasks.push({ query, limit: perQueryLimit });
     }
 
-    // Phase 2 — general / secondary queries (no domain filter).
-    // FAST / Quick: run remaining queries in parallel to cut wall-clock.
-    // Non-FAST: sequential with circuit-breaker — one all-platform failure wave stops
-    // further query fan-out (avoids 150s+ RUNNING while every Apify/Tavily call fails).
-    if (fast) {
-      await Promise.all(
-        queries.map((query) =>
-          runSearch(query, {
-            limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
-          }),
-        ),
-      );
-    } else {
-      for (const query of queries) {
-        if (activePlatforms.length === 0) break;
-        if (collected.length >= maxSources) break;
-        const wave = await runSearch(query, {
-          limit: Math.ceil(maxSources / Math.max(queries.length, 1)) + 2,
+    await Promise.all(
+      searchTasks.map(async (task) => {
+        if (remainingMs() < 800) return;
+        await runSearch(task.query, {
+          limit: task.limit,
+          includeDomains: task.includeDomains,
         });
-        if (wave.allPlatformsFailed || wave.resultCount === 0) {
-          break;
-        }
-      }
-    }
+      }),
+    );
+    latency.searchMs = Date.now() - tSearch0;
 
     const deduped = dedupeSourceResults(collected);
     const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
@@ -485,27 +451,30 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         ].slice(0, maxSources)
       : [...primary, ...secondary].slice(0, maxSources);
 
-    const sourceRows: Array<{ id: string; url: string; freshnessScore: number | null }> = [];
-    for (const r of ranked) {
-      const persisted = await persistResearchSourceWithSnapshot({
-        organisationId: organisationId,
-        researchJobId: jobId,
-        url: r.url,
-        title: r.title,
-        platform: r.platform,
-        author: r.author,
-        publishedAt: r.publishedAt,
-        content: r.content,
-        engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-        rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
-        queryUsed: parsed.topic,
-      });
-      sourceRows.push({
-        id: persisted.sourceId,
-        url: r.url,
-        freshnessScore: persisted.freshnessScore,
-      });
-    }
+    const tPersistSources0 = Date.now();
+    const sourceRows = await Promise.all(
+      ranked.map(async (r) => {
+        const persisted = await persistResearchSourceWithSnapshot({
+          organisationId: organisationId,
+          researchJobId: jobId,
+          url: r.url,
+          title: r.title,
+          platform: r.platform,
+          author: r.author,
+          publishedAt: r.publishedAt,
+          content: r.content,
+          engagement: (r.engagement ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          rawMetadata: r.rawMetadata as Prisma.InputJsonValue,
+          queryUsed: parsed.topic,
+        });
+        return {
+          id: persisted.sourceId,
+          url: r.url,
+          freshnessScore: persisted.freshnessScore,
+        };
+      }),
+    );
+    const persistSourcesMs = Date.now() - tPersistSources0;
 
     const urlToId = new Map(sourceRows.map((s) => [s.url, s.id]));
     const urlToFreshness = new Map(sourceRows.map((s) => [s.url, s.freshnessScore]));
@@ -516,23 +485,43 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       )
       .join("\n\n----\n\n");
 
-    await assertWithinSpendCap(organisationId, 2);
-    let extractedFindings: z.infer<typeof findingsExtractSchema>["findings"] = [];
-    if (catalog) {
+    type ExtractedFinding = z.infer<typeof findingItemSchema>;
+    let extractedFindings: ExtractedFinding[] = [];
+    let extractionDegraded = false;
+    const tExtract0 = Date.now();
+    const remainingBeforeExtract = remainingMs();
+    const skipLlmExtract =
+      fast || remainingBeforeExtract < RESEARCH_EXTRACT_MIN_MS || !catalog;
+    if (!skipLlmExtract) {
+      await assertWithinSpendCap(organisationId, 2);
       const findingLimit = Math.min(maxSources, 15);
-      const extractResult = await completeStructuredSafe(findingsExtractSchema, {
-        organisationId: organisationId,
-        tier: "cheap",
-        model,
-        maxTokens: 8192,
-        jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
-        repairHint:
-          'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
-        system:
-          'Extract factual findings from the sources. Return ONLY JSON shaped as {"findings":[...]}. Every finding MUST include claim and sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION, INFERENCE, or SECONDARY. Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit that finding.',
-        prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 45_000)}\n\nReturn up to ${findingLimit} findings.`,
-        temperature: 0.1,
-      });
+      const extractBudget = Math.max(
+        1_000,
+        Math.min(remainingMs() - 1_500, 12_000),
+      );
+      const extractResult = await raceWithTimeout(
+        completeStructuredSafe(findingsExtractSchema, {
+          organisationId: organisationId,
+          tier: "cheap",
+          model,
+          maxTokens: 8192,
+          skipRepair: remainingMs() < RESEARCH_EXTRACT_MIN_MS + 4_000,
+          jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
+          repairHint:
+            'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
+          system:
+            'Extract factual findings from the sources. Return ONLY JSON shaped as {"findings":[...]}. Every finding MUST include claim and sourceUrl exactly matching one provided URL. Prefer claimKind OFFICIAL (primary docs), OBSERVATION, INFERENCE, or SECONDARY. Include a short evidenceExcerpt copied from the source when possible. Never invent statistics or URLs. If unsure, omit that finding.',
+          prompt: `Topic: ${topic}\n\nSources:\n${catalog.slice(0, 45_000)}\n\nReturn up to ${findingLimit} findings.`,
+          temperature: 0.1,
+        }),
+        extractBudget,
+        () => ({
+          ok: false as const,
+          reason: "extract_timeout",
+          raw: undefined,
+          failureClass: "PROVIDER_FAILED" as const,
+        }),
+      );
       costCents += 2;
       if (extractResult.ok) {
         extractedFindings = extractResult.data.findings;
@@ -540,7 +529,6 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         const {
           isAiProviderAuthError,
           RESEARCH_SYNTHESIS_FAILED_CUSTOMER,
-          RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
         } = await import("@/services/ai-provider-preflight");
         if (isAiProviderAuthError(extractResult.reason)) {
           logger.warn("Research findings extract failed — provider authentication", {
@@ -571,36 +559,27 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           err.userFacingMessage = RESEARCH_SYNTHESIS_FAILED_CUSTOMER;
           throw err;
         }
-        // Sources were collected — return an honest PARTIAL-style brief instead of failing the Ask run.
+        // Salvage any valid items from the failed pack, then fall back to source quotes.
+        extractionDegraded = true;
+        extractedFindings = salvageExtractedFindings(extractResult.raw);
         logger.warn("Research findings extract failed after sources collected — degrading to source-backed partial", {
           researchJobId: jobId,
           organisationId: organisationId,
           reason: extractResult.reason,
           failureClass: extractResult.failureClass,
           sourceCount: ranked.length,
+          salvagedCount: extractedFindings.length,
           phase: "STRUCTURED_EXTRACTION_FAILED",
         });
-        extractedFindings = [];
-        await updateOrgScopedById(prisma.researchJob, {
-            id: jobId,
-            organisationId,
-            data: {
-            status: "PARTIAL",
-            brief: {
-              phase: "STRUCTURED_EXTRACTION_FAILED",
-              evidenceGathered: true,
-              sourceCount: ranked.length,
-              failureClass: extractResult.failureClass || "SCHEMA_FAILED",
-              degraded: true,
-              customerNote: RESEARCH_STRUCTURED_EXTRACTION_FAILED_CUSTOMER,
-            } as unknown as Prisma.InputJsonValue,
-            totalCostCents: costCents,
-            finishedAt: new Date(),
-            userFacingError: null,
-            error: "structured_extraction_degraded",
-          },
-          });
       }
+    } else if (catalog) {
+      extractionDegraded = true;
+    }
+    latency.extractMs = Date.now() - tExtract0;
+
+    if (ranked.length > 0 && extractedFindings.length === 0) {
+      extractionDegraded = true;
+      extractedFindings = sourceBackedFindingsFromSources(ranked);
     }
 
     const normalizeUrlKey = (u: string) => {
@@ -616,7 +595,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const allowedByNormalized = new Map(
       ranked.map((r) => [normalizeUrlKey(r.url), r.url] as const),
     );
-    const findings = extractedFindings
+    let findings = extractedFindings
       .map((f) => {
         const exact = allowedByNormalized.get(normalizeUrlKey(f.sourceUrl));
         return exact ? { ...f, sourceUrl: exact } : null;
@@ -624,63 +603,48 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       .filter((f): f is NonNullable<typeof f> => f != null);
 
     if (ranked.length > 0 && extractedFindings.length > 0 && findings.length === 0) {
-      const { RESEARCH_GROUNDING_FAILED_CUSTOMER } = await import(
-        "@/services/ai-provider-preflight"
-      );
-      // Keep source list for the customer instead of hard-failing the Ask run.
+      extractionDegraded = true;
       logger.warn("Research findings had no usable source linkage — degrading to source-backed partial", {
         researchJobId: jobId,
         organisationId: organisationId,
         extractedCount: extractedFindings.length,
         phase: "GROUNDING_FAILED",
       });
-      await updateOrgScopedById(prisma.researchJob, {
-            id: jobId,
-            organisationId,
-            data: {
-          status: "PARTIAL",
-          brief: {
-            phase: "GROUNDING_FAILED",
-            evidenceGathered: true,
-            sourceCount: ranked.length,
-            extractedCount: extractedFindings.length,
-            degraded: true,
-            customerNote: RESEARCH_GROUNDING_FAILED_CUSTOMER,
-          } as unknown as Prisma.InputJsonValue,
-          totalCostCents: costCents,
-          finishedAt: new Date(),
-          userFacingError: null,
-          error: "grounding_degraded",
-        },
-          });
-      // Drop unlinked findings; continue with sources + honest summary.
+      findings = sourceBackedFindingsFromSources(ranked);
     }
 
-    for (const f of findings) {
-      const sourceId = urlToId.get(f.sourceUrl);
-      if (!sourceId) continue;
-      await prisma.researchFinding.create({
-        data: {
-          organisationId: organisationId,
-          researchJobId: jobId,
-          researchSourceId: sourceId,
-          claim: f.claim,
-          evidenceExcerpt: f.evidenceExcerpt,
-          claimKind: parseClaimKind(f.claimKind),
-          confidence: f.confidence ?? null,
-          freshnessScore: urlToFreshness.get(f.sourceUrl) ?? null,
-        },
-      });
-    }
+    const tPersistFindings0 = Date.now();
+    await Promise.all(
+      findings.map(async (f) => {
+        const sourceId = urlToId.get(f.sourceUrl);
+        if (!sourceId) return;
+        await prisma.researchFinding.create({
+          data: {
+            organisationId: organisationId,
+            researchJobId: jobId,
+            researchSourceId: sourceId,
+            claim: f.claim,
+            evidenceExcerpt: f.evidenceExcerpt,
+            claimKind: parseClaimKind(f.claimKind),
+            confidence: f.confidence ?? null,
+            freshnessScore: urlToFreshness.get(f.sourceUrl) ?? null,
+          },
+        });
+      }),
+    );
+    latency.persistMs = persistSourcesMs + (Date.now() - tPersistFindings0);
 
     const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
     const baseSummary =
-      findings.length > 0
+      findings.length > 0 && !extractionDegraded
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
-        : ranked.length > 0
-          ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
-          : "No sources were returned from the configured adapters.";
+        : findings.length > 0
+          ? `Research gathered ${ranked.length} sources on ${topic}. Structured extraction was incomplete, so the findings below quote source titles and excerpts for verification — they are not fully synthesised claims.`
+          : ranked.length > 0
+            ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
+            : "No sources were returned from the configured adapters.";
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
+    const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
 
     const output: ResearchOutput = {
       researchJobId: jobId,
@@ -688,14 +652,21 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       queries,
       sourceCount: ranked.length,
       findings,
-      sources: ranked.map((r) => ({ url: r.url, title: r.title, platform: r.platform })),
+      sources: ranked.map((r) => ({
+        url: r.url,
+        title: r.title,
+        platform: r.platform,
+        listenChannel: labelResearchListenChannel(r.platform),
+        snippet: (r.content || "").replace(/\s+/g, " ").trim().slice(0, 280) || undefined,
+        author: r.author ?? undefined,
+      })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
-      ...(ranked.length > 0 && findings.length === 0
+      ...(partialWithSources
         ? {
             phase: "PARTIAL_WITH_SOURCES",
             caveats: [
-              "Structured finding extraction did not complete — treat listed sources as leads for verification, not verified claims.",
+              "Structured finding extraction did not complete — treat listed sources and quoted excerpts as leads for verification, not verified claims.",
             ],
           }
         : {}),
@@ -705,14 +676,16 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             id: jobId,
             organisationId,
             data: {
-        status: ranked.length ? (findings.length ? "COMPLETED" : "PARTIAL") : "FAILED",
+        status: ranked.length ? (findings.length && !extractionDegraded ? "COMPLETED" : "PARTIAL") : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
         finishedAt: new Date(),
         userFacingError: ranked.length
           ? null
           : "I couldn't reach any research sources. Check that YouTube, Reddit, or web search keys are configured.",
-        error: ranked.length ? (findings.length ? null : "partial_sources_only") : "no_sources",
+        // Never persist an internal degrade code that the /research UI treats as "could not finish"
+        // when sources (or source-backed findings) were actually gathered.
+        error: ranked.length ? null : "no_sources",
       },
           });
 
@@ -726,18 +699,38 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       } catch {
         /* metering must not fail the research output */
       }
-      try {
-        await ingestResearchJobSocialContent({
-          organisationId: organisationId,
-          researchJobId: jobId,
-        });
-      } catch (error) {
-        logger.warn("Social intelligence ingest skipped after research", {
-          researchJobId: jobId,
-          message: error instanceof Error ? error.message : "unknown",
-        });
+      if (!fast && remainingMs() > 1_500) {
+        try {
+          await ingestResearchJobSocialContent({
+            organisationId: organisationId,
+            researchJobId: jobId,
+          });
+        } catch (error) {
+          logger.warn("Social intelligence ingest skipped after research", {
+            researchJobId: jobId,
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
       }
     }
+
+    logger.info("Research latency budget", {
+      jobId,
+      expandMs: latency.expandMs,
+      searchMs: latency.searchMs,
+      extractMs: latency.extractMs,
+      persistMs: latency.persistMs,
+      totalMs: Date.now() - executeStarted,
+      remainingMs: remainingMs(),
+      ceilingMs: ownCeiling,
+      depth,
+      sourceCount: ranked.length,
+      findingCount: findings.length,
+      skipLlmExtract,
+      degraded: ranked.length < 3 || extractionDegraded,
+      extractionFailed: false,
+      extractionDegraded,
+    });
 
     return { output, model, costCents };
   },

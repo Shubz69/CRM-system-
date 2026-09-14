@@ -47,9 +47,10 @@ export async function evaluateOrganisationConnectors(organisationId: string) {
   for (const def of defs) {
     if (def.providerKey === "instagram" || def.providerKey === "linkedin" || def.providerKey === "tiktok") {
       const platform = def.providerKey.toUpperCase() as "INSTAGRAM" | "LINKEDIN" | "TIKTOK";
-      const conn = social.find((s) => s.platform === platform);
+      const conn = pickSocialConnection(social, platform);
       const connectionRef = conn?.id ?? "none";
       const connectionStatus = mapSocialStatus(conn?.status, conn?.expiresAt ?? null);
+      const viaProvider = conn ? socialConnectionViaProvider(conn) : "NATIVE";
       const caps = def.capabilities.map((capability) =>
         evaluateSocialCapability({
           capability,
@@ -57,6 +58,8 @@ export async function evaluateOrganisationConnectors(organisationId: string) {
           scopes: conn?.scopes ?? [],
           required: def.requiredScopes,
           providerKey: def.providerKey,
+          viaProvider,
+          grantsPublish: conn ? connectionGrantsPublish(conn) : false,
         }),
       );
       // Public listen for IG/LI/TT is Apify — separate from OAuth.
@@ -206,6 +209,20 @@ export async function evaluateOrganisationConnectors(organisationId: string) {
     ),
   );
 
+  // Drop ghost rows from older connectionRefs (e.g. "none" AUTH_REQUIRED after
+  // a Zernio/Ayrshare SocialConnection became ACTIVE).
+  await Promise.all(
+    rows.map((row) =>
+      prisma.connectorCapabilityState.deleteMany({
+        where: {
+          organisationId,
+          providerKey: row.providerKey,
+          NOT: { connectionRef: row.connectionRef },
+        },
+      }),
+    ),
+  );
+
   return rows;
 }
 
@@ -225,12 +242,88 @@ function mapSocialStatus(
   return ConnectorConnectionStatus.DISCONNECTED;
 }
 
+export type SocialViaProvider = "ZERNIO" | "AYRSHARE" | "NATIVE";
+
+const SOCIAL_STATUS_RANK: Record<string, number> = {
+  ACTIVE: 0,
+  PENDING: 1,
+  ERROR: 2,
+  EXPIRED: 3,
+  REVOKED: 4,
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+/** Prefer an ACTIVE workspace connection over stale ERROR/EXPIRED siblings. */
+export function pickSocialConnection<
+  T extends {
+    platform: string;
+    status: string;
+    lastSyncedAt?: Date | null;
+    updatedAt?: Date;
+  },
+>(rows: T[], platform: string): T | undefined {
+  return rows
+    .filter((row) => row.platform === platform)
+    .sort((a, b) => {
+      const rankA = SOCIAL_STATUS_RANK[a.status] ?? 9;
+      const rankB = SOCIAL_STATUS_RANK[b.status] ?? 9;
+      if (rankA !== rankB) return rankA - rankB;
+      const timeA = (a.lastSyncedAt ?? a.updatedAt)?.getTime() ?? 0;
+      const timeB = (b.lastSyncedAt ?? b.updatedAt)?.getTime() ?? 0;
+      return timeB - timeA;
+    })[0];
+}
+
+export function socialConnectionViaProvider(conn: {
+  externalAccountId?: string | null;
+  scopes?: string[] | null;
+  metadata?: unknown;
+}): SocialViaProvider {
+  const meta = asRecord(conn.metadata);
+  const provider = typeof meta?.provider === "string" ? meta.provider.toUpperCase() : "";
+  const external = conn.externalAccountId ?? "";
+  const scopes = conn.scopes ?? [];
+  if (
+    provider === "ZERNIO" ||
+    external.startsWith("zernio:") ||
+    scopes.some((scope) => scope.startsWith("zernio:")) ||
+    typeof meta?.zernioAccountId === "string"
+  ) {
+    return "ZERNIO";
+  }
+  if (
+    provider === "AYRSHARE" ||
+    external.startsWith("ayrshare:") ||
+    scopes.some((scope) => scope.startsWith("ayrshare:"))
+  ) {
+    return "AYRSHARE";
+  }
+  return "NATIVE";
+}
+
+export function connectionGrantsPublish(conn: {
+  scopes?: string[] | null;
+  capabilities?: unknown;
+}): boolean {
+  const caps = asRecord(conn.capabilities);
+  if (caps?.publish === true) return true;
+  return (conn.scopes ?? []).some((scope) =>
+    /publish|w_member_social|instagram_business_content_publish|video\.publish/i.test(scope),
+  );
+}
+
 function evaluateSocialCapability(input: {
   capability: ConnectorCapability;
   connectionStatus: ConnectorConnectionStatus;
   scopes: string[];
   required: string[];
   providerKey: string;
+  viaProvider: SocialViaProvider;
+  grantsPublish: boolean;
 }): {
   capability: string;
   status: ConnectorCapabilityStatus;
@@ -238,7 +331,8 @@ function evaluateSocialCapability(input: {
   missingScopes: string[];
   detail?: string;
 } {
-  const { capability, connectionStatus, scopes, required, providerKey } = input;
+  const { capability, connectionStatus, scopes, required, providerKey, viaProvider, grantsPublish } =
+    input;
   if (capability === "READ_PUBLIC_CONTENT") {
     return {
       capability,
@@ -267,13 +361,22 @@ function evaluateSocialCapability(input: {
     };
   }
   if (capability === "PUBLISH") {
+    if (viaProvider !== "NATIVE" && grantsPublish && connectionStatus === ConnectorConnectionStatus.CONNECTED) {
+      return {
+        capability,
+        status: ConnectorCapabilityStatus.CONNECTED,
+        provenance: `SocialConnection ACTIVE via ${viaProvider} (publish granted)`,
+        missingScopes: [],
+        detail: `Native ${providerKey} OAuth scopes are not required when publish is granted by ${viaProvider}.`,
+      };
+    }
     const missing = required.filter((s) => !scopes.includes(s) && !scopes.some((g) => g.includes(s)));
-    // Soft check — providers often use opaque scope strings.
+    // Soft check — native providers often use opaque scope strings.
     if (scopes.length === 0) {
       return {
         capability,
         status: ConnectorCapabilityStatus.SCOPE_REQUIRED,
-        provenance: "connection present but scopes empty",
+        provenance: "native connection present but scopes empty",
         missingScopes: required,
       };
     }
@@ -281,7 +384,7 @@ function evaluateSocialCapability(input: {
       return {
         capability,
         status: ConnectorCapabilityStatus.SCOPE_REQUIRED,
-        provenance: "granted scopes recorded on connection",
+        provenance: "granted native LinkedIn scopes recorded on connection",
         missingScopes: missing.length ? missing : ["w_member_social"],
       };
     }

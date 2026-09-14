@@ -184,6 +184,9 @@ export async function syncPublishTargetsFromConnectedAccounts(
     }
   }
 
+  const { evaluateOrganisationConnectors } = await import("@/services/connectors/capabilities");
+  await evaluateOrganisationConnectors(organisationId).catch(() => undefined);
+
   return prisma.socialConnection.findMany({
     where: {
       organisationId,

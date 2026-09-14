@@ -6,6 +6,7 @@ export {
   extractCanonicalGroundedClaims,
   toScoreResearchClaims,
   countLinkedGroundedClaims,
+  mergeResearchEvidence,
 } from "./grounded-claims";
 export type { CanonicalGroundedClaim } from "./grounded-claims";
 export type {

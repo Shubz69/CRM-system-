@@ -258,7 +258,10 @@ export function createApifySourceAdapter(config: ApifyPlatformConfig): SourceAda
       });
       const limit = clampApifyMaxItems(progressiveLimit, config.hardMaxItems);
 
-      const timeoutMs = resolveTimeoutMs(config);
+      const timeoutMs =
+        options.timeoutMs && options.timeoutMs > 0
+          ? Math.min(resolveTimeoutMs(config), options.timeoutMs)
+          : resolveTimeoutMs(config);
       const build = config.build;
 
       const cacheKey = hashSourceQuery({

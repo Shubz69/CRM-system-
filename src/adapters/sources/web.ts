@@ -44,8 +44,20 @@ export function isWebProviderAvailabilityFailure(error: unknown): boolean {
   if (/usage limit|quota|rate limit|plan'?s set usage|insufficient credits|payment required/i.test(msg)) {
     return true;
   }
-  if (/failed \(\d{3}\)|econnreset|etimedout|fetch failed|network/i.test(msg)) return true;
+  if (/failed \(\d{3}\)|econnreset|etimedout|fetch failed|network|aborted|timeout|abort/i.test(msg)) {
+    return true;
+  }
   return false;
+}
+
+function abortSignalFor(timeoutMs?: number): AbortSignal | undefined {
+  if (!timeoutMs || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return undefined;
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
 }
 
 function toCustomerSafeWebError(error: unknown): Error {
@@ -103,6 +115,7 @@ async function searchTavily(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: abortSignalFor(options.timeoutMs),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -161,6 +174,7 @@ async function searchExa(
       "x-api-key": apiKey,
     },
     body: JSON.stringify(body),
+    signal: abortSignalFor(options.timeoutMs),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -253,8 +267,11 @@ export async function searchWebWithFallback(
       return results;
     } catch (error) {
       lastError = error;
+      // FAST path: one provider attempt only — Exa fallback doubled hung searches.
       const canFallback =
-        i < order.length - 1 && isWebProviderAvailabilityFailure(error);
+        options.qualityBudget !== "FAST" &&
+        i < order.length - 1 &&
+        isWebProviderAvailabilityFailure(error);
       logger.warn("Web search provider attempt failed", {
         organisationId: options.organisationId,
         attempt: i,

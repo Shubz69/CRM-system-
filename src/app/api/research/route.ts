@@ -4,6 +4,7 @@ import { ResearchJobKind, ResearchJobStatus } from "@prisma/client";
 import { z } from "zod";
 import { requirePermission, jsonError } from "@/lib/session";
 import { prisma } from "@/lib/db";
+import { labelResearchListenChannel } from "@/lib/research-listen-platforms";
 
 /**
  * GET /api/research — list ResearchJob rows with findings, sources, critic flags.
@@ -27,6 +28,8 @@ export async function GET() {
                 url: true,
                 title: true,
                 platform: true,
+                author: true,
+                content: true,
                 freshnessScore: true,
                 publishedAt: true,
                 retrievedAt: true,
@@ -46,6 +49,7 @@ export async function GET() {
             publishedAt: true,
             retrievedAt: true,
             author: true,
+            content: true,
           },
         },
       },
@@ -106,9 +110,26 @@ export async function GET() {
           verifiedByCritic: f.verifiedByCritic,
           flaggedUnsupported: f.flaggedUnsupported,
           flaggedUngrounded: f.flaggedUngrounded,
-          source: f.source,
+          sourceUrl: f.source?.url ?? null,
+          sourcePlatform: f.source?.platform ?? null,
+          listenChannel: labelResearchListenChannel(f.source?.platform) ?? null,
+          source: f.source
+            ? {
+                ...f.source,
+                listenChannel: labelResearchListenChannel(f.source.platform) ?? null,
+                snippet: f.source.content
+                  ? f.source.content.replace(/\s+/g, " ").trim().slice(0, 280)
+                  : null,
+                content: undefined,
+              }
+            : null,
         })),
-        sources: job.sources,
+        sources: job.sources.map((s) => ({
+          ...s,
+          listenChannel: labelResearchListenChannel(s.platform) ?? null,
+          snippet: s.content ? s.content.replace(/\s+/g, " ").trim().slice(0, 280) : null,
+          content: undefined,
+        })),
         qualityAssessment: byJob.get(job.id) ?? null,
       })),
     });

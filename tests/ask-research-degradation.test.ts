@@ -28,13 +28,16 @@ vi.mock("@/services/research-tool-calls", () => ({
   recordResearchToolCall: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@/services/research-evidence", () => ({
-  parseClaimKind: (v: string) => v || "UNKNOWN",
-  persistResearchSourceWithSnapshot: vi.fn().mockImplementation(async (input: { url: string }) => ({
-    sourceId: `src-${input.url.length}`,
-    freshnessScore: 0.5,
-  })),
-}));
+vi.mock("@/services/research-evidence", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/research-evidence")>();
+  return {
+    ...actual,
+    persistResearchSourceWithSnapshot: vi.fn().mockImplementation(async (input: { url: string }) => ({
+      sourceId: `src-${input.url.length}`,
+      freshnessScore: 0.5,
+    })),
+  };
+});
 
 vi.mock("@/services/social-intelligence", () => ({
   ingestResearchJobSocialContent: vi.fn().mockResolvedValue(undefined),
@@ -134,17 +137,117 @@ describe("Ask/Research degradation + privacy", () => {
 
     expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
     expect(result.output.sourceCount).toBe(1);
-    expect(result.output.findings).toEqual([]);
-    expect(result.output.summary).toMatch(/structured evidence extraction was incomplete/i);
+    expect(result.output.findings.length).toBeGreaterThan(0);
+    expect(result.output.findings[0]?.sourceUrl).toBe("https://example.com/a");
+    expect(result.output.findings[0]?.claim).toMatch(/example\.com\/a|Evidence about UK SME/i);
+    expect(result.output.summary).toMatch(/sources on/i);
+    expect(prisma.researchFinding.create).toHaveBeenCalled();
     expect(prisma.researchJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "job-1" },
         data: expect.objectContaining({
           status: "PARTIAL",
-          error: expect.stringMatching(/structured_extraction_degraded|partial_sources_only/),
+          error: null,
+          userFacingError: null,
         }),
       }),
     );
+  });
+
+  it("FAST research quotes sources without waiting on extract LLM", async () => {
+    searchConfiguredSources.mockResolvedValue({
+      results: [
+        {
+          url: "https://hire.example/rates",
+          title: "UK plant hire day rates",
+          platform: "web",
+          content: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+          author: null,
+          publishedAt: null,
+          engagement: null,
+          rawMetadata: {},
+        },
+      ],
+      errors: [],
+      billableCents: 3,
+    });
+
+    const result = await researchAgent.execute(
+      { topic: "UK plant hire pricing", depth: "FAST" },
+      {
+        organisationId: "org-qa",
+        agentRunId: "run-fast",
+        agentStepId: "step-1",
+      },
+    );
+
+    expect(completeStructured).not.toHaveBeenCalled();
+    expect(completeStructuredSafe).not.toHaveBeenCalled();
+    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
+    expect(result.output.findings.length).toBeGreaterThan(0);
+    expect(result.output.findings[0]?.sourceUrl).toBe("https://hire.example/rates");
+  });
+
+  it("research uses source-backed findings when extract returns an empty pack", async () => {
+    searchConfiguredSources.mockResolvedValue({
+      results: [
+        {
+          url: "https://hire.example/rates",
+          title: "UK plant hire day rates",
+          platform: "web",
+          content: "A 3-tonne excavator typically hires from £120 per day in the UK.",
+          author: null,
+          publishedAt: null,
+          engagement: null,
+          rawMetadata: {},
+        },
+      ],
+      errors: [],
+      billableCents: 3,
+    });
+    completeStructured.mockResolvedValueOnce({
+      queries: ["UK plant hire pricing", "excavator day rates UK"],
+    });
+    completeStructuredSafe.mockResolvedValueOnce({
+      ok: true,
+      data: { findings: [] },
+    });
+
+    const result = await researchAgent.execute(
+      { topic: "UK plant hire pricing" },
+      {
+        organisationId: "org-qa",
+        agentRunId: "run-2",
+        agentStepId: "step-1",
+      },
+    );
+
+    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
+    expect(result.output.findings.length).toBeGreaterThan(0);
+    expect(result.output.findings[0]?.sourceUrl).toBe("https://hire.example/rates");
+    expect(result.output.findings[0]?.claim).toMatch(/£120|plant hire/i);
+    expect(prisma.researchFinding.create).toHaveBeenCalled();
+  });
+
+  it("salvages valid findings when the extract pack mixes good and invalid items", async () => {
+    const { salvageExtractedFindings, findingsExtractSchema } = await import("@/agents/research");
+    const mixed = {
+      findings: [
+        {
+          claim: "UK plant-hire day rates are published by hire houses.",
+          sourceUrl: "https://example.com/a",
+          evidenceExcerpt: "day rates are published",
+        },
+        { claim: "", sourceUrl: "https://example.com/b" },
+        { claim: "Bad url item", sourceUrl: "not-a-url" },
+      ],
+    };
+    expect(salvageExtractedFindings(mixed)).toHaveLength(1);
+    const parsed = findingsExtractSchema.safeParse(mixed);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.findings).toHaveLength(1);
+    expect(parsed.data.findings[0]?.sourceUrl).toBe("https://example.com/a");
   });
 
   it("analyst falls back to findings when brief schema fails", async () => {

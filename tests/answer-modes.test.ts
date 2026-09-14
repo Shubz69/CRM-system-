@@ -62,6 +62,12 @@ describe("answer mode schemas", () => {
     expect(answerModeOutputSchema.parse(executive).mode).toBe("executive");
     expect(answerModeOutputSchema.parse(action).mode).toBe("action");
     expect(answerModeOutputSchema.parse(deep).mode).toBe("deep");
+    expect(quick?.findings?.[0]?.sourceUrl).toBe("https://example.com/a");
+    expect(quick?.sources?.[0]?.url).toBe("https://example.com/a");
+    expect(executive?.findings?.[0]?.sourceUrl).toBe("https://example.com/a");
+    expect(action?.sources?.[0]?.url).toBe("https://example.com/a");
+    expect(action?.actions[0]?.sourceUrl).toBe("https://example.com/a");
+    expect(deep?.findings?.[0]?.sourceUrl).toBe("https://example.com/a");
   });
 });
 

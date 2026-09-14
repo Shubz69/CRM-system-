@@ -59,6 +59,18 @@ export default async function AdminHealthPage() {
     where: { status: "PROCESSED" },
     orderBy: { processedAt: "desc" },
   });
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const zernioWebhookCounts = await prisma.webhookEvent.groupBy({
+    by: ["status"],
+    where: { provider: "ZERNIO", createdAt: { gte: weekAgo } },
+    _count: { _all: true },
+  });
+  const zernioWebhookSummary = zernioWebhookCounts
+    .map((row) => `${row.status} ${row._count._all}`)
+    .join(", ");
+  const placeholderChannels = await prisma.messagingChannel.count({
+    where: { instagramUsername: "demo_account" },
+  });
 
   function statusFor(opts: {
     configured: boolean;
@@ -170,29 +182,42 @@ export default async function AdminHealthPage() {
         : "APIFY_TOKEN missing — those research sources throw a clear not-configured error, never fake data",
     },
     {
-      name: "Instagram (connect/publish)",
+      name: "Zernio (workspace social)",
+      status: env.ZERNIO_API_KEY
+        ? env.ZERNIO_WEBHOOK_SECRET
+          ? "Operational"
+          : "Degraded"
+        : "Not Configured",
+      summary: env.ZERNIO_API_KEY
+        ? env.ZERNIO_WEBHOOK_SECRET
+          ? `Workspace Instagram/LinkedIn/YouTube connect + publish go through Zernio. Native OAuth rows below are a separate path.${zernioWebhookSummary ? ` Last 7d webhooks: ${zernioWebhookSummary}.` : ""}${placeholderChannels ? ` ${placeholderChannels} MessagingChannel row(s) still have placeholder handle demo_account — not the live @handle.` : ""}`
+          : "ZERNIO_API_KEY present but ZERNIO_WEBHOOK_SECRET missing — webhooks fail closed. Connect/publish can still work."
+        : "ZERNIO_API_KEY missing — workspace Social Accounts connect is unavailable.",
+    },
+    {
+      name: "Instagram native OAuth",
       status:
         env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
           ? "Operational"
           : "Not Configured",
       summary:
         env.INSTAGRAM_APP_ID && env.INSTAGRAM_APP_SECRET && env.INSTAGRAM_REDIRECT_URI
-          ? "Meta App credentials set — org OAuth connect + publish available"
-          : "INSTAGRAM_APP_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above.",
+          ? "Meta App credentials set — optional native Graph connect/publish. Independent of Zernio workspace connections."
+          : "Native OAuth missing INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, INSTAGRAM_REDIRECT_URI. Workspace Instagram may still be Connected via Zernio. Listening uses Apify above.",
     },
     {
-      name: "LinkedIn (connect/publish)",
+      name: "LinkedIn native OAuth",
       status:
         env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
           ? "Operational"
           : "Not Configured",
       summary:
         env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET && env.LINKEDIN_REDIRECT_URI
-          ? "LinkedIn app credentials set — personal-profile OAuth connect + publish available. Messaging is not supported on any platform (no compliant API)."
-          : "LINKEDIN_CLIENT_ID/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported on any platform (no compliant API).",
+          ? "LinkedIn app credentials set — optional native personal-profile OAuth. Independent of Zernio. Messaging is not supported (no compliant API)."
+          : "Native OAuth missing LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_REDIRECT_URI. Workspace LinkedIn may still be Connected via Zernio. Listening uses Apify above. Messaging is not supported (no compliant API).",
     },
     {
-      name: "TikTok (connect/publish)",
+      name: "TikTok native OAuth",
       status:
         env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
           ? "Operational"
@@ -200,7 +225,7 @@ export default async function AdminHealthPage() {
       summary:
         env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_REDIRECT_URI
           ? "TikTok for Developers credentials set — Content Posting API connect + publish available. Messaging is not supported (no official API)."
-          : "TIKTOK_CLIENT_KEY/SECRET/REDIRECT_URI missing — see docs/SOCIAL_CONNECTIONS.md. Listening still works via Apify above. Messaging is not supported (no official API).",
+          : "Native OAuth missing TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI — Integrations will not show a TikTok Connect button until these are set. Public listen uses Apify above. Messaging is not supported (no official API).",
     },
     {
       name: "ManyChat",
@@ -213,7 +238,7 @@ export default async function AdminHealthPage() {
             : "Error",
       summary:
         messaging.name === "manychat"
-          ? "Live adapter selected"
+          ? "Live ManyChat send adapter selected — not Zernio workspace connect, and not proof inbound webhooks succeed. WEBHOOK_RECEIVE stays AUTH_REQUIRED until the org webhook secret is set. Zernio IGNORED/FAILED events are a separate inbox path."
           : messaging.name === "mock"
             ? "Mock adapter (non-production only)"
             : "Not configured — production will not send",
@@ -238,7 +263,15 @@ export default async function AdminHealthPage() {
       lastFailure: lastFailure?.error,
       lastSuccess: lastWebhookOk?.processedAt?.toISOString(),
       summary: redis.ok
-        ? `Redis reachable · queues: follow-ups, agent-runs, maintenance · ${failedJobs} open failures`
+        ? `Redis reachable · queues: follow-ups, agent-runs, maintenance · ${failedJobs} open failures${
+            lastFailure?.error
+              ? ` · latest: ${lastFailure.error.slice(0, 180)}${
+                  /prisma/i.test(lastFailure.error)
+                    ? " (Prisma — research worker persist/query can fail even when Redis is up)"
+                    : ""
+                }`
+              : ""
+          }`
         : runtime === "production"
           ? `Redis REQUIRED and unavailable — worker/long jobs will fail · ${failedJobs} open failures`
           : `Redis unavailable — in-process follow-up fallback only (agent-runs + maintenance inactive) · ${failedJobs} open failures`,

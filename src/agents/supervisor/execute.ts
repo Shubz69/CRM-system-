@@ -27,16 +27,20 @@ import {
 import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
 import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
-import { scoreResearchQuality } from "@/services/research-quality";
+import { customerQualitySummary, scoreResearchQuality } from "@/services/research-quality";
 import {
   extractCanonicalGroundedClaims,
+  mergeResearchEvidence,
   toScoreResearchClaims,
 } from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
+import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
 import {
   isResearchEvidenceAgent,
+  isResearchPlanStepName,
   looksLikeResearchOutput,
   remainingWallClockMs,
+  researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
 } from "@/agents/supervisor/research-deadline";
 
@@ -267,7 +271,7 @@ export async function executeAgentRun(input: {
 
   const limits = await loadLimits(input.organisationId);
   const maxSteps = run.maxSteps || limits.maxSteps;
-  const maxWallClockSeconds = run.maxWallClockSeconds || limits.maxWallClockSeconds;
+  let maxWallClockSeconds = run.maxWallClockSeconds || limits.maxWallClockSeconds;
   const maxSpendCents =
     run.maxSpendCents ?? limits.maxSpendCentsPerRun ?? null;
 
@@ -511,6 +515,13 @@ export async function executeAgentRun(input: {
   latencyTrace.governorMs = Date.now() - tGov0;
 
   const stepsToRun = plan.steps.slice(0, governedMaxSteps);
+  if (stepsToRun.some((s) => isResearchPlanStepName(s.agentName))) {
+    maxWallClockSeconds = Math.min(
+      maxWallClockSeconds,
+      researchWallClockCapSeconds(run.answerMode),
+    );
+    latencyTrace.researchCeilingSec = maxWallClockSeconds;
+  }
   const stepOutputs: Array<{ agentName: string; userFacingLabel: string; output: unknown }> =
     [];
   let totalCostCents = run.totalCostCents || 0;
@@ -960,6 +971,7 @@ export async function executeAgentRun(input: {
         knowledgeDocumentTitles,
         knowledgeRetrievalMode,
         episodicContext,
+        deadlineAt: startedAt.getTime() + maxWallClockSeconds * 1000,
       });
 
       const durationMs = Date.now() - stepStarted;
@@ -1296,6 +1308,14 @@ async function finalizeModeOutput(input: {
     }
   }
 
+  // QUICK / EXECUTIVE / ACTION shapers used to drop sources/findings.
+  // Carry evidence from raw, then normalise so every research payload has
+  // linked findings + source cards (URL, snippet/title/author).
+  if (input.raw && base && base !== input.raw) {
+    base = mergeResearchEvidence(base, input.raw);
+  }
+  base = attachVisibleResearchEvidence(base);
+
   // Shape builders omit deadline metadata — preserve mandatory quality flags.
   if (
     input.raw &&
@@ -1316,7 +1336,8 @@ async function finalizeModeOutput(input: {
       (raw.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
         raw.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
         raw.phase === "QUALITY_SCORING_FAILED" ||
-        raw.phase === "ANALYST_ENRICHMENT_FAILED")
+        raw.phase === "ANALYST_ENRICHMENT_FAILED" ||
+        raw.phase === "PARTIAL_WITH_SOURCES")
     ) {
       out.phase = raw.phase;
     }
@@ -1419,10 +1440,7 @@ function attachResearchQualityIfApplicable(input: {
     const withQuality: Record<string, unknown> = {
       ...obj,
       researchQuality: report,
-      researchQualitySummary:
-        report.overall === 0 && !report.accepted
-          ? "Quality gate failed — not enough verifiable evidence to score."
-          : `Research quality: ${report.overall}% · ${report.confidenceLabel}`,
+      researchQualitySummary: customerQualitySummary(report),
       groundedClaimCount: grounded.length,
       ...(analystEnrichmentFailed
         ? { analystEnrichmentFailed: true }
@@ -1436,7 +1454,8 @@ function attachResearchQualityIfApplicable(input: {
     if (
       obj.phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
       obj.phase === "GROUNDED_QUALITY_BEFORE_OPTIONAL_ENRICHMENT" ||
-      obj.phase === "QUALITY_SCORING_FAILED"
+      obj.phase === "QUALITY_SCORING_FAILED" ||
+      obj.phase === "PARTIAL_WITH_SOURCES"
     ) {
       withQuality.phase = obj.phase;
     } else if (analystEnrichmentFailed) {

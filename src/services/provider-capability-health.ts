@@ -144,21 +144,33 @@ export function getPublicProviderCapabilityHealth(): {
     liveConnectionAware: false,
   });
 
-  const socialPublish: Array<{ id: string; label: string; ok: boolean }> = [
+  const socialPublish: Array<{ id: string; label: string; ok: boolean; missing: string }> = [
     {
       id: "social_instagram_publish",
-      label: "Instagram publish (Graph)",
-      ok: envConfigured(env.INSTAGRAM_APP_ID) && envConfigured(env.INSTAGRAM_APP_SECRET),
+      label: "Instagram native OAuth (Graph)",
+      ok:
+        envConfigured(env.INSTAGRAM_APP_ID) &&
+        envConfigured(env.INSTAGRAM_APP_SECRET) &&
+        envConfigured(env.INSTAGRAM_REDIRECT_URI),
+      missing: "INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, INSTAGRAM_REDIRECT_URI",
     },
     {
       id: "social_linkedin",
-      label: "LinkedIn",
-      ok: envConfigured(env.LINKEDIN_CLIENT_ID) && envConfigured(env.LINKEDIN_CLIENT_SECRET),
+      label: "LinkedIn native OAuth",
+      ok:
+        envConfigured(env.LINKEDIN_CLIENT_ID) &&
+        envConfigured(env.LINKEDIN_CLIENT_SECRET) &&
+        envConfigured(env.LINKEDIN_REDIRECT_URI),
+      missing: "LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_REDIRECT_URI",
     },
     {
       id: "social_tiktok",
-      label: "TikTok",
-      ok: envConfigured(env.TIKTOK_CLIENT_KEY) && envConfigured(env.TIKTOK_CLIENT_SECRET),
+      label: "TikTok native OAuth",
+      ok:
+        envConfigured(env.TIKTOK_CLIENT_KEY) &&
+        envConfigured(env.TIKTOK_CLIENT_SECRET) &&
+        envConfigured(env.TIKTOK_REDIRECT_URI),
+      missing: "TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI",
     },
   ];
   for (const s of socialPublish) {
@@ -166,7 +178,9 @@ export function getPublicProviderCapabilityHealth(): {
       id: s.id,
       label: s.label,
       status: s.ok ? "CONFIGURED" : "NOT_CONFIGURED",
-      detail: "App credentials only — tenant OAuth CONNECTED is per SocialConnection",
+      detail: s.ok
+        ? "Native app credentials present — workspace CONNECTED is still per SocialConnection. Zernio/Ayrshare connections are independent of this row."
+        : `Native OAuth not configured (missing ${s.missing}). Workspace accounts may still be CONNECTED via Zernio/Ayrshare.`,
       liveConnectionAware: false,
     });
   }
@@ -177,6 +191,7 @@ export function getPublicProviderCapabilityHealth(): {
       "Public health reports env/app configuration presence only.",
       "CONNECTED / DEGRADED / REAUTH_REQUIRED / DISCONNECTED require authenticated org-scoped integration checks.",
       "Optional providers (Meta Instagram, Apify, social publish) must never appear as globally mandatory.",
+      "Native OAuth NOT_CONFIGURED does not mean Zernio/Ayrshare workspace accounts are disconnected.",
     ],
   };
 }

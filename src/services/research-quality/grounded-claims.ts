@@ -156,3 +156,47 @@ export function countLinkedGroundedClaims(claims: CanonicalGroundedClaim[]): num
   return claims.filter((c) => c.supportStatus === "grounded" || c.supportStatus === "partial")
     .length;
 }
+
+const CARRIED_EVIDENCE_KEYS = [
+  "sources",
+  "findings",
+  "claims",
+  "contentHooks",
+  "viralExamples",
+  "algorithmNotes",
+  "nextBigThings",
+  "gaps",
+  "contradictions",
+  "researchJobId",
+  "summary",
+  "shortAnswer",
+  "brief",
+  "phase",
+  "caveats",
+  "sourceCount",
+] as const;
+
+function isEmptyEvidenceValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "string") return value.trim().length === 0;
+  return false;
+}
+
+/**
+ * Mode shapers (QUICK / EXECUTIVE / ACTION) drop sources, findings, and hooks.
+ * Copy evidence from the raw research/analyst output onto the shaped object so
+ * RQS and the Ask UI still see source-backed claims.
+ */
+export function mergeResearchEvidence(display: unknown, evidence: unknown): unknown {
+  if (!display || typeof display !== "object" || Array.isArray(display)) return evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return display;
+  const out = { ...(display as Record<string, unknown>) };
+  const ev = evidence as Record<string, unknown>;
+  for (const key of CARRIED_EVIDENCE_KEYS) {
+    if (isEmptyEvidenceValue(out[key]) && !isEmptyEvidenceValue(ev[key])) {
+      out[key] = ev[key];
+    }
+  }
+  return out;
+}

@@ -1,9 +1,14 @@
 /**
  * Deadline-aware budgeting for research pipelines.
  *
- * Mandatory path: retrieval → synthesis → extraction → grounding → RQS attach.
- * Optional: analyst / critic enrichment — skipped when remaining wall-clock
- * cannot safely cover them without starving RQS persistence.
+ * Product latency (2026-09-14):
+ * - Quick Ask research: a few seconds (hard cap RESEARCH_QUICK_CEILING_MS).
+ * - Even hard/Deep queries: finish or PARTIAL within RESEARCH_HARD_CEILING_MS (~30s).
+ * - Prefer source-backed PARTIAL over long empty waits / extra LLM passes.
+ *
+ * Mandatory path: retrieval → (optional extract) → grounding → RQS attach.
+ * Optional: analyst / critic — skipped when remaining wall-clock cannot
+ * cover them without blowing the ceiling.
  */
 
 /** Agents that enrich narrative after grounded research + RQS. */
@@ -12,14 +17,48 @@ export const OPTIONAL_RESEARCH_ENRICHMENT_AGENTS = new Set(["analyst", "critic"]
 /** Agents that produce grounded research evidence eligible for early RQS. */
 export const RESEARCH_EVIDENCE_AGENTS = new Set(["research", "social_listening"]);
 
-/** Safe budget to start optional analyst enrichment (ms). */
-export const ANALYST_SAFE_BUDGET_MS = 90_000;
+/**
+ * Quick research hard cap (ms). Search + persist + source-backed findings only.
+ * No query-expand LLM, no extract LLM, no analyst/critic.
+ */
+export const RESEARCH_QUICK_CEILING_MS = 8_000;
 
-/** Safe budget to start optional critic verification (ms). */
-export const CRITIC_SAFE_BUDGET_MS = 45_000;
+/**
+ * Even Deep/hard Ask research must PARTIAL or complete within this execute budget.
+ * Supervisor wall-clock for research plans is aligned (see researchWallClockCapSeconds).
+ */
+export const RESEARCH_HARD_CEILING_MS = 30_000;
+
+/** Per-adapter source fetch timeout (ms). Unbounded Tavily/Apify waits are not allowed. */
+export const RESEARCH_SOURCE_FETCH_MS = {
+  FAST: 3_500,
+  STANDARD: 6_000,
+  DEEP: 7_000,
+} as const;
+
+/** Skip structured extract LLM when remaining time is below this. */
+export const RESEARCH_EXTRACT_MIN_MS = 5_000;
+
+export const RESEARCH_QUERY_CAP = {
+  FAST: 2,
+  STANDARD: 3,
+  DEEP: 4,
+} as const;
+
+export const RESEARCH_SOURCE_CAP = {
+  FAST: 5,
+  STANDARD: 8,
+  DEEP: 10,
+} as const;
+
+/** Only start analyst when at least this much time remains (plus RQS reserve). */
+export const ANALYST_SAFE_BUDGET_MS = 10_000;
+
+/** Critic is last-mile and almost never fits a 30s ceiling. */
+export const CRITIC_SAFE_BUDGET_MS = 8_000;
 
 /** Reserve for finalize / RQS attach / persistence after optional work. */
-export const RQS_RESERVE_MS = 5_000;
+export const RQS_RESERVE_MS = 2_000;
 
 export function remainingWallClockMs(input: {
   startedAt: Date;
@@ -67,4 +106,32 @@ export function looksLikeResearchOutput(output: unknown): boolean {
     typeof obj.executiveSummary === "string" ||
     obj.researchQuality != null
   );
+}
+
+/** Supervisor wall-clock cap (seconds) for research / social-listening plans. */
+export function researchWallClockCapSeconds(answerMode: string | null | undefined): number {
+  return answerMode === "QUICK" ? Math.ceil(RESEARCH_QUICK_CEILING_MS / 1000) + 4 : 30;
+}
+
+export function isResearchPlanStepName(agentName: string): boolean {
+  return RESEARCH_EVIDENCE_AGENTS.has(agentName);
+}
+
+export async function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => T,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return onTimeout();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(onTimeout()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

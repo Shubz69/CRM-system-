@@ -10,12 +10,19 @@ import { PageShell } from "@/components/ui/page-shell";
 import { PageLoading } from "@/components/ui/page-state";
 import { statusLabel } from "@/lib/customer-labels";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import {
+  ResearchFindingCards,
+  ResearchSourceCards,
+} from "@/components/research/evidence-cards";
 
 type Source = {
   id: string;
   url: string;
   title: string | null;
   platform: string;
+  listenChannel?: string | null;
+  snippet?: string | null;
+  author?: string | null;
   freshnessScore: number | null;
   publishedAt: string | null;
   retrievedAt: string;
@@ -218,7 +225,7 @@ export default function ResearchPage() {
                 <span className="meta">{new Date(job.createdAt).toLocaleString()}</span>
               </div>
 
-              {(job.error || job.userFacingError) && (
+              {(job.status === "FAILED" || job.userFacingError) && (
                 <p className="text-sm text-[var(--danger)]">
                   {job.userFacingError || "Research could not finish. Try again from Ask."}
                 </p>
@@ -226,47 +233,45 @@ export default function ResearchPage() {
 
               {job.findings.length > 0 ? (
                 <div>
-                  <h4 className="card-title">Key findings</h4>
-                  <ul className="mt-2 space-y-2 text-sm">
-                    {job.findings.slice(0, 8).map((f) => (
-                      <li key={f.id} className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
-                        <p className="text-[var(--foreground)]">{f.claim}</p>
-                        {f.evidenceExcerpt ? (
-                          <p className="meta mt-1 leading-relaxed">{f.evidenceExcerpt}</p>
-                        ) : null}
-                        {f.flaggedUnsupported || f.flaggedUngrounded ? (
-                          <span className="badge badge-warn mt-2">Needs review</span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
+                  {job.status === "PARTIAL" ? (
+                    <p className="meta mb-2">
+                      Partial result — quotes from collected sources; treat as leads, not verified claims.
+                    </p>
+                  ) : null}
+                  <ResearchFindingCards
+                    findings={job.findings.slice(0, 8).map((f) => ({
+                      claim: f.claim,
+                      sourceUrl: f.source?.url,
+                      evidenceExcerpt: f.evidenceExcerpt ?? undefined,
+                      sourceTitle: f.source?.title ?? undefined,
+                      sourcePlatform: f.source?.listenChannel ?? f.source?.platform,
+                    }))}
+                  />
+                  {job.findings.some((f) => f.flaggedUnsupported || f.flaggedUngrounded) ? (
+                    <p className="meta mt-2">Some findings need review — open the source URL before acting.</p>
+                  ) : null}
                 </div>
+              ) : job.sources.length > 0 ? (
+                <p className="text-sm text-[var(--muted)]">
+                  Structured findings were incomplete — sources gathered for this job are listed
+                  below as leads for verification, not verified claims.
+                </p>
               ) : (
                 <p className="text-sm text-[var(--muted)]">
-                  No findings yet — run Research with Ask to populate sources.
+                  No sources yet — run Research with Ask to gather evidence.
                 </p>
               )}
 
               {job.sources.length > 0 ? (
-                <details>
-                  <summary className="cursor-pointer text-sm font-medium">
-                    Sources ({job.sources.length})
-                  </summary>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
-                    {job.sources.map((s) => (
-                      <li key={s.id}>
-                        <a
-                          className="underline underline-offset-2"
-                          href={s.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {s.title || s.url}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
+                <ResearchSourceCards
+                  sources={job.sources.map((s) => ({
+                    url: s.url,
+                    title: s.title ?? undefined,
+                    snippet: s.snippet ?? undefined,
+                    author: s.author ?? undefined,
+                    platform: s.listenChannel ?? s.platform,
+                  }))}
+                />
               ) : null}
 
               {job.qualityAssessment ? (

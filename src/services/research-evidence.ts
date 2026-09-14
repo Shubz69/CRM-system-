@@ -198,3 +198,14 @@ export async function persistResearchSourceWithSnapshot(input: {
 
   return { sourceId: source.id, snapshotId: snapshot.id, freshnessScore };
 }
+
+export {
+  attachVisibleResearchEvidence,
+  normalizeVisibleFindings,
+  normalizeVisibleSources,
+  sourceBackedFindingsFromSources,
+  type SourceBackedFinding,
+  type VisibleFinding,
+  type VisibleSource,
+} from "@/lib/research-visible-evidence";
+

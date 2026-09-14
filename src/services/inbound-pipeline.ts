@@ -50,6 +50,10 @@ import {
   runUnderstandingShadow,
 } from "@/services/messaging/understanding";
 import { NotificationType } from "@prisma/client";
+import {
+  messagingChannelDisplayName,
+  resolveChannelInstagramUsername,
+} from "@/services/messaging/channel-identity";
 
 function mapQualificationStatus(status: string): QualificationStatus {
   switch (status) {
@@ -198,19 +202,27 @@ export async function processInboundMessage(
         },
       });
 
+      const inboundHandle = resolveChannelInstagramUsername({
+        contactUsername: input.contact.instagramUsername,
+      });
+
       if (!channel) {
         channel = await tx.messagingChannel.create({
           data: {
             organisationId: input.organisationId,
             provider: messagingProvider,
             externalId: input.channelExternalId ?? "default",
-            displayName:
-              messagingProvider === "meta_instagram"
-                ? "Instagram (Meta)"
-                : "Instagram via ManyChat",
-            instagramUsername:
-              messagingProvider === "meta_instagram" ? null : "demo_account",
+            displayName: messagingChannelDisplayName(messagingProvider),
+            instagramUsername: inboundHandle,
           },
+        });
+      } else if (
+        inboundHandle &&
+        (!channel.instagramUsername || channel.instagramUsername.toLowerCase() === "demo_account")
+      ) {
+        channel = await tx.messagingChannel.update({
+          where: { id: channel.id },
+          data: { instagramUsername: inboundHandle },
         });
       }
 

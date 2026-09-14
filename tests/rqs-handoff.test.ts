@@ -203,18 +203,19 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
     expect(report.overall).toBeGreaterThan(0);
   });
 
-  it("F: zero grounded findings → honest reject", () => {
+  it("F: empty extract with sources → source-backed findings, not a silent reject", () => {
     const { claims, report } = scoreFromDeepShaped({
       findings: [],
       claims: [],
       sources: AUTH_SOURCES,
     });
-    expect(claims.length).toBe(0);
+    // Empty extract must still surface each fetched source as a quoted finding
+    // (never invent stats; never drop sources). That is not a verified brief.
+    expect(claims.length).toBe(AUTH_SOURCES.length);
+    expect(claims.every((c) => Boolean(c.sourceUrl))).toBe(true);
     expect(report.accepted).toBe(false);
-    expect(report.overall).toBe(0);
-    expect(
-      report.hardGateFailures.some((f) => f.code === "UNSUPPORTED_DEFINITIVE_CLAIM"),
-    ).toBe(true);
+    expect(report.overall).toBeGreaterThan(0);
+    expect(report.breakdown.sourceQuality).toBeGreaterThan(0);
   });
 
   it("G: mixed supported/unsupported — supported survive, unsupported penalise", () => {
@@ -257,13 +258,51 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
       finalAnswerText: "Sources were collected but no claims linked.",
     });
     expect(report.accepted).toBe(false);
-    expect(report.overall).toBe(0);
+    expect(report.overall).toBeGreaterThan(0);
     expect(report.breakdown.sourceQuality).toBeGreaterThan(50);
     expect(
       report.hardGateFailures.some((f) =>
-        /no verifiable claims were linked/i.test(f.message),
+        /no verifiable claims were linked|sources were collected/i.test(f.message),
       ),
     ).toBe(true);
+  });
+
+  it("QUICK shape keeps source URLs and evidence so scoring is not a 0% dead-end", () => {
+    const findings = [
+      {
+        claim: "Lawful basis is required for processing personal data.",
+        sourceUrl: ICO,
+        evidenceExcerpt: "You must have a lawful basis to process personal data.",
+        claimKind: "OFFICIAL",
+        confidence: 0.8,
+      },
+    ];
+    const raw = {
+      shortAnswer: "UK GDPR requires a lawful basis to store CRM contacts.",
+      summary: "Authoritative UK GDPR CRM storage overview.",
+      findings,
+      claims: findings,
+      sources: AUTH_SOURCES,
+    };
+    const shaped = shapeFinalOutputForMode("QUICK", raw) as Record<string, unknown>;
+    expect(Array.isArray(shaped.sources)).toBe(true);
+    expect((shaped.sources as unknown[]).length).toBeGreaterThan(0);
+    expect(Array.isArray(shaped.findings)).toBe(true);
+    expect((shaped.findings as Array<{ sourceUrl?: string }>)[0]?.sourceUrl).toBe(ICO);
+
+    const grounded = extractCanonicalGroundedClaims(shaped, {
+      allowedSourceUrls: AUTH_SOURCES.map((s) => s.url),
+    });
+    const report = scoreResearchQuality({
+      originalUserPrompt: "UK GDPR CRM storage",
+      researchTopic: "UK GDPR CRM storage",
+      claims: toScoreResearchClaims(grounded),
+      sources: AUTH_SOURCES,
+      finalAnswerText: String(shaped.answer || ""),
+    });
+    expect(grounded.length).toBeGreaterThan(0);
+    expect(report.overall).toBeGreaterThan(0);
+    expect(report.breakdown.sourceQuality).toBeGreaterThan(0);
   });
 
   it("I: strong authority + strong claim linkage → meaningful non-zero RQS", () => {

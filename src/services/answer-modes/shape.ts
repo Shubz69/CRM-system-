@@ -1,5 +1,10 @@
 import type { AgentAnswerMode } from "@prisma/client";
 import {
+  attachVisibleResearchEvidence,
+  type VisibleFinding,
+  type VisibleSource,
+} from "@/lib/research-visible-evidence";
+import {
   answerModeOutputSchema,
   type ActionAnswer,
   type ActionItem,
@@ -27,6 +32,23 @@ function stringList(value: unknown): string[] {
 
 function researchJobIdOf(raw: Record<string, unknown>): string | undefined {
   return str(raw.researchJobId) ?? undefined;
+}
+
+function evidenceFromRaw(raw: Record<string, unknown>): {
+  findings?: VisibleFinding[];
+  sources?: VisibleSource[];
+} {
+  const attached = attachVisibleResearchEvidence(raw) as Record<string, unknown>;
+  const findings = Array.isArray(attached.findings)
+    ? (attached.findings as VisibleFinding[]).filter((f) => f.sourceUrl)
+    : [];
+  const sources = Array.isArray(attached.sources)
+    ? (attached.sources as VisibleSource[]).filter((s) => s.url)
+    : [];
+  return {
+    findings: findings.length ? findings : undefined,
+    sources: sources.length ? sources : undefined,
+  };
 }
 
 function claimTexts(raw: Record<string, unknown>): string[] {
@@ -63,6 +85,7 @@ function buildQuick(raw: Record<string, unknown>): QuickAnswer {
     mode: "quick",
     answer,
     researchJobId: researchJobIdOf(raw),
+    ...evidenceFromRaw(raw),
   };
 }
 
@@ -90,6 +113,7 @@ function buildExecutive(raw: Record<string, unknown>): ExecutiveAnswer {
     risks: risks.length ? risks : undefined,
     recommendation,
     researchJobId: researchJobIdOf(raw),
+    ...evidenceFromRaw(raw),
   };
 }
 
@@ -182,12 +206,24 @@ function buildActionItems(raw: Record<string, unknown>): ActionItem[] {
 }
 
 function buildAction(raw: Record<string, unknown>): ActionAnswer {
+  const evidence = evidenceFromRaw(raw);
+  const actions = buildActionItems(raw).map((item, i) => {
+    if (item.sourceUrl || raw.source === "internal_crm") return item;
+    const finding = evidence.findings?.[i] ?? evidence.findings?.[0];
+    if (!finding) return item;
+    return {
+      ...item,
+      sourceUrl: finding.sourceUrl,
+      evidenceExcerpt: finding.evidenceExcerpt,
+    };
+  });
   return {
     mode: "action",
-    actions: buildActionItems(raw),
+    actions,
     researchJobId: researchJobIdOf(raw),
     // Prefer full CRM/operator summary over crumb shortAnswer (business_context, briefs).
     summary: str(raw.summary) || str(raw.shortAnswer) || undefined,
+    ...evidence,
   };
 }
 
@@ -208,10 +244,13 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
       typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw)
         ? Math.max(0, Math.min(1, confidenceRaw))
         : undefined;
+    const sourceUrl = str((c as { sourceUrl?: unknown }).sourceUrl);
+    if (!sourceUrl) continue;
     findings.push({
       claim,
-      sourceUrl: str((c as { sourceUrl?: unknown }).sourceUrl) ?? undefined,
+      sourceUrl,
       evidenceExcerpt: str((c as { evidenceExcerpt?: unknown }).evidenceExcerpt) ?? undefined,
+      sourceTitle: str((c as { sourceTitle?: unknown }).sourceTitle) ?? undefined,
       claimKind,
       confidence,
     });
@@ -226,6 +265,11 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
       sources.push({
         url,
         title: str((s as { title?: unknown }).title) ?? undefined,
+        snippet:
+          str((s as { snippet?: unknown }).snippet) ??
+          str((s as { content?: unknown }).content)?.slice(0, 280) ??
+          undefined,
+        author: str((s as { author?: unknown }).author) ?? undefined,
         platform: str((s as { platform?: unknown }).platform) ?? undefined,
       });
     }
@@ -247,9 +291,9 @@ function buildDeep(raw: Record<string, unknown>): DeepAnswer {
     mode: "deep",
     executiveSummary: str(raw.shortAnswer) || str(raw.summary) || "Deep report summary unavailable.",
     method: "Gathered available sources, synthesised findings, then cross-checked citations.",
-    findings: findings.length ? findings : undefined,
+    findings: findings.length ? findings : evidenceFromRaw(raw).findings,
     evidence: claimTexts(raw).slice(0, 20),
-    sources: sources.length ? sources : undefined,
+    sources: sources.length ? sources : evidenceFromRaw(raw).sources,
     contradictions: contradictions?.length ? contradictions : undefined,
     unknowns: stringList(raw.gaps).length ? stringList(raw.gaps) : undefined,
     caveats: gapsAndRisks(raw).length ? gapsAndRisks(raw) : undefined,

@@ -336,7 +336,7 @@ describe("Round 5 research quality variance", () => {
     expect(report.overall).toBeLessThan(RESEARCH_ACCEPTANCE.overallTarget);
   });
 
-  it("sources without claims → overall 0 + quality gate message (no fake 48%)", () => {
+  it("sources without claims → scored PARTIAL, not a 0% dead-end or fake 48%", () => {
     const report = scoreResearchQuality({
       originalUserPrompt: PROMPT,
       researchTopic: PROMPT,
@@ -344,13 +344,16 @@ describe("Round 5 research quality variance", () => {
       sources: [ONS, BBC, FT],
       finalAnswerText: "We found some pages but could not extract claims.",
     });
-    expect(report.overall).toBe(0);
+    expect(report.overall).toBeGreaterThan(0);
     expect(report.accepted).toBe(false);
+    expect(report.breakdown.sourceQuality).toBeGreaterThan(0);
+    expect(report.breakdown.freshness).toBeGreaterThan(0);
     expect(report.hardGateFailures.length).toBeGreaterThan(0);
-    expect(report.hardGateFailures[0]!.message).toMatch(/Quality gate failed/i);
-    expect(report.limitations.some((l) => /Quality gate failed/i.test(l))).toBe(true);
-    expect(customerQualitySummary(report)).toMatch(/Quality gate failed/i);
-    // Must not invent a mid-band percentage like 48%.
+    expect(report.hardGateFailures.some((f) => /sources were collected/i.test(f.message))).toBe(
+      true,
+    );
+    expect(customerQualitySummary(report)).toMatch(/sources collected|Partial/i);
+    // Must not invent a hardcoded mid-band percentage like 48%.
     expect(report.overall).not.toBe(48);
     expect(customerQualitySummary(report)).not.toMatch(/48%/);
   });
@@ -450,6 +453,7 @@ describe("Round 5 research quality variance", () => {
     expect(new Set(scores).size).toBeGreaterThanOrEqual(3);
     expect(scores.every((s) => s >= 90)).toBe(false);
     expect([blogOnly, fabricated, wrongIntent, noClaims].every((r) => r.accepted)).toBe(false);
-    expect(noClaims.overall).toBe(0);
+    expect(noClaims.accepted).toBe(false);
+    expect(noClaims.overall).toBeGreaterThan(0);
   });
 });
