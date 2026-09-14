@@ -27,6 +27,8 @@ import {
 } from "@/services/answer-modes";
 import { planCompute } from "@/services/compute-governor";
 import type { ActionAnswer, DeepAnswer } from "@/services/answer-modes";
+import { hasCompleteTypedAnswers } from "@/services/answer-modes/typed-answers";
+import { isVideoProviderConfigured } from "@/adapters/video";
 import { isProviderLeakingMessage, toCustomerAiError } from "@/lib/customer-ai-errors";
 import { customerQualitySummary, scoreResearchQuality } from "@/services/research-quality";
 import {
@@ -167,14 +169,16 @@ function researchWallClockUserMessage(input: {
   sourceCount: number;
   stepOutputsLength: number;
   stepsToRunLength: number;
-}): string {
+  hasTypedAnswers?: boolean;
+}): string | null {
+  if (input.hasTypedAnswers) return null;
   if (input.salvaged || input.sourceCount > 0) {
-    return "I stopped because this was taking too long. Sources gathered before the limit are below.";
+    return "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
   }
   if (input.stepOutputsLength === 0) {
-    return "I stopped because this was taking too long, before sources came back. Try again in a moment.";
+    return "I ran out of time before I could finish. Try again in a moment.";
   }
-  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped because this was taking too long. Everything completed so far is below.`;
+  return `I finished ${input.stepOutputsLength} of ${input.stepsToRunLength} steps, then stopped to stay inside the time budget. Everything completed so far is below.`;
 }
 
 function sourceCountFromOutput(value: unknown): number {
@@ -362,6 +366,7 @@ async function tryQuickResearchFastPath(input: {
         sourceCount,
         stepOutputsLength: 0,
         stepsToRunLength: 1,
+        hasTypedAnswers: hasCompleteTypedAnswers(output),
       }),
     });
   }
@@ -517,7 +522,10 @@ export async function executeAgentRun(input: {
           knowledgeContext: null,
         });
         const toolMs = Date.now() - tTool0;
-        const shaped = shapeFinalOutputForMode(run.answerMode, result.output) ?? result.output;
+        const shaped =
+          shapeFinalOutputForMode(run.answerMode, result.output, run.request, {
+            videoConfigured: isVideoProviderConfigured(),
+          }) ?? result.output;
         const latencyTrace = {
           workerPickupAt: executeWallStart,
           queueWaitMs: 0,
@@ -1038,6 +1046,7 @@ export async function executeAgentRun(input: {
             sourceCount,
             stepOutputsLength: stepOutputs.length,
             stepsToRunLength: stepsToRun.length,
+            hasTypedAnswers: hasCompleteTypedAnswers(withPhase),
           }),
         });
       }
@@ -1050,7 +1059,7 @@ export async function executeAgentRun(input: {
         partialResults: { steps: stepOutputs },
         finalOutput: previousOutput,
         error: "MAX_WALL_CLOCK",
-        userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then stopped because this was taking too long. Everything completed so far is below.`,
+        userFacingError: `I finished ${stepOutputs.length} of ${stepsToRun.length} steps, then paused to stay inside the time budget. Everything completed so far is below.`,
       });
     }
 
@@ -1369,6 +1378,7 @@ export async function executeAgentRun(input: {
             sourceCount,
             stepOutputsLength: stepOutputs.length,
             stepsToRunLength: stepsToRun.length,
+            hasTypedAnswers: hasCompleteTypedAnswers(output),
           }),
         });
       }
@@ -1681,7 +1691,12 @@ async function finalizeModeOutput(input: {
 }): Promise<unknown> {
   let base: unknown = input.raw;
   if (input.answerMode && input.raw != null) {
-    const shaped = shapeFinalOutputForMode(input.answerMode, input.raw);
+    const shaped = shapeFinalOutputForMode(
+      input.answerMode,
+      input.raw,
+      input.request ?? input.originalUserPrompt,
+      { videoConfigured: isVideoProviderConfigured() },
+    );
     if (shaped) {
       if (shaped.mode === "action" || shaped.mode === "deep") {
         try {

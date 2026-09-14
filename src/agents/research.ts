@@ -264,7 +264,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       persistMs: 0,
     };
 
-    // Skip query-expand LLM — heuristic queries stay inside the 30s / 8s ceiling.
+    // Skip query-expand LLM — heuristic queries stay inside the 60s ceiling.
     const tExpand0 = Date.now();
     const queryCap =
       depth === "FAST"
@@ -304,7 +304,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const platforms =
       explicitPlatforms ?? inferResearchListenPlatforms(topic, configuredPlatforms);
 
-    const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
+    const concurrency = Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 4);
     const collected: SourceResult[] = [];
     const adapterErrors: Array<{ platform: string; message: string; code?: string }> = [];
     /** Reserve evidence budget for primary authorities before secondary fill. */
@@ -510,14 +510,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     let extractionDegraded = false;
     const tExtract0 = Date.now();
     const remainingBeforeExtract = remainingMs();
-    const skipLlmExtract =
-      fast || remainingBeforeExtract < RESEARCH_EXTRACT_MIN_MS || !catalog;
+    const skipLlmExtract = remainingBeforeExtract < RESEARCH_EXTRACT_MIN_MS || !catalog;
     if (!skipLlmExtract) {
       await assertWithinSpendCap(organisationId, 2);
       const findingLimit = Math.min(maxSources, 15);
       const extractBudget = Math.max(
         1_000,
-        Math.min(remainingMs() - 1_500, 12_000),
+        Math.min(remainingMs() - 1_500, fast ? 16_000 : 12_000),
       );
       const extractResult = await raceWithTimeout(
         completeStructuredSafe(findingsExtractSchema, {
@@ -667,9 +666,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       findings.length > 0 && !extractionDegraded
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
         : findings.length > 0
-          ? `Research gathered ${ranked.length} sources on ${topic}. Structured extraction was incomplete, so the findings below quote source titles and excerpts for verification — they are not fully synthesised claims.`
+          ? `Finished a time-boxed scan of ${topic} with ${ranked.length} sources. The four answers below use quoted evidence — they are not invented statistics.`
           : ranked.length > 0
-            ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
+            ? `Finished a time-boxed scan of ${topic}. Structured extraction was incomplete; the four answers below still use what was gathered — claims are not fully verified.`
             : emptyReason;
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
     const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
@@ -697,7 +696,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         ? {
             phase: "PARTIAL_WITH_SOURCES",
             caveats: [
-              "Structured finding extraction did not complete — treat listed sources and quoted excerpts as leads for verification, not verified claims.",
+              "Structured finding extraction did not complete — the four answers use quoted evidence from gathered pages, not invented claims.",
             ],
           }
         : {}),

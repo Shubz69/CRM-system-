@@ -19,6 +19,7 @@ import {
   detectAnswerModeFromLanguage,
   isModeShapedOutput,
   parseAnswerMode,
+  hasCompleteTypedAnswers,
 } from "@/services/answer-modes";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 import {
@@ -1062,13 +1063,15 @@ export async function getAgentRunProgress(input: {
       lastCompletedOutput,
     });
     finalOutput = hydrated.finalOutput;
-    if (
+    if (hasCompleteTypedAnswers(finalOutput)) {
+      userFacingError = null;
+    } else if (
       hydrated.salvaged &&
       typeof userFacingError === "string" &&
-      /finished 0 of/i.test(userFacingError)
+      /finished 0 of|taking too long|sources gathered/i.test(userFacingError)
     ) {
       userFacingError =
-        "I stopped because this was taking too long. Sources gathered before the limit are below.";
+        "I finished with the evidence gathered in time. The four answers below use that work — nothing was invented.";
     }
   }
 

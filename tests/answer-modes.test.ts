@@ -60,6 +60,11 @@ describe("answer mode schemas", () => {
     expect(answerModeOutputSchema.parse(executive).mode).toBe("executive");
     expect(answerModeOutputSchema.parse(action).mode).toBe("action");
     expect(answerModeOutputSchema.parse(deep).mode).toBe("deep");
+    expect(quick?.typedAnswers?.strategy.title).toBe("Strategy");
+    expect(quick?.typedAnswers?.scripts.title).toBe("Scripts");
+    expect(quick?.typedAnswers?.postingPlan.title).toBe("Posting plan");
+    expect(quick?.typedAnswers?.monetization.title).toBe("Monetization");
+    expect(quick?.typedAnswers?.strategy.body.length).toBeGreaterThan(10);
     expect(quick?.findings?.[0]?.sourceUrl).toBe("https://example.com/a");
     expect(quick?.sources?.[0]?.url).toBe("https://example.com/a");
     expect(executive?.findings?.[0]?.sourceUrl).toBe("https://example.com/a");

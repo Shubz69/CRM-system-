@@ -166,7 +166,8 @@ describe("Quick research dispatch helpers", () => {
     expect(looksLikeResearch("Research plant hire UK pricing")).toBe(true);
     expect(isQuickResearchAsk("QUICK", "Research plant hire UK pricing")).toBe(true);
     expect(isQuickResearchAsk("DEEP", "Research plant hire UK pricing")).toBe(false);
-    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(12);
+    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(60);
+    expect(researchWallClockCapSeconds("QUICK")).toBeGreaterThanOrEqual(50);
   });
 });
 
@@ -272,7 +273,7 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
       agentRunFindFirst.mockResolvedValue(baseRun({ startedAt: new Date(Date.now() - 68_000) }));
 
       const pending = executeAgentRun({ organisationId: "org_a", runId: "run_quick_hire" });
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(55_000);
       const result = await pending;
 
       expect(result.status).toBe("PARTIAL");
@@ -284,18 +285,20 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
       const fo = result.finalOutput as {
         findings?: Array<{ sourceUrl?: string; claim?: string }>;
         sources?: Array<{ url?: string }>;
+        typedAnswers?: { strategy?: { title?: string; body?: string } };
       };
       expect(fo).toBeTruthy();
       expect(fo.sources?.some((s) => s.url === HIRE) || fo.findings?.some((f) => f.sourceUrl === HIRE)).toBe(
         true,
       );
+      expect(fo.typedAnswers?.strategy?.title).toBe("Strategy");
       expect(JSON.stringify(fo)).not.toBe("null");
       expect(JSON.stringify(fo)).toMatch(/hire\.example|£120|plant hire/i);
-      expect(result.userFacingError || "").not.toMatch(/finished 0 of/i);
+      expect(result.userFacingError || "").not.toMatch(/finished 0 of|sources gathered|taking too long/i);
     } finally {
       vi.useRealTimers();
     }
-  }, 15_000);
+  }, 25_000);
 
   it("on wall-clock with a hanging search and no salvage, still returns a non-null honest PARTIAL", async () => {
     vi.useFakeTimers();
@@ -310,7 +313,7 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
       );
 
       const pending = executeAgentRun({ organisationId: "org_a", runId: "run_quick_hire" });
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(55_000);
       const result = await pending;
 
       expect(result.status).toBe("PARTIAL");
@@ -323,7 +326,7 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
     } finally {
       vi.useRealTimers();
     }
-  }, 15_000);
+  }, 25_000);
 
   it("general path MAX_WALL_CLOCK (stored 30s cap, 68s-old startedAt) never returns blank finalOutput", async () => {
     vi.useFakeTimers();
@@ -341,7 +344,7 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
       });
 
       const pending = executeAgentRun({ organisationId: "org_a", runId: "run_quick_hire" });
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(62_000);
       const result = await pending;
 
       expect(result.status).toBe("PARTIAL");
@@ -359,7 +362,7 @@ describe("QUICK execute — empty-steps wall-clock regression", () => {
     } finally {
       vi.useRealTimers();
     }
-  }, 20_000);
+  }, 25_000);
 });
 
 describe("progress hydration + partial_sources_only honesty", () => {

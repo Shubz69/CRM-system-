@@ -79,3 +79,11 @@ research adapters in `src/adapters/sources` (Instagram/LinkedIn/TikTok/
 Twitter-X/Threads listening) — those are a different system entirely, gated
 on `APIFY_TOKEN`. See the top-level `README.md` and
 `src/adapters/sources/apify-platforms.ts` for that side.
+
+## Ask example videos
+
+Image generation (`IMAGE_PROVIDER=openai|gemini`) is **not** video generation.
+Ask growth/content results include video *briefs*. `VIDEO_PROVIDER` is unset by
+default; `getVideoProvider()` fails closed with `AUTH_REQUIRED` /
+`VIDEO_PROVIDER_NOT_CONFIGURED` until a real video adapter is wired. Do not
+invent API keys or fake clip URLs.

@@ -1,16 +1,26 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { ASK_SHOW_SOURCES_BY_DEFAULT } from "@/lib/ask-result-ui";
 import {
   isModeShapedOutput,
   type AnswerModeOutput,
 } from "@/services/answer-modes/shape";
 import {
+  hasCompleteTypedAnswers,
+  resolveTypedAnswers,
+  resolveVideoExamples,
+  type AskTypedAnswers,
+  type AskVideoExample,
+} from "@/services/answer-modes/typed-answers";
+import {
   ResearchFindingCards,
   ResearchSourceCards,
 } from "@/components/research/evidence-cards";
+import { workspaceFetch } from "@/lib/workspace-client";
 
-function EvidenceBlock({
+function EvidenceToggle({
   findings,
   sources,
 }: {
@@ -28,16 +38,160 @@ function EvidenceBlock({
     platform?: string;
   }>;
 }) {
+  const [open, setOpen] = useState(ASK_SHOW_SOURCES_BY_DEFAULT);
+  if (!findings?.length && !sources?.length) return null;
   return (
-    <>
-      <ResearchFindingCards findings={findings ?? []} />
-      <ResearchSourceCards sources={sources ?? []} />
-    </>
+    <div className="space-y-2">
+      <button
+        type="button"
+        data-testid="ask-evidence-toggle"
+        className="text-xs font-medium uppercase tracking-wide text-[var(--muted)] underline-offset-2 hover:underline"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "Hide evidence" : "Show evidence"}
+      </button>
+      {open ? (
+        <div data-testid="ask-evidence-open">
+          <ResearchFindingCards findings={findings ?? []} />
+          <ResearchSourceCards sources={sources ?? []} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TypedAnswersView({
+  answers,
+}: {
+  answers: AskTypedAnswers;
+}) {
+  const sections = [answers.strategy, answers.scripts, answers.postingPlan, answers.monetization];
+  return (
+    <div className="space-y-4" data-testid="ask-typed-answers">
+      {sections.map((section) => (
+        <article
+          key={section.type}
+          data-testid={`ask-answer-${section.type}`}
+          className="surface p-4"
+        >
+          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+            {section.title}
+          </p>
+          <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-[var(--foreground)]">
+            {section.body}
+          </p>
+          {section.bullets?.length ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--foreground)]">
+              {section.bullets.map((bullet, i) => (
+                <li key={`${section.type}-${i}`}>{bullet}</li>
+              ))}
+            </ul>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function AskVideoExamples({ examples }: { examples: AskVideoExample[] }) {
+  const [busyIndex, setBusyIndex] = useState<number | null>(null);
+  if (!examples.length) return null;
+
+  async function onGenerate(example: AskVideoExample, index: number) {
+    setBusyIndex(index);
+    try {
+      const { getImmutableWorkspaceContext } = await import("@/lib/workspace-client");
+      const ctx = getImmutableWorkspaceContext();
+      const res = await workspaceFetch(
+        ctx.loadedOrganisationId,
+        ctx.workspaceRevision,
+        "/api/ask/video-examples",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: example.title,
+            hook: example.hook,
+            shotList: example.shotList,
+            lengthSeconds: example.lengthSeconds,
+            platform: example.platform,
+          }),
+        },
+      );
+      const json = (await res.json()) as {
+        ok?: boolean;
+        code?: string;
+        error?: string;
+        url?: string;
+      };
+      if (!res.ok || !json.ok) {
+        toast.error(json.error || "Video generation is not configured.");
+        return;
+      }
+      toast.success("Example video is ready.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not generate the example video.");
+    } finally {
+      setBusyIndex(null);
+    }
+  }
+
+  const notConfiguredNote = examples.find((e) => e.userFacingMessage)?.userFacingMessage;
+
+  return (
+    <div className="space-y-3" data-testid="ask-video-examples">
+      <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+        Example AI videos
+      </p>
+      {notConfiguredNote ? (
+        <p className="text-sm text-[var(--muted)]" data-testid="ask-video-not-configured">
+          {notConfiguredNote}
+        </p>
+      ) : null}
+      <ul className="space-y-3">
+        {examples.map((example, i) => (
+          <li key={`${example.title}-${i}`} className="surface p-4">
+            <p className="font-medium text-[var(--foreground)]">{example.title}</p>
+            <p className="mt-1 text-xs uppercase tracking-wide text-[var(--muted)]">
+              {example.platform} · {example.lengthSeconds}s
+            </p>
+            <p className="mt-2 text-sm text-[var(--foreground)]">
+              <span className="font-medium">Hook:</span> {example.hook}
+            </p>
+            {example.shotList.length ? (
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--muted)]">
+                {example.shotList.map((shot, si) => (
+                  <li key={`${example.title}-shot-${si}`}>{shot}</li>
+                ))}
+              </ol>
+            ) : null}
+            {example.url ? (
+              <a
+                href={example.url}
+                className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
+              >
+                Open generated video
+              </a>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-secondary mt-3 text-sm"
+                disabled={busyIndex === i}
+                onClick={() => void onGenerate(example, i)}
+              >
+                {busyIndex === i ? "Checking…" : "Generate example video"}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
 type Props = {
   output: unknown;
+  request?: string | null;
   /** Legacy fallback renderer when output is not mode-shaped. */
   fallback: ReactNode;
   onCapability?: (label: string) => void;
@@ -54,50 +208,68 @@ function EvidenceList({ items }: { items: string[] }) {
   );
 }
 
-function QuickRenderer({ output }: { output: Extract<AnswerModeOutput, { mode: "quick" }> }) {
+function CustomerResult({
+  output,
+  request,
+  extras,
+  findings,
+  sources,
+}: {
+  output: unknown;
+  request?: string | null;
+  extras?: ReactNode;
+  findings?: Array<{
+    claim: string;
+    sourceUrl: string;
+    evidenceExcerpt?: string;
+    sourceTitle?: string;
+  }>;
+  sources?: Array<{
+    url: string;
+    title?: string;
+    snippet?: string;
+    author?: string;
+    platform?: string;
+  }>;
+}) {
+  const answers = resolveTypedAnswers(output, request);
+  const videos = resolveVideoExamples(output, request);
   return (
     <div className="space-y-5">
-      <div className="whitespace-pre-wrap text-lg leading-relaxed text-[var(--foreground)]">
-        {output.answer}
-      </div>
-      <EvidenceBlock findings={output.findings} sources={output.sources} />
+      <TypedAnswersView answers={answers} />
+      <AskVideoExamples examples={videos} />
+      {extras}
+      <EvidenceToggle findings={findings} sources={sources} />
     </div>
+  );
+}
+
+function QuickRenderer({
+  output,
+  request,
+}: {
+  output: Extract<AnswerModeOutput, { mode: "quick" }>;
+  request?: string | null;
+}) {
+  return (
+    <CustomerResult
+      output={output}
+      request={request}
+      findings={output.findings}
+      sources={output.sources}
+    />
   );
 }
 
 function ExecutiveRenderer({
   output,
+  request,
 }: {
   output: Extract<AnswerModeOutput, { mode: "executive" }>;
+  request?: string | null;
 }) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-          Key finding
-        </p>
-        <p className="mt-1 text-lg font-medium leading-relaxed text-[var(--foreground)]">
-          {output.keyFinding}
-        </p>
-      </div>
-      {output.whatMatters ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            What matters
-          </p>
-          <p className="mt-1 text-sm leading-relaxed text-[var(--foreground)]">{output.whatMatters}</p>
-        </div>
-      ) : null}
-      {output.evidence?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Evidence
-          </p>
-          <div className="mt-1">
-            <EvidenceList items={output.evidence} />
-          </div>
-        </div>
-      ) : null}
+  const extras = (
+    <>
       {output.risks?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Risks</p>
@@ -106,24 +278,26 @@ function ExecutiveRenderer({
           </div>
         </div>
       ) : null}
-      {output.recommendation ? (
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)]/50 px-4 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Recommendation
-          </p>
-          <p className="mt-1 text-sm font-medium text-[var(--foreground)]">{output.recommendation}</p>
-        </div>
-      ) : null}
-      <EvidenceBlock findings={output.findings} sources={output.sources} />
-    </div>
+    </>
+  );
+  return (
+    <CustomerResult
+      output={output}
+      request={request}
+      extras={extras}
+      findings={output.findings}
+      sources={output.sources}
+    />
   );
 }
 
 function ActionRenderer({
   output,
+  request,
   onCapability,
 }: {
   output: Extract<AnswerModeOutput, { mode: "action" }>;
+  request?: string | null;
   onCapability?: (label: string) => void;
 }) {
   const capabilityLabel: Record<string, string> = {
@@ -136,11 +310,8 @@ function ActionRenderer({
     update_business_state: "Update business state",
   };
 
-  return (
-    <div className="space-y-4">
-      {output.summary ? (
-        <p className="text-sm leading-relaxed text-[var(--muted)]">{output.summary}</p>
-      ) : null}
+  const extras = (
+    <>
       <ol className="space-y-3">
         {output.actions.map((action, i) => (
           <li key={`${action.what}-${i}`} className="surface p-4">
@@ -152,19 +323,6 @@ function ActionRenderer({
             </div>
             {action.why ? (
               <p className="mt-1 text-sm text-[var(--muted)]">{action.why}</p>
-            ) : null}
-            {action.evidenceExcerpt ? (
-              <p className="mt-2 text-sm text-[var(--muted)]">“{action.evidenceExcerpt}”</p>
-            ) : null}
-            {action.sourceUrl ? (
-              <a
-                href={action.sourceUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-block break-all text-sm text-[var(--accent)] hover:underline"
-              >
-                Source
-              </a>
             ) : null}
             {action.risks?.length ? (
               <p className="mt-2 text-xs text-[var(--muted)]">
@@ -192,94 +350,31 @@ function ActionRenderer({
       <p className="text-xs text-[var(--muted)]">
         Capability buttons send a proposal for approval — they never run automatically.
       </p>
-      <EvidenceBlock findings={output.findings} sources={output.sources} />
-    </div>
+    </>
+  );
+
+  return (
+    <CustomerResult
+      output={output}
+      request={request}
+      extras={extras}
+      findings={output.findings}
+      sources={output.sources}
+    />
   );
 }
 
 function DeepRenderer({
   output,
+  request,
   onCapability,
 }: {
   output: Extract<AnswerModeOutput, { mode: "deep" }>;
+  request?: string | null;
   onCapability?: (label: string) => void;
 }) {
-  return (
-    <div className="space-y-5">
-      <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-          Executive summary
-        </p>
-        <p className="mt-1 text-base leading-relaxed text-[var(--foreground)]">
-          {output.executiveSummary}
-        </p>
-      </div>
-      {output.method ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Method</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">{output.method}</p>
-        </div>
-      ) : null}
-      <ResearchFindingCards findings={output.findings ?? []} />
-      {output.evidence?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Evidence
-          </p>
-          <div className="mt-1">
-            <EvidenceList items={output.evidence} />
-          </div>
-        </div>
-      ) : null}
-      <ResearchSourceCards sources={output.sources ?? []} />
-      {output.contradictions?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Contradictions
-          </p>
-          <EvidenceList items={output.contradictions} />
-        </div>
-      ) : null}
-      {output.unknowns?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Unknowns
-          </p>
-          <EvidenceList items={output.unknowns} />
-        </div>
-      ) : null}
-      {output.caveats?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Caveats
-          </p>
-          <EvidenceList items={output.caveats} />
-        </div>
-      ) : null}
-      {output.businessImplications ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Business implications
-          </p>
-          <p className="mt-1 text-sm leading-relaxed">{output.businessImplications}</p>
-        </div>
-      ) : null}
-      {output.marketImplications ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Market implications
-          </p>
-          <p className="mt-1 text-sm leading-relaxed">{output.marketImplications}</p>
-        </div>
-      ) : null}
-      {output.recommendations?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Recommendations
-          </p>
-          <EvidenceList items={output.recommendations} />
-        </div>
-      ) : null}
+  const extras = (
+    <>
       {output.capabilityProposals?.length ? (
         <div className="flex flex-wrap gap-2">
           {output.capabilityProposals.map((p) => (
@@ -295,30 +390,43 @@ function DeepRenderer({
           ))}
         </div>
       ) : null}
-    </div>
+    </>
+  );
+  return (
+    <CustomerResult
+      output={output}
+      request={request}
+      extras={extras}
+      findings={output.findings}
+      sources={output.sources}
+    />
   );
 }
 
 /**
  * Mode-specific Ask/Research output renderer with graceful legacy fallback.
+ * Default view is always the four typed answers — never a sources-card wall.
  */
-export function AnswerModeOutputView({ output, fallback, onCapability }: Props) {
-  if (!isModeShapedOutput(output)) {
-    return <>{fallback}</>;
+export function AnswerModeOutputView({ output, fallback, onCapability, request }: Props) {
+  if (hasCompleteTypedAnswers(output) || isModeShapedOutput(output)) {
+    if (isModeShapedOutput(output)) {
+      switch (output.mode) {
+        case "quick":
+          return <QuickRenderer output={output} request={request} />;
+        case "executive":
+          return <ExecutiveRenderer output={output} request={request} />;
+        case "action":
+          return <ActionRenderer output={output} onCapability={onCapability} request={request} />;
+        case "deep":
+          return <DeepRenderer output={output} onCapability={onCapability} request={request} />;
+        default:
+          break;
+      }
+    }
+    return <CustomerResult output={output} request={request} />;
   }
 
-  switch (output.mode) {
-    case "quick":
-      return <QuickRenderer output={output} />;
-    case "executive":
-      return <ExecutiveRenderer output={output} />;
-    case "action":
-      return <ActionRenderer output={output} onCapability={onCapability} />;
-    case "deep":
-      return <DeepRenderer output={output} onCapability={onCapability} />;
-    default:
-      return <>{fallback}</>;
-  }
+  return <>{fallback}</>;
 }
 
 /** Shared helper for tests / SSR checks — re-export. */

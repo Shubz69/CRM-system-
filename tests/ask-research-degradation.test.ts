@@ -140,7 +140,7 @@ describe("Ask/Research degradation + privacy", () => {
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe("https://example.com/a");
     expect(result.output.findings[0]?.claim).toMatch(/example\.com\/a|Evidence about UK SME/i);
-    expect(result.output.summary).toMatch(/sources on/i);
+    expect(result.output.summary).toMatch(/quoted evidence|time-boxed scan|sources/i);
     expect(prisma.researchFinding.create).toHaveBeenCalled();
     expect(prisma.researchJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -154,7 +154,7 @@ describe("Ask/Research degradation + privacy", () => {
     );
   });
 
-  it("FAST research quotes sources without waiting on extract LLM", async () => {
+  it("FAST research quotes sources without waiting on extract LLM when the deadline is tight", async () => {
     searchConfiguredSources.mockResolvedValue({
       results: [
         {
@@ -178,6 +178,7 @@ describe("Ask/Research degradation + privacy", () => {
         organisationId: "org-qa",
         agentRunId: "run-fast",
         agentStepId: "step-1",
+        deadlineAt: Date.now() + 3_500,
       },
     );
 
