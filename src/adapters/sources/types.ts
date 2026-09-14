@@ -93,6 +93,24 @@ export class SourceNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Web search keys missing or rejected. Quick Ask runs in-process on Vercel —
+ * Railway-only keys are not enough.
+ */
+export class SourceAuthRequiredError extends Error {
+  readonly code = "AUTH_REQUIRED";
+  constructor(
+    readonly platform: SourcePlatform,
+    message?: string,
+  ) {
+    super(
+      message ||
+        "Web research is not configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app.",
+    );
+    this.name = "SourceAuthRequiredError";
+  }
+}
+
 export class SourceRateLimitError extends Error {
   readonly code = "SOURCE_RATE_LIMITED";
   constructor(

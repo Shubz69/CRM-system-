@@ -114,7 +114,7 @@ describe("research latency budgets", () => {
     expect(ANALYST_SAFE_BUDGET_MS).toBeLessThanOrEqual(12_000);
     expect(CRITIC_SAFE_BUDGET_MS).toBeLessThanOrEqual(10_000);
     expect(RESEARCH_EXTRACT_MIN_MS).toBeLessThanOrEqual(6_000);
-    expect(RESEARCH_SOURCE_FETCH_MS.FAST).toBeLessThanOrEqual(4_000);
+    expect(RESEARCH_SOURCE_FETCH_MS.FAST).toBeLessThanOrEqual(7_000);
     expect(RESEARCH_SOURCE_FETCH_MS.DEEP).toBeLessThanOrEqual(8_000);
     expect(RESEARCH_QUERY_CAP.FAST).toBeLessThanOrEqual(2);
     expect(RESEARCH_SOURCE_CAP.FAST).toBeLessThanOrEqual(5);

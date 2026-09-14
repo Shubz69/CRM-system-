@@ -29,9 +29,13 @@ export const RESEARCH_QUICK_CEILING_MS = 8_000;
  */
 export const RESEARCH_HARD_CEILING_MS = 30_000;
 
-/** Per-adapter source fetch timeout (ms). Unbounded Tavily/Apify waits are not allowed. */
+/**
+ * Per-adapter source fetch timeout (ms). Unbounded Tavily/Apify waits are not allowed.
+ * FAST must still be long enough for one Tavily/Exa round-trip from Vercel
+ * serverless — 3.5s aborted plant-hire searches before any URL returned.
+ */
 export const RESEARCH_SOURCE_FETCH_MS = {
-  FAST: 3_500,
+  FAST: 7_000,
   STANDARD: 6_000,
   DEEP: 7_000,
 } as const;
@@ -40,7 +44,7 @@ export const RESEARCH_SOURCE_FETCH_MS = {
 export const RESEARCH_EXTRACT_MIN_MS = 5_000;
 
 export const RESEARCH_QUERY_CAP = {
-  FAST: 2,
+  FAST: 1,
   STANDARD: 3,
   DEEP: 4,
 } as const;

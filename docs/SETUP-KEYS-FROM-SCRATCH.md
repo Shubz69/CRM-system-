@@ -85,7 +85,13 @@ App UI works; research answers will be fake/local.
 ```env
 TAVILY_API_KEY="tvly-..."
 WEB_SEARCH_PROVIDER="tavily"
+# Optional fallback:
+# EXA_API_KEY="..."
 ```
+
+**Hosted:** Quick Ask runs **in-process on Vercel**. Set `TAVILY_API_KEY` (and
+`EXA_API_KEY` if used) on **Vercel Production + Preview**, not only the Railway
+worker. Missing keys fail closed with `AUTH_REQUIRED` rather than empty findings.
 
 Skip if you only want mock AI for now.
 

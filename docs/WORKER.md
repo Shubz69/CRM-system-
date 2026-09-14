@@ -58,7 +58,9 @@ Copy-paste configs in-repo:
 1. Create a worker service from the **same** Git repo.
 2. Start command: `npm run worker` (or `npx tsx src/workers/index.ts`).
 3. Set env: `DATABASE_URL`, `DIRECT_URL` (if needed), `REDIS_URL` (same as
-   Vercel), `ENCRYPTION_KEY`, AI keys as needed.
+   Vercel), `ENCRYPTION_KEY`, AI keys as needed. **`TAVILY_API_KEY` / `EXA_API_KEY`
+   on Railway do not serve Quick Ask** — copy those keys to Vercel Production
+   as well (Quick web research runs in the Next.js process).
 4. On Vercel: set the same `REDIS_URL` (Production + Preview).
 5. Health: `GET /api/health` — in production, Redis `down` → **503 unhealthy**.
 6. Ops UI: `/admin/ai-ops` shows queue depths + failed jobs (real BullMQ counts).
@@ -85,6 +87,11 @@ curl "$APP_URL/api/admin/jobs/sleep-test?jobId=<id>" -H "Cookie: …"
 
 Confirm `state` becomes `completed` on the **worker host** logs, not inside
 the HTTP request.
+
+**QUICK Ask web research runs in the Vercel web process.** If Tavily/Exa keys
+exist only on Railway, Quick Ask returns `AUTH_REQUIRED` (set `TAVILY_API_KEY`
+or `EXA_API_KEY` on Vercel Production + Preview). DEEP Ask on the worker can
+use the Railway copies of the same keys.
 
 ## What breaks if the worker is down
 

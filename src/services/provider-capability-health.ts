@@ -103,8 +103,12 @@ export function getPublicProviderCapabilityHealth(): {
 
   providers.push({
     id: "tavily",
-    label: "Tavily research",
-    status: envConfigured(env.TAVILY_API_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",
+    label: "Web research (Tavily / Exa)",
+    status: envConfigured(env.TAVILY_API_KEY) || envConfigured(env.EXA_API_KEY) ? "CONFIGURED" : "NOT_CONFIGURED",
+    detail:
+      envConfigured(env.TAVILY_API_KEY) || envConfigured(env.EXA_API_KEY)
+        ? "Key present on this process — Quick Ask needs it on Vercel, not only Railway"
+        : "TAVILY_API_KEY / EXA_API_KEY missing here (set on Vercel Production for in-process Quick Ask)",
   });
 
   providers.push({

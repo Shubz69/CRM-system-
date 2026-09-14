@@ -1,5 +1,5 @@
 import { redditSourceAdapter } from "@/adapters/sources/reddit";
-import { webSourceAdapter } from "@/adapters/sources/web";
+import { hasWebSearchCredentials, webSourceAdapter } from "@/adapters/sources/web";
 import { youtubeSourceAdapter } from "@/adapters/sources/youtube";
 import {
   instagramSourceAdapter,
@@ -9,6 +9,7 @@ import {
   twitterSourceAdapter,
 } from "@/adapters/sources/stubs";
 import {
+  SourceAuthRequiredError,
   SourceNotConfiguredError,
   SourceUnavailableError,
   type SourceAdapter,
@@ -28,6 +29,7 @@ export type {
   SourceSearchOptions,
 } from "@/adapters/sources/types";
 export {
+  SourceAuthRequiredError,
   SourceNotConfiguredError,
   SourceRateLimitError,
   SourceUnavailableError,
@@ -64,10 +66,19 @@ function userFacingSourceError(platform: SourcePlatform, error: unknown): {
   message: string;
   code: string;
 } {
-  if (error instanceof SourceNotConfiguredError) {
+  if (error instanceof SourceAuthRequiredError) {
     return {
       code: error.code,
-      message: `${PLATFORM_DISPLAY[platform]} is not configured for this workspace.`,
+      message: error.message,
+    };
+  }
+  if (error instanceof SourceNotConfiguredError) {
+    return {
+      code: platform === "web" ? "AUTH_REQUIRED" : error.code,
+      message:
+        platform === "web"
+          ? error.message
+          : `${PLATFORM_DISPLAY[platform]} is not configured for this workspace.`,
     };
   }
   if (error instanceof ApifyDeniedError) {
@@ -84,6 +95,15 @@ function userFacingSourceError(platform: SourcePlatform, error: unknown): {
   }
   if (error && typeof error === "object" && "code" in error) {
     const code = String((error as { code: unknown }).code);
+    if (code === "AUTH_REQUIRED") {
+      return {
+        code,
+        message:
+          error instanceof Error
+            ? error.message
+            : `${PLATFORM_DISPLAY[platform]} is not configured for this workspace.`,
+      };
+    }
     if (code === "SOURCE_RATE_LIMITED") {
       return {
         code,
@@ -128,7 +148,7 @@ export function listConfiguredSourcePlatforms(): SourcePlatform[] {
   if (env.YOUTUBE_API_KEY) configured.push("youtube");
   if (env.REDDIT_CLIENT_ID && env.REDDIT_CLIENT_SECRET) configured.push("reddit");
   // Web is available when any supported search key is present (primary or fallback).
-  if (env.TAVILY_API_KEY || env.EXA_API_KEY) configured.push("web");
+  if (hasWebSearchCredentials(env)) configured.push("web");
   if (env.APIFY_TOKEN) {
     configured.push("instagram", "linkedin", "tiktok", "twitter", "threads");
   }
@@ -203,9 +223,9 @@ export async function searchConfiguredSources(input: {
   const concurrency = input.concurrency ?? Number(getEnv().RESEARCH_ADAPTER_CONCURRENCY || 3);
 
   if (!platforms.length) {
-    throw new SourceNotConfiguredError(
+    throw new SourceAuthRequiredError(
       "web",
-      "No research source adapters are configured. Set YOUTUBE_API_KEY, REDDIT_CLIENT_ID/SECRET, TAVILY_API_KEY (or EXA_API_KEY), and/or APIFY_TOKEN.",
+      "No research source adapters are configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app for Quick Ask (not only Railway). YouTube/Reddit/Apify keys are optional extras.",
     );
   }
 
@@ -250,7 +270,9 @@ export function formatUnavailableSourceNotes(
   const notes: string[] = [];
   const seen = new Set<string>();
   for (const err of errors) {
-    if (err.code === "SOURCE_NOT_CONFIGURED") continue;
+    // Social not-configured is expected when the topic did not request that network.
+    // Web AUTH_REQUIRED / missing TAVILY+EXA must stay visible — Quick Ask is in-process on Vercel.
+    if (err.code === "SOURCE_NOT_CONFIGURED" && err.platform !== "web") continue;
     const platform = err.platform as SourcePlatform;
     const label = PLATFORM_DISPLAY[platform] || err.platform;
     const note =
