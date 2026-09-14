@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from "vitest";
-import { planAgentRunDeterministic, looksLikeCrmInternal } from "@/agents/supervisor/plan";
+import { planAgentRunDeterministic } from "@/agents/supervisor/plan";
 
 describe("phase8d differentiation routing", () => {
   const qs = [

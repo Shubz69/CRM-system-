@@ -1513,10 +1513,6 @@ export async function executeAgentRun(input: {
     request: run.request,
   });
   latencyTrace.postProcessMs = Date.now() - tPost0;
-  latencyTrace.toolMs = stepOutputs.reduce((acc) => {
-    // Prefer recorded step durations when present on outputs — fall back to wall remainder.
-    return acc;
-  }, latencyTrace.toolMs || 0);
   if (!latencyTrace.toolMs) {
     latencyTrace.toolMs = Math.max(
       0,

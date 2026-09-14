@@ -1,11 +1,10 @@
-import { NextRequest } from "next/server";
 import { jsonError, requirePermission } from "@/lib/session";
 import { getLearningDashboard } from "@/services/learning-os";
 
 /**
  * GET /api/learning — feedback summary, experiments, candidates, evals, forecast backtest.
  */
-export async function GET(_req: NextRequest) {
+export async function GET() {
   try {
     const session = await requirePermission("insights:read");
     const dashboard = await getLearningDashboard(session.organisationId);

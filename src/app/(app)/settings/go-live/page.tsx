@@ -35,7 +35,7 @@ export default function GoLivePage() {
       const health = await healthRes.json().catch(() => ({}));
       const providers = providersRes.ok ? await providersRes.json() : {};
       const autopilot = autopilotRes.ok ? await autopilotRes.json() : {};
-      const channels = channelsRes.ok ? await channelsRes.json() : {};
+      if (channelsRes.ok) await channelsRes.json();
       const dbHealth = await dbRes.json().catch(() => ({}));
 
       setMode(autopilot.mode || "OFF");

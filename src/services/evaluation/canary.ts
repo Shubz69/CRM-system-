@@ -349,6 +349,7 @@ export async function transitionRolloutState(input: VersionArtifactRef & {
 /**
  * Safety helper — a single PASSED shadow/eval run must not promote.
  */
-export function shouldAutoPromoteFromSingleRun(_passed: boolean): false {
+export function shouldAutoPromoteFromSingleRun(passed: boolean): false {
+  void passed;
   return false;
 }

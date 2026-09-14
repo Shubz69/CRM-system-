@@ -140,7 +140,8 @@ export async function PATCH(req: Request) {
       raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null,
     );
     const body = ruleSchema.extend({ id: z.string() }).parse(raw);
-    const { id, conditions, actions, naturalLanguage: _nl, ...rest } = body;
+    const { id, conditions, actions, naturalLanguage: _naturalLanguage, ...rest } = body;
+    void _naturalLanguage;
     const data: Prisma.AutomationRuleUpdateManyMutationInput = { ...rest };
     if (conditions) data.conditions = conditions as Prisma.InputJsonValue;
     if (actions) {
