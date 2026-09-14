@@ -11,6 +11,7 @@ import {
   META_INSTAGRAM_WEBHOOK_FIELDS,
   MESSAGING_PROVIDER,
 } from "@/services/messaging/providers";
+import { persistableChannelInstagramUsername } from "@/services/messaging/channel-identity";
 
 const ACCESS_TOKEN_KEY = "access_token";
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -498,7 +499,7 @@ export async function completeMetaInstagramConnection(input: {
       provider: MESSAGING_PROVIDER.META_INSTAGRAM,
       externalId: input.igUserId,
       displayName: input.username ? `@${input.username}` : "Instagram (Meta)",
-      instagramUsername: input.username ?? null,
+      instagramUsername: persistableChannelInstagramUsername(input.username),
       isActive: subscription.ok,
       config: {
         webhookSubscribed: subscription.ok,
@@ -507,7 +508,7 @@ export async function completeMetaInstagramConnection(input: {
     },
     update: {
       displayName: input.username ? `@${input.username}` : "Instagram (Meta)",
-      instagramUsername: input.username ?? null,
+      instagramUsername: persistableChannelInstagramUsername(input.username),
       isActive: subscription.ok,
       config: {
         webhookSubscribed: subscription.ok,

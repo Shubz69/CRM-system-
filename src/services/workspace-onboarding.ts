@@ -258,6 +258,8 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
     "@/services/social-connection-policy"
   );
   await ensureNewOrgSocialConnectionPolicy(org.id);
+  // New workspaces must not seed MessagingChannel rows (never demo_account).
+  // Channels are created from inbound, Zernio account sync, or Integrations.
 
   return {
     organisation: { id: org.id, name: org.name, slug: org.slug },

@@ -1,6 +1,8 @@
 export { listConnectorDefinitions, getConnectorDefinition } from "@/services/connectors/catalogue";
 export {
   evaluateOrganisationConnectors,
+  refreshOrganisationConnectorCapabilities,
+  purgeStaleConnectorCapabilityGhosts,
   recordProviderHealth,
   pickSocialConnection,
   socialConnectionViaProvider,

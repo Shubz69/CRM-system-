@@ -94,6 +94,10 @@ export async function regenerateOrganisationManyChatSecret(organisationId: strin
     where: { id: integration.id },
     data: { isActive: true, updatedAt: new Date() },
   });
+  const { refreshOrganisationConnectorCapabilities } = await import(
+    "@/services/connectors/capabilities"
+  );
+  await refreshOrganisationConnectorCapabilities(organisationId);
   return secret;
 }
 

@@ -117,7 +117,7 @@ export async function evaluateOrganisationConnectors(organisationId: string) {
               : ConnectorCapabilityStatus.AUTH_REQUIRED,
             provenance: secretOk
               ? "org IntegrationCredential webhook_secret"
-              : "org webhook secret not configured",
+              : "AUTH_REQUIRED until this organisation regenerates a webhook secret",
             missingScopes: [] as string[],
           };
         }
@@ -209,21 +209,64 @@ export async function evaluateOrganisationConnectors(organisationId: string) {
     ),
   );
 
-  // Drop ghost rows from older connectionRefs (e.g. "none" AUTH_REQUIRED after
-  // a Zernio/Ayrshare SocialConnection became ACTIVE).
-  await Promise.all(
-    rows.map((row) =>
-      prisma.connectorCapabilityState.deleteMany({
-        where: {
-          organisationId,
-          providerKey: row.providerKey,
-          NOT: { connectionRef: row.connectionRef },
-        },
-      }),
-    ),
-  );
+  await purgeStaleConnectorCapabilityGhosts({ organisationId, rows });
 
   return rows;
+}
+
+/**
+ * Best-effort re-evaluate after Zernio sync or org secret rotation.
+ * Callers must not fail connect/sync if capability persistence errors.
+ */
+export async function refreshOrganisationConnectorCapabilities(organisationId: string) {
+  try {
+    await evaluateOrganisationConnectors(organisationId);
+  } catch {
+    /* capability refresh is not on the critical path */
+  }
+}
+
+/**
+ * Drop stale connectionRef=none AUTH_REQUIRED rows once an ACTIVE via-provider
+ * SocialConnection exists, plus any other leftover connectionRefs.
+ */
+export async function purgeStaleConnectorCapabilityGhosts(input: {
+  organisationId: string;
+  rows: Array<{
+    providerKey: string;
+    connectionRef: string;
+    connectionStatus: ConnectorConnectionStatus;
+  }>;
+}) {
+  await Promise.all(
+    input.rows.map(async (row) => {
+      const deletes = [
+        prisma.connectorCapabilityState.deleteMany({
+          where: {
+            organisationId: input.organisationId,
+            providerKey: row.providerKey,
+            NOT: { connectionRef: row.connectionRef },
+          },
+        }),
+      ];
+      if (
+        row.connectionRef !== "none" &&
+        row.connectionStatus === ConnectorConnectionStatus.CONNECTED
+      ) {
+        deletes.push(
+          prisma.connectorCapabilityState.deleteMany({
+            where: {
+              organisationId: input.organisationId,
+              providerKey: row.providerKey,
+              connectionRef: "none",
+              status: ConnectorCapabilityStatus.AUTH_REQUIRED,
+            },
+          }),
+        );
+      }
+      await Promise.all(deletes);
+    }),
+  );
 }
 
 function mapSocialStatus(

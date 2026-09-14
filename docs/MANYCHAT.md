@@ -6,7 +6,7 @@ Agent Desk uses ManyChat as the Instagram DM transport.
 
 Open **Integrations**. **Social Accounts** (Instagram / LinkedIn / YouTube) stays at the top.
 
-Scroll to **Messaging setup**, or open `/integrations?setup=messaging` (also linked from Inbox empty state). That section is required to configure the organisation webhook secret. Until an org secret exists, inbound `WEBHOOK_RECEIVE` stays AUTH_REQUIRED (the environment secret is a fallback for local/dev only).
+Scroll to **Messaging setup**, or open `/integrations?setup=messaging` (also linked from Inbox empty state). That section is required to configure the organisation webhook secret. Until an org secret exists, inbound `WEBHOOK_RECEIVE` stays **AUTH_REQUIRED**. The environment webhook secret is a local/dev fallback for unique `channel_id` mappings only — it cannot authorize another organisation's `organisationId`. Each workspace must regenerate its own secret.
 
 From Messaging setup:
 
@@ -16,7 +16,7 @@ From Messaging setup:
 4. Click **Test inbound** to process a sample message inside the CRM (nothing is sent to Instagram).
 5. **Disconnect** / **Reconnect** and **Validate configuration** remain available when a stored token exists.
 
-Workspace owners and administrators (`integrations:manage`) can load and mutate this API. Read-only members cannot.
+Workspace owners and administrators (`integrations:manage`) can load and mutate this API. Read-only members cannot. A first-run checklist appears until the organisation secret exists.
 
 ## Endpoints
 
@@ -38,10 +38,10 @@ x-manychat-secret: <secret>
 
 Secrets are checked against:
 
-1. `MANYCHAT_WEBHOOK_SECRET` environment variable
-2. Optional per-organisation encrypted secret (regenerated from **Integrations → Messaging setup**)
+1. Per-organisation encrypted secret (regenerated from **Integrations → Messaging setup**) — required to authorize a payload `organisationId`
+2. `MANYCHAT_WEBHOOK_SECRET` environment variable — only when a unique `channel_id` MessagingChannel mapping proves the tenant
 
-Never return the full saved token after storage — the UI shows a masked value. Regeneration returns the new secret once.
+An org A secret must never authorize org B. Never return the full saved token after storage — the UI shows a masked value. Regeneration returns the new secret once.
 
 ## Required payload
 
