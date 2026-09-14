@@ -5,6 +5,36 @@ import {
   isModeShapedOutput,
   type AnswerModeOutput,
 } from "@/services/answer-modes/shape";
+import {
+  ResearchFindingCards,
+  ResearchSourceCards,
+} from "@/components/research/evidence-cards";
+
+function EvidenceBlock({
+  findings,
+  sources,
+}: {
+  findings?: Array<{
+    claim: string;
+    sourceUrl: string;
+    evidenceExcerpt?: string;
+    sourceTitle?: string;
+  }>;
+  sources?: Array<{
+    url: string;
+    title?: string;
+    snippet?: string;
+    author?: string;
+    platform?: string;
+  }>;
+}) {
+  return (
+    <>
+      <ResearchFindingCards findings={findings ?? []} />
+      <ResearchSourceCards sources={sources ?? []} />
+    </>
+  );
+}
 
 type Props = {
   output: unknown;
@@ -26,8 +56,11 @@ function EvidenceList({ items }: { items: string[] }) {
 
 function QuickRenderer({ output }: { output: Extract<AnswerModeOutput, { mode: "quick" }> }) {
   return (
-    <div className="whitespace-pre-wrap text-lg leading-relaxed text-[var(--foreground)]">
-      {output.answer}
+    <div className="space-y-5">
+      <div className="whitespace-pre-wrap text-lg leading-relaxed text-[var(--foreground)]">
+        {output.answer}
+      </div>
+      <EvidenceBlock findings={output.findings} sources={output.sources} />
     </div>
   );
 }
@@ -81,6 +114,7 @@ function ExecutiveRenderer({
           <p className="mt-1 text-sm font-medium text-[var(--foreground)]">{output.recommendation}</p>
         </div>
       ) : null}
+      <EvidenceBlock findings={output.findings} sources={output.sources} />
     </div>
   );
 }
@@ -119,6 +153,19 @@ function ActionRenderer({
             {action.why ? (
               <p className="mt-1 text-sm text-[var(--muted)]">{action.why}</p>
             ) : null}
+            {action.evidenceExcerpt ? (
+              <p className="mt-2 text-sm text-[var(--muted)]">“{action.evidenceExcerpt}”</p>
+            ) : null}
+            {action.sourceUrl ? (
+              <a
+                href={action.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-block break-all text-sm text-[var(--accent)] hover:underline"
+              >
+                Source
+              </a>
+            ) : null}
             {action.risks?.length ? (
               <p className="mt-2 text-xs text-[var(--muted)]">
                 Risks: {action.risks.join(" · ")}
@@ -145,6 +192,7 @@ function ActionRenderer({
       <p className="text-xs text-[var(--muted)]">
         Capability buttons send a proposal for approval — they never run automatically.
       </p>
+      <EvidenceBlock findings={output.findings} sources={output.sources} />
     </div>
   );
 }
@@ -172,33 +220,7 @@ function DeepRenderer({
           <p className="mt-1 text-sm text-[var(--muted)]">{output.method}</p>
         </div>
       ) : null}
-      {output.findings?.length ? (
-        <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Findings
-          </p>
-          <ul className="space-y-3">
-            {output.findings.map((f, i) => (
-              <li key={`${f.claim}-${i}`} className="surface p-4">
-                <p className="text-[var(--foreground)]">{f.claim}</p>
-                {f.evidenceExcerpt ? (
-                  <p className="mt-2 text-sm text-[var(--muted)]">{f.evidenceExcerpt}</p>
-                ) : null}
-                {f.sourceUrl ? (
-                  <a
-                    href={f.sourceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
-                  >
-                    Source
-                  </a>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <ResearchFindingCards findings={output.findings ?? []} />
       {output.evidence?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
@@ -209,30 +231,7 @@ function DeepRenderer({
           </div>
         </div>
       ) : null}
-      {output.sources?.length ? (
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-            Sources
-          </p>
-          <ul className="mt-1 space-y-1 text-sm">
-            {output.sources.map((s, i) => (
-              <li key={`${s.url}-${i}`}>
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[var(--accent)] hover:underline"
-                >
-                  {s.title || s.url}
-                </a>
-                {s.platform ? (
-                  <span className="ml-2 text-xs text-[var(--muted)]">{s.platform}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <ResearchSourceCards sources={output.sources ?? []} />
       {output.contradictions?.length ? (
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">

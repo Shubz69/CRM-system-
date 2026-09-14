@@ -27,6 +27,8 @@ export async function GET() {
                 url: true,
                 title: true,
                 platform: true,
+                author: true,
+                content: true,
                 freshnessScore: true,
                 publishedAt: true,
                 retrievedAt: true,
@@ -46,6 +48,7 @@ export async function GET() {
             publishedAt: true,
             retrievedAt: true,
             author: true,
+            content: true,
           },
         },
       },
@@ -106,9 +109,22 @@ export async function GET() {
           verifiedByCritic: f.verifiedByCritic,
           flaggedUnsupported: f.flaggedUnsupported,
           flaggedUngrounded: f.flaggedUngrounded,
-          source: f.source,
+          sourceUrl: f.source?.url ?? null,
+          source: f.source
+            ? {
+                ...f.source,
+                snippet: f.source.content
+                  ? f.source.content.replace(/\s+/g, " ").trim().slice(0, 280)
+                  : null,
+                content: undefined,
+              }
+            : null,
         })),
-        sources: job.sources,
+        sources: job.sources.map((s) => ({
+          ...s,
+          snippet: s.content ? s.content.replace(/\s+/g, " ").trim().slice(0, 280) : null,
+          content: undefined,
+        })),
         qualityAssessment: byJob.get(job.id) ?? null,
       })),
     });

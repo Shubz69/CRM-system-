@@ -1,0 +1,181 @@
+/**
+ * Client-safe research evidence helpers (no Prisma).
+ * Always expose source URL + snippet/title and finding→source linkage.
+ * Never invents URLs or statistics.
+ */
+
+export type SourceBackedFinding = {
+  claim: string;
+  sourceUrl: string;
+  evidenceExcerpt?: string;
+  sourceTitle?: string;
+  claimKind: "OBSERVATION";
+  confidence: number;
+};
+
+export type VisibleSource = {
+  url: string;
+  title?: string;
+  snippet?: string;
+  author?: string;
+  platform?: string;
+};
+
+export type VisibleFinding = {
+  claim: string;
+  sourceUrl: string;
+  evidenceExcerpt?: string;
+  sourceTitle?: string;
+  claimKind?: string;
+  confidence?: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function trimText(value: unknown, max = 280): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.slice(0, max);
+}
+
+function sourceSnippet(rec: Record<string, unknown>): string | undefined {
+  return (
+    trimText(rec.snippet) ||
+    trimText(rec.content) ||
+    trimText(rec.excerpt) ||
+    trimText(rec.evidenceExcerpt)
+  );
+}
+
+export function sourceBackedFindingsFromSources(
+  sources: Array<{ url: string; title?: string | null; content?: string | null }>,
+  limit = 8,
+): SourceBackedFinding[] {
+  const out: SourceBackedFinding[] = [];
+  for (const source of sources) {
+    if (!source.url || out.length >= limit) continue;
+    const excerpt = (source.content || "").replace(/\s+/g, " ").trim().slice(0, 220);
+    const title = (source.title || "").trim();
+    const claim = excerpt
+      ? `${title || source.url}: ${excerpt}`
+      : title || `Source recorded: ${source.url}`;
+    out.push({
+      claim: claim.slice(0, 800),
+      sourceUrl: source.url,
+      evidenceExcerpt: excerpt || undefined,
+      sourceTitle: title || undefined,
+      claimKind: "OBSERVATION",
+      confidence: excerpt ? 0.45 : 0.35,
+    });
+  }
+  return out;
+}
+
+export function normalizeVisibleSources(output: unknown): VisibleSource[] {
+  const obj = asRecord(output);
+  const out: VisibleSource[] = [];
+  const seen = new Set<string>();
+  const push = (rec: Record<string, unknown> | null) => {
+    const url = trimText(rec?.url, 2_000);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    const author = trimText(rec?.author, 200);
+    out.push({
+      url,
+      title: trimText(rec?.title, 300),
+      snippet: rec ? sourceSnippet(rec) : undefined,
+      author: author || undefined,
+      platform: trimText(rec?.platform, 40),
+    });
+  };
+  if (obj && Array.isArray(obj.sources)) {
+    for (const item of obj.sources) push(asRecord(item));
+  }
+  const rows = obj
+    ? [
+        ...(Array.isArray(obj.findings) ? obj.findings : []),
+        ...(Array.isArray(obj.claims) ? obj.claims : []),
+      ]
+    : [];
+  for (const item of rows) {
+    const rec = asRecord(item);
+    const url = trimText(rec?.sourceUrl, 2_000);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      url,
+      title: trimText(rec?.sourceTitle, 300),
+      snippet: rec ? sourceSnippet(rec) : undefined,
+    });
+  }
+  return out;
+}
+
+export function normalizeVisibleFindings(
+  output: unknown,
+  sources?: VisibleSource[],
+): VisibleFinding[] {
+  const obj = asRecord(output);
+  const sourceList = sources ?? normalizeVisibleSources(output);
+  const byUrl = new Map(sourceList.map((s) => [s.url, s]));
+  const out: VisibleFinding[] = [];
+  const seen = new Set<string>();
+  const rows = obj
+    ? [
+        ...(Array.isArray(obj.findings) ? obj.findings : []),
+        ...(Array.isArray(obj.claims) ? obj.claims : []),
+      ]
+    : [];
+  for (const item of rows) {
+    const rec = asRecord(item);
+    const claim = trimText(rec?.claim, 800);
+    const sourceUrl = trimText(rec?.sourceUrl, 2_000);
+    if (!claim || !sourceUrl) continue;
+    const key = `${claim.toLowerCase()}|${sourceUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const matched = byUrl.get(sourceUrl);
+    out.push({
+      claim,
+      sourceUrl,
+      evidenceExcerpt: trimText(rec?.evidenceExcerpt, 400) || matched?.snippet,
+      sourceTitle: trimText(rec?.sourceTitle, 300) || matched?.title,
+      claimKind: trimText(rec?.claimKind, 40),
+      confidence:
+        typeof rec?.confidence === "number" && Number.isFinite(rec.confidence)
+          ? rec.confidence
+          : undefined,
+    });
+  }
+  if (out.length === 0 && sourceList.length > 0) {
+    return sourceBackedFindingsFromSources(
+      sourceList.map((s) => ({
+        url: s.url,
+        title: s.title,
+        content: s.snippet,
+      })),
+    );
+  }
+  return out;
+}
+
+export function attachVisibleResearchEvidence(output: unknown): unknown {
+  const obj = asRecord(output);
+  if (!obj) return output;
+  if (obj.source === "internal_crm") return output;
+  const looksResearch =
+    typeof obj.researchJobId === "string" ||
+    Array.isArray(obj.sources) ||
+    Array.isArray(obj.findings) ||
+    Array.isArray(obj.claims) ||
+    obj.phase === "PARTIAL_WITH_SOURCES";
+  if (!looksResearch) return output;
+  const sources = normalizeVisibleSources(obj);
+  const findings = normalizeVisibleFindings(obj, sources);
+  if (sources.length === 0 && findings.length === 0) return output;
+  return { ...obj, sources, findings };
+}

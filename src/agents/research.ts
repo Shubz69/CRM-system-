@@ -64,6 +64,7 @@ const findingSchema = z.object({
   claim: z.string().min(1),
   sourceUrl: flexibleSourceUrl,
   evidenceExcerpt: z.string().optional(),
+  sourceTitle: z.string().optional(),
   claimKind: z
     .enum(["OFFICIAL", "OBSERVATION", "INFERENCE", "SECONDARY", "UNKNOWN"])
     .optional(),
@@ -81,6 +82,8 @@ export const researchOutputSchema = z.object({
       url: z.string().url(),
       title: z.string(),
       platform: z.string(),
+      snippet: z.string().optional(),
+      author: z.string().nullable().optional(),
     }),
   ),
   summary: z.string(),
@@ -653,7 +656,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       queries,
       sourceCount: ranked.length,
       findings,
-      sources: ranked.map((r) => ({ url: r.url, title: r.title, platform: r.platform })),
+      sources: ranked.map((r) => ({
+        url: r.url,
+        title: r.title,
+        platform: r.platform,
+        snippet: (r.content || "").replace(/\s+/g, " ").trim().slice(0, 280) || undefined,
+        author: r.author ?? undefined,
+      })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
       ...(partialWithSources

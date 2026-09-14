@@ -34,6 +34,7 @@ import {
   toScoreResearchClaims,
 } from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
+import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
 import {
   isResearchEvidenceAgent,
   isResearchPlanStepName,
@@ -1307,11 +1308,13 @@ async function finalizeModeOutput(input: {
     }
   }
 
-  // QUICK / EXECUTIVE / ACTION shapers drop sources, findings, and hooks.
-  // Carry them back from raw so RQS and the Ask UI still see gathered evidence.
+  // QUICK / EXECUTIVE / ACTION shapers used to drop sources/findings.
+  // Carry evidence from raw, then normalise so every research payload has
+  // linked findings + source cards (URL, snippet/title/author).
   if (input.raw && base && base !== input.raw) {
     base = mergeResearchEvidence(base, input.raw);
   }
+  base = attachVisibleResearchEvidence(base);
 
   // Shape builders omit deadline metadata — preserve mandatory quality flags.
   if (

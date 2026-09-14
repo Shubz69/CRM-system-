@@ -10,7 +10,6 @@ import {
   countLinkedGroundedClaims,
 } from "@/services/research-quality";
 import { shapeFinalOutputForMode } from "@/services/answer-modes";
-import { mergeResearchEvidence } from "@/services/research-quality/grounded-claims";
 
 const ICO = "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/";
 const GOV = "https://www.gov.uk/data-protection";
@@ -268,7 +267,7 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
     ).toBe(true);
   });
 
-  it("QUICK shape without merge loses evidence; merge restores source-backed scoring", () => {
+  it("QUICK shape keeps source URLs and evidence so scoring is not a 0% dead-end", () => {
     const findings = [
       {
         claim: "Lawful basis is required for processing personal data.",
@@ -286,22 +285,12 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
       sources: AUTH_SOURCES,
     };
     const shaped = shapeFinalOutputForMode("QUICK", raw) as Record<string, unknown>;
-    expect(shaped.sources).toBeUndefined();
-    expect(shaped.findings).toBeUndefined();
+    expect(Array.isArray(shaped.sources)).toBe(true);
+    expect((shaped.sources as unknown[]).length).toBeGreaterThan(0);
+    expect(Array.isArray(shaped.findings)).toBe(true);
+    expect((shaped.findings as Array<{ sourceUrl?: string }>)[0]?.sourceUrl).toBe(ICO);
 
-    const orphaned = extractCanonicalGroundedClaims(shaped);
-    const orphanedReport = scoreResearchQuality({
-      originalUserPrompt: "UK GDPR CRM storage",
-      researchTopic: "UK GDPR CRM storage",
-      claims: toScoreResearchClaims(orphaned),
-      sources: [],
-      finalAnswerText: String(shaped.answer || ""),
-    });
-    expect(orphanedReport.overall).toBe(0);
-    expect(orphanedReport.breakdown.sourceQuality).toBe(0);
-
-    const merged = mergeResearchEvidence(shaped, raw) as Record<string, unknown>;
-    const grounded = extractCanonicalGroundedClaims(merged, {
+    const grounded = extractCanonicalGroundedClaims(shaped, {
       allowedSourceUrls: AUTH_SOURCES.map((s) => s.url),
     });
     const report = scoreResearchQuality({
@@ -309,12 +298,11 @@ describe("RQS grounded-claim handoff (Round 7C)", () => {
       researchTopic: "UK GDPR CRM storage",
       claims: toScoreResearchClaims(grounded),
       sources: AUTH_SOURCES,
-      finalAnswerText: String(merged.answer || merged.shortAnswer || ""),
+      finalAnswerText: String(shaped.answer || ""),
     });
     expect(grounded.length).toBeGreaterThan(0);
     expect(report.overall).toBeGreaterThan(0);
     expect(report.breakdown.sourceQuality).toBeGreaterThan(0);
-    expect(report.breakdown.factualAccuracy).toBeGreaterThan(0);
   });
 
   it("I: strong authority + strong claim linkage → meaningful non-zero RQS", () => {

@@ -9,6 +9,14 @@ import { toast } from "sonner";
 import { ASK_OUTCOME_CARDS } from "@/lib/navigation";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 import { AnswerModeOutputView } from "@/components/ask/answer-mode-output";
+import {
+  ResearchFindingCards,
+  ResearchSourceCards,
+} from "@/components/research/evidence-cards";
+import {
+  normalizeVisibleFindings,
+  normalizeVisibleSources,
+} from "@/lib/research-visible-evidence";
 import { isModeShapedOutput } from "@/services/answer-modes/shape";
 import { getImmutableWorkspaceContext, isWorkspaceContextReady, subscribeWorkspaceContextReady, workspaceFetch } from "@/lib/workspace-client";
 
@@ -126,73 +134,22 @@ function domainFromUrl(url: string): string | undefined {
 }
 
 function extractSources(value: unknown): SourceItem[] {
-  if (!value || typeof value !== "object") return [];
-  const obj = value as Record<string, unknown>;
-  const out: SourceItem[] = [];
-  const seen = new Set<string>();
-  if (Array.isArray(obj.sources)) {
-    for (const s of obj.sources) {
-      if (!s || typeof s !== "object") continue;
-      const title = (s as { title?: unknown }).title;
-      const url = (s as { url?: unknown }).url;
-      const platform = (s as { platform?: unknown }).platform;
-      if (typeof url === "string" && !seen.has(url)) {
-        seen.add(url);
-        out.push({
-          label: typeof title === "string" && title.trim() ? title : url,
-          url,
-          domain: domainFromUrl(url),
-          platform: typeof platform === "string" ? platform : undefined,
-        });
-      }
-    }
-  }
-  if (Array.isArray(obj.claims)) {
-    for (const c of obj.claims) {
-      if (!c || typeof c !== "object") continue;
-      const claim = (c as { claim?: unknown }).claim;
-      const url = (c as { sourceUrl?: unknown }).sourceUrl;
-      if (typeof url === "string" && !seen.has(url)) {
-        seen.add(url);
-        out.push({
-          label: typeof claim === "string" ? claim.slice(0, 120) : url,
-          url,
-          domain: domainFromUrl(url),
-          claim: typeof claim === "string" ? claim : undefined,
-        });
-      } else if (typeof claim === "string" && typeof url === "string") {
-        const existing = out.find((x) => x.url === url);
-        if (existing && !existing.claim) existing.claim = claim;
-      }
-    }
-  }
-  return out;
+  return normalizeVisibleSources(value).map((s) => ({
+    label: s.title || s.url,
+    url: s.url,
+    domain: domainFromUrl(s.url),
+    platform: s.platform,
+    claim: s.snippet,
+  }));
 }
 
 function extractFindings(value: unknown): Array<{
   claim: string;
   sourceUrl?: string;
   evidenceExcerpt?: string;
+  sourceTitle?: string;
 }> {
-  if (!value || typeof value !== "object") return [];
-  const obj = value as Record<string, unknown>;
-  const rows = Array.isArray(obj.findings) && obj.findings.length > 0
-    ? obj.findings
-    : Array.isArray(obj.claims)
-      ? obj.claims
-      : [];
-  const out: Array<{ claim: string; sourceUrl?: string; evidenceExcerpt?: string }> = [];
-  for (const item of rows) {
-    if (!item || typeof item !== "object") continue;
-    const f = item as { claim?: unknown; sourceUrl?: unknown; evidenceExcerpt?: unknown };
-    if (typeof f.claim !== "string") continue;
-    out.push({
-      claim: f.claim,
-      sourceUrl: typeof f.sourceUrl === "string" ? f.sourceUrl : undefined,
-      evidenceExcerpt: typeof f.evidenceExcerpt === "string" ? f.evidenceExcerpt : undefined,
-    });
-  }
-  return out;
+  return normalizeVisibleFindings(value);
 }
 
 function renderAnswerBody(value: unknown, preferredMode?: string | null): string {
@@ -976,6 +933,7 @@ export default function AskPage() {
         fullBrief ||
         imageUrl ||
         findings.length ||
+        sources.length ||
         viralExamples.length ||
         nextBigThings.length ||
         contentHooks.length,
@@ -1293,28 +1251,8 @@ export default function AskPage() {
                   </details>
                 )}
 
-                {findings.length > 0 && (
-                  <ul className="space-y-3">
-                    {findings.map((f, i) => (
-                      <li key={`${f.claim}-${i}`} className="surface p-4">
-                        <p className="text-[var(--foreground)]">{f.claim}</p>
-                        {f.evidenceExcerpt ? (
-                          <p className="mt-2 text-sm text-[var(--muted)]">{f.evidenceExcerpt}</p>
-                        ) : null}
-                        {f.sourceUrl ? (
-                          <a
-                            href={f.sourceUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-2 inline-block text-sm text-[var(--accent)] hover:underline"
-                          >
-                            Source
-                          </a>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <ResearchFindingCards findings={findings} />
+                <ResearchSourceCards sources={normalizeVisibleSources(answerSource)} />
                 {adapterErrors.length > 0 && (
                   <p className="text-sm text-[var(--muted)]">
                     Some sources were skipped:{" "}
@@ -1342,36 +1280,11 @@ export default function AskPage() {
         <WorkingPulse label={workingLabel} />
       )}
 
-      {sources.length > 0 && (
-        <details className="rounded-xl border border-[var(--border)] px-4 py-3">
-          <summary className="cursor-pointer text-sm font-medium">Where this came from</summary>
-          <ul className="mt-3 space-y-3 text-sm">
-            {sources.map((s, i) => (
-              <li key={`${s.url || s.label}-${i}`} className="space-y-0.5">
-                <div className="font-medium text-[var(--foreground)]">{s.label}</div>
-                <div className="text-xs text-[var(--muted)]">
-                  {[s.platform, s.domain].filter((x): x is string => Boolean(x)).join(" · ")}
-                  {s.url ? (
-                    <>
-                      {s.platform || s.domain ? " · " : ""}
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[var(--accent)] hover:underline break-all"
-                      >
-                        {s.url}
-                      </a>
-                    </>
-                  ) : null}
-                </div>
-                {s.claim && s.claim !== s.label ? (
-                  <p className="text-xs text-[var(--muted)]">{s.claim}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </details>
+      {!showAnswer && sources.length > 0 && (
+        <section className="space-y-3">
+          <ResearchFindingCards findings={findings} />
+          <ResearchSourceCards sources={normalizeVisibleSources(answerSource)} />
+        </section>
       )}
 
       {(() => {

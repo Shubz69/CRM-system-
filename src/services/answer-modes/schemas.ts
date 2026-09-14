@@ -2,10 +2,30 @@ import { z } from "zod";
 
 /** Practical mode schemas — optional fields stay optional; no forced empties. */
 
+/** Source + finding cards — required on research answers so UI/API never hide evidence. */
+export const evidenceSourceSchema = z.object({
+  url: z.string(),
+  title: z.string().optional(),
+  snippet: z.string().optional(),
+  author: z.string().optional(),
+  platform: z.string().optional(),
+});
+
+export const evidenceFindingSchema = z.object({
+  claim: z.string().min(1),
+  sourceUrl: z.string(),
+  evidenceExcerpt: z.string().optional(),
+  sourceTitle: z.string().optional(),
+  claimKind: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
 export const quickAnswerSchema = z.object({
   mode: z.literal("quick"),
   answer: z.string().min(1),
   researchJobId: z.string().optional(),
+  findings: z.array(evidenceFindingSchema).optional(),
+  sources: z.array(evidenceSourceSchema).optional(),
 });
 
 export const executiveAnswerSchema = z.object({
@@ -16,6 +36,8 @@ export const executiveAnswerSchema = z.object({
   risks: z.array(z.string().min(1)).optional(),
   recommendation: z.string().min(1).optional(),
   researchJobId: z.string().optional(),
+  findings: z.array(evidenceFindingSchema).optional(),
+  sources: z.array(evidenceSourceSchema).optional(),
 });
 
 export const actionItemSchema = z.object({
@@ -37,6 +59,8 @@ export const actionItemSchema = z.object({
     .optional(),
   /** Pending ApprovalRequest id — never auto-executed. */
   approvalRequestId: z.string().optional(),
+  sourceUrl: z.string().optional(),
+  evidenceExcerpt: z.string().optional(),
 });
 
 export const actionAnswerSchema = z.object({
@@ -44,33 +68,17 @@ export const actionAnswerSchema = z.object({
   actions: z.array(actionItemSchema).min(1),
   researchJobId: z.string().optional(),
   summary: z.string().optional(),
+  findings: z.array(evidenceFindingSchema).optional(),
+  sources: z.array(evidenceSourceSchema).optional(),
 });
 
 export const deepAnswerSchema = z.object({
   mode: z.literal("deep"),
   executiveSummary: z.string().min(1),
   method: z.string().optional(),
-  findings: z
-    .array(
-      z.object({
-        claim: z.string().min(1),
-        sourceUrl: z.string().optional(),
-        evidenceExcerpt: z.string().optional(),
-        claimKind: z.string().optional(),
-        confidence: z.number().min(0).max(1).optional(),
-      }),
-    )
-    .optional(),
+  findings: z.array(evidenceFindingSchema).optional(),
   evidence: z.array(z.string().min(1)).optional(),
-  sources: z
-    .array(
-      z.object({
-        url: z.string(),
-        title: z.string().optional(),
-        platform: z.string().optional(),
-      }),
-    )
-    .optional(),
+  sources: z.array(evidenceSourceSchema).optional(),
   contradictions: z.array(z.string()).optional(),
   unknowns: z.array(z.string()).optional(),
   caveats: z.array(z.string()).optional(),
