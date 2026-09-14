@@ -85,6 +85,7 @@ vi.mock("@/adapters/sources", async () => {
 import { prisma } from "@/lib/db";
 import { researchAgent } from "@/agents/research";
 import { WEB_SEARCH_MISSING_KEY_MESSAGE } from "@/adapters/sources/web";
+import { isWebResearchAuthRequiredOutput } from "@/lib/research-job-present";
 
 const HIRE = "https://hire.example/rates";
 const SNIPPET = "A 3-tonne excavator typically hires from £120 per day in the UK.";
@@ -139,6 +140,11 @@ describe("Quick web Ask — adapter honesty + plant-hire happy path", () => {
     expect(JSON.stringify(result.output.sources)).toBe("[]");
     expect(JSON.stringify(result.output.findings)).toBe("[]");
     expect(result.output.summary).not.toMatch(/AUTH_REQUIRED/);
+    expect(prisma.researchJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ error: "no_sources" }),
+      }),
+    );
   });
 
   it("surfaces AUTH_REQUIRED + Vercel key names when TAVILY/EXA are missing", async () => {
@@ -168,6 +174,15 @@ describe("Quick web Ask — adapter honesty + plant-hire happy path", () => {
     expect(result.output.summary).toMatch(/EXA_API_KEY/);
     expect(result.output.summary).toMatch(/Vercel/i);
     expect(result.output.summary).not.toMatch(/Quality gate failed/i);
+    expect(result.output.error).toBe("AUTH_REQUIRED");
+    expect(prisma.researchJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          error: "AUTH_REQUIRED",
+          status: "FAILED",
+        }),
+      }),
+    );
   });
 
   it("returns ≥1 plant-hire source URL + snippet on the mocked success path", async () => {
@@ -198,5 +213,26 @@ describe("Quick web Ask — adapter honesty + plant-hire happy path", () => {
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe(HIRE);
     expect(JSON.stringify(result.output.findings[0])).toMatch(/£120|excavator|plant hire/i);
+  });
+});
+
+describe("isWebResearchAuthRequiredOutput", () => {
+  it("detects AUTH_REQUIRED on ResearchJob-shaped output (production no_sources jobs were this without the code)", () => {
+    expect(
+      isWebResearchAuthRequiredOutput({
+        error: "AUTH_REQUIRED",
+        sources: [],
+        findings: [],
+        summary: WEB_SEARCH_MISSING_KEY_MESSAGE,
+      }),
+    ).toBe(true);
+    expect(
+      isWebResearchAuthRequiredOutput({
+        error: "no_sources",
+        sources: [],
+        findings: [],
+        summary: "No sources were returned from the configured adapters.",
+      }),
+    ).toBe(false);
   });
 });

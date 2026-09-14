@@ -94,6 +94,8 @@ export const researchOutputSchema = z.object({
   /** Honest degrade markers when sources exist but findings are incomplete. */
   phase: z.string().optional(),
   caveats: z.array(z.string()).optional(),
+  /** Persistable failure code — AUTH_REQUIRED vs no_sources. Never invent keys. */
+  error: z.string().optional(),
 });
 
 export type ResearchInput = z.infer<typeof researchInputSchema>;
@@ -672,6 +674,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
     const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
 
+    const jobError =
+      ranked.length > 0 ? null : authRequired || missingWebKeys ? "AUTH_REQUIRED" : "no_sources";
     const output: ResearchOutput = {
       researchJobId: jobId,
       topic,
@@ -688,6 +692,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       })),
       summary,
       adapterErrors: adapterErrors.slice(0, 20),
+      ...(jobError ? { error: jobError } : {}),
       ...(partialWithSources
         ? {
             phase: "PARTIAL_WITH_SOURCES",
@@ -708,12 +713,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         finishedAt: new Date(),
         userFacingError: ranked.length
           ? null
-          : emptyReason.includes("AUTH_REQUIRED")
+          : jobError === "AUTH_REQUIRED"
             ? emptyReason
             : "I couldn't reach any research sources. Check that TAVILY_API_KEY or EXA_API_KEY is set on Vercel (Quick Ask runs there in-process), not only on the Railway worker.",
-        // Never persist an internal degrade code that the /research UI treats as "could not finish"
-        // when sources (or source-backed findings) were actually gathered.
-        error: ranked.length ? null : "no_sources",
+        // AUTH_REQUIRED is the ops-visible code for missing Vercel web keys
+        // (production plant-hire jobs cmu149j980005la04wfakopf8 / cmu145m9g0005ic04zrfcgnzl
+        // stored generic no_sources and looked like an adapter empty, not a key gap).
+        error: jobError,
       },
           });
 

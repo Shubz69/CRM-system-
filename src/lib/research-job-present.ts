@@ -9,6 +9,23 @@ export function isPartialSourcesOnlyError(error: string | null | undefined): boo
   return typeof error === "string" && /partial_sources_only/i.test(error.trim());
 }
 
+/** True when web search failed because TAVILY/EXA keys are missing or rejected on this process. */
+export function isWebResearchAuthRequiredOutput(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const obj = output as Record<string, unknown>;
+  if (obj.error === "AUTH_REQUIRED") return true;
+  if (typeof obj.summary === "string" && /\bAUTH_REQUIRED\b/.test(obj.summary)) return true;
+  if (typeof obj.userFacingError === "string" && /\bAUTH_REQUIRED\b/.test(obj.userFacingError)) {
+    return true;
+  }
+  if (!Array.isArray(obj.adapterErrors)) return false;
+  return obj.adapterErrors.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const rec = entry as { code?: string; message?: string };
+    return rec.code === "AUTH_REQUIRED" || (typeof rec.message === "string" && /\bAUTH_REQUIRED\b/.test(rec.message));
+  });
+}
+
 /** Drop the scary total-failure banner when sources were actually gathered. */
 export function softenPartialSourcesOnlyError(input: {
   error: string | null;

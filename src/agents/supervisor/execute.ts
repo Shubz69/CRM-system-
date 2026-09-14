@@ -36,6 +36,8 @@ import {
 } from "@/services/research-quality/grounded-claims";
 import { stripClarificationMetadata } from "@/lib/agent-request-sanitize";
 import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
+import { isWebResearchAuthRequiredOutput } from "@/lib/research-job-present";
+import { WEB_SEARCH_MISSING_KEY_MESSAGE } from "@/adapters/sources/web";
 import {
   isResearchEvidenceAgent,
   isResearchPlanStepName,
@@ -399,17 +401,24 @@ async function tryQuickResearchFastPath(input: {
       ((result.output as { sources: unknown[] }).sources?.length ?? 0) > 0) ||
       (Array.isArray((result.output as { findings?: unknown }).findings) &&
         ((result.output as { findings: unknown[] }).findings?.length ?? 0) > 0));
+  const authRequired = !hasEvidence && isWebResearchAuthRequiredOutput(result.output);
+  const authMessage =
+    authRequired && typeof (result.output as { summary?: string }).summary === "string"
+      ? (result.output as { summary: string }).summary
+      : WEB_SEARCH_MISSING_KEY_MESSAGE;
   return finishRun({
     organisationId: input.organisationId,
     request: input.run.request,
     runId: input.run.id,
-    status: hasEvidence ? "COMPLETED" : "PARTIAL",
+    status: hasEvidence ? "COMPLETED" : authRequired ? "FAILED" : "PARTIAL",
     totalCostCents: result.costCents ?? 0,
     partialResults: {
       steps: [{ agentName: "research", userFacingLabel: "Research", output: result.output }],
       latencyTrace,
     },
     finalOutput: shaped,
+    error: hasEvidence ? null : authRequired ? "AUTH_REQUIRED" : "no_sources",
+    userFacingError: hasEvidence ? null : authMessage,
   });
 }
 
@@ -1827,8 +1836,11 @@ function attachResearchQualityIfApplicable(input: {
     const withQuality: Record<string, unknown> = {
       ...obj,
       researchQuality: report,
-      researchQualitySummary:
-        sourcesForScore.length > 0 && claims.length === 0 && report.overall === 0
+      researchQualitySummary: isWebResearchAuthRequiredOutput(obj)
+        ? typeof obj.summary === "string" && /\bAUTH_REQUIRED\b/.test(obj.summary)
+          ? obj.summary
+          : WEB_SEARCH_MISSING_KEY_MESSAGE
+        : sourcesForScore.length > 0 && claims.length === 0 && report.overall === 0
           ? "Sources collected — structured claims were incomplete; listed URLs are leads, not a 0% failure."
           : customerQualitySummary(report),
       groundedClaimCount: grounded.length,

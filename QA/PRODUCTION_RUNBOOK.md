@@ -74,7 +74,7 @@ Related: `docs/DEPLOYMENT.md`, `docs/WORKER.md`, `docs/CREDENTIAL-ROTATION.md`, 
 | ManyChat | Inbound silent / 401 | Validate org webhook secret + channel mapping; not Meta |
 | Meta Instagram | 503 META_NOT_CONFIGURED / signature 401 | Optional — fix app secrets / verify token; must not break ManyChat |
 | Booking | 401 invalid secret | Rotate booking secret both sides |
-| Apify / Tavily / YouTube | Research empty / budget | Check tokens + org research budget; pause detectors if burning cost |
+| Apify / Tavily / YouTube | Research empty / budget | **QUICK Ask reads Tavily/Exa from Vercel**, not Railway. If ResearchJob `error=no_sources` after in-process Quick (e.g. `cmu149j980005la04wfakopf8`), copy `TAVILY_API_KEY` + `EXA_API_KEY` from Railway → Vercel Production + Preview. Do not invent keys. Worker-path jobs on 2026-09-13 had sources=6 for the same plant-hire topic. |
 | SMTP | Invites show copy-link | Set `EMAIL_SMTP_URL` + `EMAIL_FROM`; failed send must stay `emailSent: false` |
 
 ## WEBHOOK FAILURE
