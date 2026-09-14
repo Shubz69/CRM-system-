@@ -22,6 +22,15 @@ async function timed<T>(fn: () => Promise<T>): Promise<{ ok: boolean; ms: number
   }
 }
 
+async function loadZernioWebhookCounts() {
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  return prisma.webhookEvent.groupBy({
+    by: ["status"],
+    where: { provider: "ZERNIO", createdAt: { gte: weekAgo } },
+    _count: { _all: true },
+  });
+}
+
 export default async function AdminHealthPage() {
   try {
     await requirePlatformAccess();
@@ -59,12 +68,7 @@ export default async function AdminHealthPage() {
     where: { status: "PROCESSED" },
     orderBy: { processedAt: "desc" },
   });
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const zernioWebhookCounts = await prisma.webhookEvent.groupBy({
-    by: ["status"],
-    where: { provider: "ZERNIO", createdAt: { gte: weekAgo } },
-    _count: { _all: true },
-  });
+  const zernioWebhookCounts = await loadZernioWebhookCounts();
   const zernioWebhookSummary = zernioWebhookCounts
     .map((row) => `${row.status} ${row._count._all}`)
     .join(", ");

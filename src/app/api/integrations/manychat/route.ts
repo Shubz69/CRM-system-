@@ -150,6 +150,8 @@ const actionSchema = z.object({
   text: z.string().optional(),
   contactExternalId: z.string().optional(),
   conversationId: z.string().optional(),
+  // Accepted only to reject cross-tenant spoofing — never used as the write target.
+  organisationId: z.string().optional(),
 });
 
 async function validateManyChatConfiguration(organisationId: string): Promise<{
@@ -232,6 +234,9 @@ export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("integrations:manage");
     const body = actionSchema.parse(await req.json());
+    if (body.organisationId && body.organisationId !== session.organisationId) {
+      return jsonError("Cannot operate on another workspace", 403);
+    }
 
     if (body.action === "regenerate_secret") {
       const secret = await regenerateOrganisationManyChatSecret(session.organisationId);
