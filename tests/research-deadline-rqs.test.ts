@@ -54,6 +54,9 @@ vi.mock("@/lib/db", () => ({
     organisationAgentLimits: {
       findUnique: (...a: unknown[]) => limitsFindUnique(...a),
     },
+    researchJob: {
+      findFirst: vi.fn(async () => null),
+    },
   },
 }));
 

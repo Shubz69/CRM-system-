@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { planAgentRunDeterministic } from "@/agents/supervisor/plan";
 import {
-  ANSWER_MODE_FORMAT_OPTIONS,
   answerModeOutputSchema,
   attachApprovalProposals,
   computeHintsForAnswerMode,
   detectAnswerModeFromLanguage,
-  formatClarification,
   isModeShapedOutput,
   shapeFinalOutputForMode,
   shouldSuppressBusinessClarification,
@@ -90,14 +88,15 @@ describe("format intent detection", () => {
     expect(result.plan.steps[0]?.agentName).toBe("research");
   });
 
-  it("asks format clarification when research has no mode", () => {
+  it("defaults sourced research without a format pick to a Quick FAST scan", () => {
     const result = planAgentRunDeterministic("Research plant hire pricing in the UK", {
       organisationId: "org_1",
     });
-    expect(result.kind).toBe("clarification");
-    if (result.kind !== "clarification") return;
-    expect(result.question).toBe(formatClarification().question);
-    expect(result.options).toEqual([...ANSWER_MODE_FORMAT_OPTIONS]);
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") return;
+    expect(result.plan.steps).toHaveLength(1);
+    expect(result.plan.steps[0]?.agentName).toBe("research");
+    expect((result.plan.steps[0]?.input as { depth?: string }).depth).toBe("FAST");
   });
 });
 
