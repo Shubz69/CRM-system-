@@ -58,6 +58,11 @@ vi.mock("@/lib/db", () => {
 
 vi.mock("@/jobs/redis", () => ({
   pingRedis: vi.fn(async () => true),
+  getBullMqPrefix: () => "agentdesk-test",
+  getRedisConnection: () => ({
+    get: async () => null,
+    set: async () => "OK",
+  }),
 }));
 
 vi.mock("@/services/audit", () => ({

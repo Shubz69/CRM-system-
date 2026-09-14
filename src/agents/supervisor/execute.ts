@@ -989,7 +989,7 @@ export async function executeAgentRun(input: {
       overBudget &&
       i === 0 &&
       stepOutputs.length === 0 &&
-      isResearchPlanStepName(step.agentName);
+      (isResearchPlanStepName(step.agentName) || isResearchAsk);
     if (overBudget && !lastDitchResearch) {
       const originalUserPrompt = readOriginalUserPrompt(run);
       const treatAsResearch =
@@ -1827,7 +1827,10 @@ function attachResearchQualityIfApplicable(input: {
     const withQuality: Record<string, unknown> = {
       ...obj,
       researchQuality: report,
-      researchQualitySummary: customerQualitySummary(report),
+      researchQualitySummary:
+        sourcesForScore.length > 0 && claims.length === 0 && report.overall === 0
+          ? "Sources collected — structured claims were incomplete; listed URLs are leads, not a 0% failure."
+          : customerQualitySummary(report),
       groundedClaimCount: grounded.length,
       ...(analystEnrichmentFailed
         ? { analystEnrichmentFailed: true }

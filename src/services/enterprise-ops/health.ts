@@ -7,6 +7,7 @@ import { DomainEventStatus, PublishingJobStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { pingRedis } from "@/jobs/redis";
 import { getRedisCircuitSnapshot, isRedisCircuitOpen } from "@/jobs/redis-circuit";
+import { isWorkerHeartbeatFresh, readWorkerHeartbeat } from "@/services/worker-heartbeat";
 
 export const PRODUCTION_HEALTH_MATURITY = "FOUNDATION" as const;
 
@@ -25,6 +26,8 @@ export type ProductionHealth = {
   workerHeartbeat: {
     newestAgentRunFinishedAt: string | null;
     ageMs: number | null;
+    hostedWorkerLive: boolean;
+    heartbeatAgeMs: number | null;
     note: string;
   };
   publishing: {
@@ -113,6 +116,9 @@ export async function getProductionHealth(): Promise<ProductionHealth> {
     }
   }
 
+  const beat = redisOk ? await readWorkerHeartbeat().catch(() => null) : null;
+  const hostedWorkerLive = isWorkerHeartbeatFresh(beat?.ts ?? null);
+
   return {
     maturity: PRODUCTION_HEALTH_MATURITY,
     capturedAt: now.toISOString(),
@@ -131,7 +137,11 @@ export async function getProductionHealth(): Promise<ProductionHealth> {
     workerHeartbeat: {
       newestAgentRunFinishedAt,
       ageMs,
-      note: "Derived from newest AgentRun.finishedAt — not a contractual SLA.",
+      hostedWorkerLive,
+      heartbeatAgeMs: beat ? now.getTime() - beat.ts : null,
+      note: hostedWorkerLive
+        ? "Hosted worker heartbeat is fresh (Redis). AgentRun.finishedAt is a fallback freshness signal, not an SLA."
+        : "Hosted worker heartbeat missing/stale — start `npm run worker` on Railway/Render. QUICK Ask still runs in-process. AgentRun.finishedAt is not proof the worker is up.",
     },
     publishing: {
       reconciliationRequiredCount: reconciliationRequired,

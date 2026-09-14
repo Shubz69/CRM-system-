@@ -41,6 +41,12 @@ type EnterpriseOpsPanel = {
 type Snapshot = {
   redisOk: boolean;
   workerRequiredForAsk: boolean;
+  hostedWorkerLive?: boolean;
+  workerHeartbeat?: {
+    fresh: boolean;
+    ageMs: number;
+    prefix: string;
+  } | null;
   openFailedJobs: number;
   message: string;
   queues: QueueRow[];
@@ -114,9 +120,12 @@ export default function AdminAiOpsPage() {
           <section className="surface p-4 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="badge">{data.redisOk ? "Redis OK" : "Redis down"}</span>
-              {data.workerRequiredForAsk && (
-                <span className="badge">Hosted worker required for Ask</span>
+              {data.hostedWorkerLive ? (
+                <span className="badge">Hosted worker live</span>
+              ) : (
+                <span className="badge">Hosted worker down</span>
               )}
+              <span className="badge">QUICK Ask is in-process</span>
               {"queuePrefix" in data && data.queuePrefix != null && (
                 <span className="badge">prefix:{String(data.queuePrefix)}</span>
               )}
@@ -126,10 +135,11 @@ export default function AdminAiOpsPage() {
               Open failed jobs: <strong>{data.openFailedJobs}</strong>
             </p>
             {"topology" in data && data.topology != null && (
-              <p className="text-xs text-[var(--muted)]">
-                Topology: 1 BullMQ worker (agent-runs); follow-ups/retention via Postgres
-                intervals; cron only if CRON_FALLBACK_ENABLED.
-              </p>
+            <p className="text-xs text-[var(--muted)]">
+              Topology: 1 BullMQ worker (agent-runs) on Railway/Render via `npm run worker`.
+              QUICK Ask does not wait on that worker. Follow-ups/retention via Postgres
+              intervals; cron only if CRON_FALLBACK_ENABLED.
+            </p>
             )}
             {"queueOps" in data && data.queueOps != null && (
               <p className="text-xs text-[var(--muted)]">

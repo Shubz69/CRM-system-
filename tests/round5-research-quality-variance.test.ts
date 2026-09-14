@@ -455,5 +455,7 @@ describe("Round 5 research quality variance", () => {
     expect([blogOnly, fabricated, wrongIntent, noClaims].every((r) => r.accepted)).toBe(false);
     expect(noClaims.accepted).toBe(false);
     expect(noClaims.overall).toBeGreaterThan(0);
+    expect(customerQualitySummary(noClaims)).toMatch(/sources collected|Partial/i);
+    expect(customerQualitySummary(noClaims)).not.toMatch(/Quality gate failed/i);
   });
 });
