@@ -21,8 +21,21 @@ import {
 /** Sync Quick CRM path may run executeAgentRun in-request — allow headroom. */
 export const maxDuration = 60;
 
+/**
+ * Ask prompts are stored as Postgres Text — no small product character cap.
+ * Keep only a hard safety ceiling well above real business-plan pastes so a
+ * single request cannot exhaust memory (platform HTTP body limits still apply).
+ */
+export const ASK_REQUEST_MAX_CHARS = 2_000_000;
+
 const createSchema = z.object({
-  request: z.string().min(1).max(20_000),
+  request: z
+    .string()
+    .min(1, "Request cannot be empty")
+    .max(
+      ASK_REQUEST_MAX_CHARS,
+      "That Ask is larger than the server can accept in one request. Split it into smaller parts.",
+    ),
   referenceAssetId: z.string().min(1).optional(),
   answerMode: z.enum(["QUICK", "EXECUTIVE", "ACTION", "DEEP"]).optional(),
 });
@@ -41,7 +54,13 @@ function askErrorResponse(error: unknown, fallbackStatus = 503) {
   const message = error instanceof Error ? error.message : "Failed";
   if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
   if (message.startsWith("Forbidden")) return jsonError(message, 403);
-  if (error instanceof z.ZodError) return jsonError("Invalid request", 400);
+  if (error instanceof z.ZodError) {
+    const first =
+      error.issues.find((i) => i.path.join(".") === "request")?.message ||
+      error.issues[0]?.message ||
+      "Invalid request";
+    return jsonError(first, 400);
+  }
   if (message.includes("Reference image")) {
     return jsonError("That reference image wasn't found in your workspace.", 404);
   }
