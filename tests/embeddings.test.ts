@@ -45,6 +45,24 @@ describe("embedding provider factory", () => {
     expect(() => getEmbeddingProvider("openai")).toThrow(/API_KEY/);
     expect(() => getEmbeddingProvider("openai")).toThrow(EmbeddingNotConfiguredError);
   });
+
+  it("maps 401 responses to a body-free auth error", async () => {
+    vi.stubEnv("EMBEDDING_PROVIDER", "openai");
+    vi.stubEnv("OPENAI_API_KEY", "sk-test-invalid");
+    resetEnvCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 401,
+        text: async () => JSON.stringify({ error: { message: "Incorrect API key provided: sk-test-invalid" } }),
+      })),
+    );
+    const { OpenAiEmbeddingProvider } = await import("@/adapters/embeddings/openai");
+    const provider = new OpenAiEmbeddingProvider("text-embedding-3-small", 8);
+    await expect(provider.embed(["ping"])).rejects.toThrow(/Embeddings authentication failed \(401\)/);
+    await expect(provider.embed(["ping"])).rejects.not.toThrow(/Incorrect API key|sk-test/i);
+  });
 });
 
 describe("mock embedding provider", () => {

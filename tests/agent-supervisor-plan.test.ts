@@ -235,4 +235,30 @@ describe("supervisor planning", () => {
       expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe("pipeline_summary");
     }
   });
+
+  it("actionable social strategy without mode plans research (no helper-card loop)", () => {
+    const result = planAgentRunDeterministic(
+      "I have a new product/business and need a social strategy. Tell me how the social platform should look and give me a practical plan for getting customers as soon as possible.",
+    );
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("research");
+      expect(result.plan.steps.some((s) => s.agentName === "imaging_analyze")).toBe(false);
+    }
+  });
+
+  it("still clarifies genuinely vague prompts", () => {
+    const result = planAgentRunDeterministic("help me");
+    expect(result.kind).toBe("clarification");
+  });
+
+  it("still asks for a reference image on explicit imaging asks", () => {
+    const result = planAgentRunDeterministic("Make me an image of a calm wellness studio", {
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("clarification");
+    if (result.kind === "clarification") {
+      expect(result.options?.some((o) => /upload a reference image/i.test(o))).toBe(true);
+    }
+  });
 });

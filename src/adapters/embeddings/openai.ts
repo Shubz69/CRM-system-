@@ -34,8 +34,13 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`OpenAI embeddings failed (${response.status}): ${body.slice(0, 300)}`);
+      // Never include provider response bodies in thrown errors — they can echo
+      // key fragments and leak into customer-facing salvage paths.
+      throw new Error(
+        response.status === 401 || response.status === 403
+          ? `Embeddings authentication failed (${response.status})`
+          : `Embeddings request failed (${response.status})`,
+      );
     }
 
     const json = (await response.json()) as {

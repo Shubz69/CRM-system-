@@ -701,7 +701,13 @@ export function planAgentRunDeterministic(
     return clarificationFor(trimmed);
   }
 
-  return clarificationFor(trimmed);
+  // Concrete business / strategy asks without an explicit format mode still
+  // deserve a real answer. Falling through to helper option cards made Ask look
+  // like a clarification loop for normal owner prompts (social strategy, plans,
+  // go-to-market). Default to a fast research scan.
+  return planResearchPipeline(trimmed, {
+    answerMode: modeEarly ?? "QUICK",
+  });
 }
 
 const llmPlanSchema = z.object({

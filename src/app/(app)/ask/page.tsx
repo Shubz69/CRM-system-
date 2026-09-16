@@ -503,10 +503,10 @@ export default function AskPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           request: text,
+          // Go defaults to QUICK so concrete business asks execute a real plan
+          // instead of returning helper-option clarification cards.
+          answerMode: "QUICK",
           ...(referenceAssetId ? { referenceAssetId } : {}),
-          ...(/\b(research|look up|investigate|compare)\b/i.test(text)
-            ? { answerMode: "QUICK" }
-            : {}),
         }),
       });
       const json = await res.json();
