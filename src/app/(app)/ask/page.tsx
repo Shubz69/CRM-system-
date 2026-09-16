@@ -547,6 +547,8 @@ export default function AskPage() {
       });
       const json = await res.json();
       if (!res.ok) {
+        setProgress(null);
+        setRunId(null);
         await handleAskApiFailure(res, json, "Could not start");
         return;
       }
@@ -595,6 +597,8 @@ export default function AskPage() {
       await poll(json.runId);
       pollRef.current = setInterval(() => void poll(json.runId), 200);
     } catch (err) {
+      setProgress(null);
+      setRunId(null);
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
         looksLikeRawDatabaseError(msg)
@@ -1010,6 +1014,7 @@ export default function AskPage() {
           value={request}
           onChange={(e) => setRequest(e.target.value)}
           rows={4}
+          // No maxLength — long business plans / briefs must be pasteable.
           placeholder="Research plant hire pricing in the UK…"
           className="input min-h-[7rem] resize-y text-base"
           disabled={submitting}
