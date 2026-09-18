@@ -715,10 +715,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           ? null
           : jobError === "AUTH_REQUIRED"
             ? emptyReason
-            : "I couldn't reach any research sources. Check that TAVILY_API_KEY or EXA_API_KEY is set on Vercel (Quick Ask runs there in-process), not only on the Railway worker.",
-        // AUTH_REQUIRED is the ops-visible code for missing Vercel web keys
-        // (production plant-hire jobs cmu149j980005la04wfakopf8 / cmu145m9g0005ic04zrfcgnzl
-        // stored generic no_sources and looked like an adapter empty, not a key gap).
+            : "I couldn't reach any research sources. Please retry in a moment.",
+        // AUTH_REQUIRED is the ops-visible code for missing web search credentials.
+        // Keep technical env/hosting guidance in server logs only — never in customer UI.
         error: jobError,
       },
           });

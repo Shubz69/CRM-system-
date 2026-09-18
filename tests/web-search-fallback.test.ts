@@ -97,10 +97,8 @@ describe("web search provider fallback", () => {
       await searchWebWithFallback("Research plant hire UK pricing", { organisationId: "org_1" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      expect(message).toMatch(/AUTH_REQUIRED/);
-      expect(message).toMatch(/TAVILY_API_KEY/);
-      expect(message).toMatch(/EXA_API_KEY/);
-      expect(message).toMatch(/Vercel/i);
+      expect(message).toMatch(/research isn't available|enable research search/i);
+      expect(message).not.toMatch(/TAVILY_API_KEY|EXA_API_KEY|Vercel|Railway|AUTH_REQUIRED/i);
     }
   });
 

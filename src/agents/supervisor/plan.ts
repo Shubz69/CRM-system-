@@ -99,7 +99,13 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bwhat should (i|we) (prioritis[e]|focus on|do).{0,40}\b(week|today|now)\b/.test(t) ||
     /\bwhat automation\b/.test(t) ||
     /\bautomation would help\b/.test(t) ||
-    /\bwithout sending\b.{0,40}\b(extern|automatic)/.test(t)
+    /\bwithout sending\b.{0,40}\b(extern|automatic)/.test(t) ||
+    // Owner diagnostics — must not fall through to helper-card clarification.
+    /\b(find|show|list|surface)\b.{0,24}\b(problems?|issues?|risks?|gaps?)\b/.test(t) ||
+    /\bproblems? in (my|our|the)\b.{0,20}\b(business|workspace|crm|pipeline)\b/.test(t) ||
+    /\b(marketing themes?|content ideas?|what (should|can) (i|we) (post|publish|say))\b/.test(t) ||
+    /\blean into\b.{0,40}\b(marketing|content|brand|audience)\b/.test(t) ||
+    /\b(based on (our|my) (business|audience|profile))\b/.test(t)
   );
 }
 
@@ -115,6 +121,8 @@ export function looksLikeCrmInternal(request: string): boolean {
   return (
     /\b(my pipeline|our pipeline|the pipeline|pipeline summary|pipeline looking|open deals?)\b/.test(t) ||
     /\bhow is (my |our |the )?pipeline\b/.test(t) ||
+    /\bpipeline\b.{0,40}\bgoals?\b|\bgoals?\b.{0,40}\bpipeline\b/.test(t) ||
+    /\b(on track|behind)\b.{0,40}\b(pipeline|goals?|kpi|targets?)\b/.test(t) ||
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
     /\bdeals?\b.{0,40}\b(quiet|went quiet|ages|stale)\b|\b(quiet|stale)\b.{0,40}\bdeals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?|customers? need)\b/.test(t) ||
@@ -292,16 +300,25 @@ export function looksLikeResearch(request: string): boolean {
       return false;
     }
   }
-  if (looksLikeCrmInternal(request) && !/\b(research|look up|investigate|compare|ico|gdpr|authority)\b/i.test(request)) {
+  if (
+    looksLikeCrmInternal(request) &&
+    !/\b(research|look up|investigate|ico|gdpr|authority)\b/i.test(request) &&
+    // "compare my pipeline and goals" is workspace CRM, not web research.
+    !(
+      /\bcompare\b/i.test(request) &&
+      !/\b(pipeline|deals?|goals?|inbox|crm|contacts?|companies)\b/i.test(request)
+    )
+  ) {
     return false;
   }
   return (
-    /\b(research|look up|find (out|sources|articles)|investigate|compare|competitive analysis|market scan)\b/i.test(
+    /\b(research|look up|find (out|sources|articles)|investigate|competitive analysis|market scan)\b/i.test(
       request,
     ) ||
     /\bwhat does the (ico|fca|asa|ofcom|hmrc|gov\.uk)\b/i.test(request) ||
     /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
-    /\bcompare\b.+\band\b/i.test(request)
+    (/\bcompare\b.+\band\b/i.test(request) &&
+      !/\b(pipeline|deals?|goals?|inbox|crm|contacts?|companies)\b/i.test(request))
   );
 }
 
@@ -692,8 +709,13 @@ export function planAgentRunDeterministic(
         preferOperatorBrief: preferOperatorBrief || mode === "QUICK",
       });
     }
-    if (mode === "QUICK" && trimmed.split(/\s+/).length >= 8 && !isTooVague(trimmed)) {
+    // Explicit Quick/Action/Executive already chose a format — do not re-ask
+    // with helper cards for short but actionable owner prompts (7–11 words).
+    if (mode === "QUICK" && trimmed.split(/\s+/).length >= 6) {
       return planResearchPipeline(trimmed, { answerMode: mode });
+    }
+    if ((mode === "ACTION" || mode === "EXECUTIVE") && trimmed.split(/\s+/).length >= 6) {
+      return planCrmDesk(trimmed, { preferOperatorBrief: true });
     }
   }
 

@@ -261,4 +261,30 @@ describe("supervisor planning", () => {
       expect(result.options?.some((o) => /upload a reference image/i.test(o))).toBe(true);
     }
   });
+
+  it("QUICK short marketing/content/diagnostic asks do not helper-card loop", () => {
+    const cases = [
+      "What marketing themes should Tonaura lean into based on our business?",
+      "Suggest 3 content ideas grounded in our business and audience.",
+      "Find problems in my business right now.",
+    ];
+    for (const q of cases) {
+      const result = planAgentRunDeterministic(q, { answerMode: "QUICK" });
+      expect(result.kind).toBe("plan");
+      if (result.kind === "plan") {
+        expect(["crm_desk", "research"]).toContain(result.plan.steps[0]?.agentName);
+      }
+    }
+  });
+
+  it("pipeline vs goals comparison stays on CRM desk", () => {
+    const result = planAgentRunDeterministic(
+      "Compare my current pipeline and goals — am I on track?",
+      { answerMode: "QUICK" },
+    );
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+    }
+  });
 });

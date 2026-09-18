@@ -225,7 +225,7 @@ export async function searchConfiguredSources(input: {
   if (!platforms.length) {
     throw new SourceAuthRequiredError(
       "web",
-      "No research source adapters are configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app for Quick Ask (not only Railway). YouTube/Reddit/Apify keys are optional extras.",
+      "Web research isn't available for this workspace right now. Please retry later or ask an admin to enable research search.",
     );
   }
 

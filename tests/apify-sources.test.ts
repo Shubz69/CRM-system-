@@ -329,14 +329,15 @@ describe("Apify source adapters", () => {
       {
         platform: "web",
         message:
-          "Web research is not configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app.",
+          "Web research isn't available for this workspace right now. Please retry later or ask an admin to enable research search.",
         code: "SOURCE_NOT_CONFIGURED",
       },
     ]);
     expect(notes).toContain("Instagram results were unavailable for this search.");
     expect(notes.some((n) => /LinkedIn results were unavailable/i.test(n))).toBe(true);
     expect(notes.join(" ")).not.toMatch(/harvestapi|apify actor/i);
-    expect(notes.join(" ")).toMatch(/TAVILY_API_KEY|AUTH_REQUIRED/i);
+    expect(notes.join(" ")).toMatch(/research isn't available|enable research search/i);
+    expect(notes.join(" ")).not.toMatch(/TAVILY_API_KEY|Vercel/i);
   });
 
   it("documents recommended actor ids and converts path form", () => {

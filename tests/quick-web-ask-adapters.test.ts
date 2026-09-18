@@ -169,10 +169,8 @@ describe("Quick web Ask — adapter honesty + plant-hire happy path", () => {
     expect(result.output.sourceCount).toBe(0);
     expect(result.output.sources).toEqual([]);
     expect(result.output.findings).toEqual([]);
-    expect(result.output.summary).toMatch(/AUTH_REQUIRED/);
-    expect(result.output.summary).toMatch(/TAVILY_API_KEY/);
-    expect(result.output.summary).toMatch(/EXA_API_KEY/);
-    expect(result.output.summary).toMatch(/Vercel/i);
+    expect(result.output.summary).toMatch(/research isn't available|enable research search/i);
+    expect(result.output.summary).not.toMatch(/TAVILY_API_KEY|EXA_API_KEY|Vercel|Railway|AUTH_REQUIRED/i);
     expect(result.output.summary).not.toMatch(/Quality gate failed/i);
     expect(result.output.error).toBe("AUTH_REQUIRED");
     expect(prisma.researchJob.update).toHaveBeenCalledWith(

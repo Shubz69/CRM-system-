@@ -105,7 +105,7 @@ export class SourceAuthRequiredError extends Error {
   ) {
     super(
       message ||
-        "Web research is not configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app.",
+        "Web research isn't available for this workspace right now. Please retry later or ask an admin to enable research search.",
     );
     this.name = "SourceAuthRequiredError";
   }

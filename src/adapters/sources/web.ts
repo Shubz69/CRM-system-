@@ -25,12 +25,12 @@ import { logger } from "@/lib/logger";
 
 type WebProvider = "tavily" | "exa";
 
-/** Customer-facing — env var names are intentional so ops can fix Vercel vs Railway. */
+/** Customer-facing — never name vendors, env vars, or hosting platforms. */
 export const WEB_SEARCH_MISSING_KEY_MESSAGE =
-  "Web research is not configured (AUTH_REQUIRED). Set TAVILY_API_KEY or EXA_API_KEY on the Vercel web app — Quick Ask runs in-process there, not only on the Railway worker.";
+  "Web research isn't available for this workspace right now. Please retry later or ask an admin to enable research search.";
 
 export const WEB_SEARCH_AUTH_REJECTED_MESSAGE =
-  "Web research API credentials were rejected (AUTH_REQUIRED). Check TAVILY_API_KEY and EXA_API_KEY on Vercel Production (not only Railway).";
+  "Web research couldn't authenticate. Please retry later or ask an admin to check research search configuration.";
 
 export function trimmedCredential(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
