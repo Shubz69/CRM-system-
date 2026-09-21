@@ -47,6 +47,10 @@ vi.mock("@/services/social-intelligence", () => ({
   ingestResearchJobSocialContent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/services/digital-twin", () => ({
+  getBusinessProfile: vi.fn().mockResolvedValue(null),
+}));
+
 const envState = {
   RESEARCH_ADAPTER_CONCURRENCY: "2",
   TAVILY_API_KEY: undefined as string | undefined,

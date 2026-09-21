@@ -43,6 +43,10 @@ vi.mock("@/services/social-intelligence", () => ({
   ingestResearchJobSocialContent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/services/digital-twin", () => ({
+  getBusinessProfile: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("@/lib/env", () => ({
   getEnv: () => ({ RESEARCH_ADAPTER_CONCURRENCY: "2" }),
 }));
@@ -135,18 +139,18 @@ describe("Ask/Research degradation + privacy", () => {
       },
     );
 
-    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
+    expect(result.output.phase).toBeUndefined();
     expect(result.output.sourceCount).toBe(1);
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe("https://example.com/a");
     expect(result.output.findings[0]?.claim).toMatch(/example\.com\/a|Evidence about UK SME/i);
-    expect(result.output.summary).toMatch(/Evidence scan|source/i);
+    expect(result.output.summary).toMatch(/DIRECT ANSWER|KEY FINDINGS|source/i);
     expect(prisma.researchFinding.create).toHaveBeenCalled();
     expect(prisma.researchJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "job-1" },
         data: expect.objectContaining({
-          status: "PARTIAL",
+          status: "COMPLETED",
           error: null,
           userFacingError: null,
         }),
@@ -184,9 +188,9 @@ describe("Ask/Research degradation + privacy", () => {
 
     expect(completeStructured).not.toHaveBeenCalled();
     expect(completeStructuredSafe).not.toHaveBeenCalled();
-    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe("https://hire.example/rates");
+    expect(result.output.summary).toMatch(/DIRECT ANSWER/);
   });
 
   it("research uses source-backed findings when extract returns an empty pack", async () => {
@@ -223,10 +227,10 @@ describe("Ask/Research degradation + privacy", () => {
       },
     );
 
-    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
     expect(result.output.findings.length).toBeGreaterThan(0);
     expect(result.output.findings[0]?.sourceUrl).toBe("https://hire.example/rates");
     expect(result.output.findings[0]?.claim).toMatch(/£120|plant hire/i);
+    expect(result.output.summary).toMatch(/DIRECT ANSWER/);
     expect(prisma.researchFinding.create).toHaveBeenCalled();
   });
 

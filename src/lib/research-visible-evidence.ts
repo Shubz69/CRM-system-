@@ -164,6 +164,75 @@ export function deterministicResearchBrief(
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Decision-ready FAST synthesis from retrieved titles/excerpts/findings.
+ * Never invents statistics. Interprets evidence for the named business.
+ */
+export function synthesiseResearchBrief(input: {
+  topic: string;
+  businessName?: string | null;
+  audience?: string | null;
+  sources: Array<{ url: string; title?: string | null; content?: string | null }>;
+  findings?: Array<{ claim: string; sourceUrl: string }>;
+}): string {
+  const topic = input.topic.replace(/\s+/g, " ").trim().slice(0, 160);
+  const business = (input.businessName || "this workspace").trim();
+  const audience = (input.audience || "your audience").trim();
+  const findings =
+    input.findings && input.findings.length > 0
+      ? input.findings.slice(0, 8)
+      : sourceBackedFindingsFromSources(input.sources, 8).map((f) => ({
+          claim: f.claim,
+          sourceUrl: f.sourceUrl,
+        }));
+  const domains = [
+    ...new Set(
+      input.sources
+        .map((s) => {
+          try {
+            return new URL(s.url).hostname.replace(/^www\./, "");
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean),
+    ),
+  ].slice(0, 6);
+  const keys = findings.slice(0, 5).map((f, i) => {
+    const claim = f.claim.replace(/\s+/g, " ").trim().slice(0, 220);
+    return `${i + 1}. ${claim}`;
+  });
+  const wantsContent =
+    /\b(content ideas?|content plan|what .{0,48}\b(post|publish)|post this (week|month)|marketing themes?)\b/i.test(
+      topic,
+    );
+  const actions = wantsContent
+    ? [
+        `1. Turn finding 1 into a ${audience} hook — quote the source, do not invent stats.`,
+        "2. Draft one LinkedIn post and one short-form script from findings 2–3, then send for approval.",
+        "3. Reject any angle that does not match the workspace brand or audience above.",
+      ]
+    : [
+        `1. Validate the strongest finding against ${business}'s current pipeline and audience before acting.`,
+        "2. Pick one source-backed tactic this week; do not scale unproven blog advice.",
+        "3. If a named company in sources is not this workspace, ignore it as a homograph.",
+      ];
+  const direct = wantsContent
+    ? `Use ${Math.min(3, findings.length)} source-backed angles below for ${business}; they are retrieved leads, not finished posts.`
+    : `From ${input.sources.length} retrieved source${input.sources.length === 1 ? "" : "s"}, the usable signal for ${business} is in the findings below — not in similarly named companies.`;
+  return [
+    `DIRECT ANSWER: ${direct}`,
+    keys.length ? `KEY FINDINGS: ${keys.join(" ")}` : "KEY FINDINGS: None extracted — open the linked sources.",
+    `WHAT THIS MEANS FOR ${business}: Treat these as market/context leads for ${audience}. Do not treat page titles as proof of your own traction or revenue.`,
+    `RECOMMENDED ACTIONS: ${actions.join(" ")}`,
+    `EVIDENCE: ${domains.join(", ") || "see linked sources"}.`,
+    "UNCERTAINTIES: Fast scan; excerpts may be incomplete; verify claims on the source page before publishing or spending.",
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function normalizeVisibleSources(output: unknown): VisibleSource[] {
   const obj = asRecord(output);
   const out: VisibleSource[] = [];

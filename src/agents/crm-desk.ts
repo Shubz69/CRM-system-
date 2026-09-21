@@ -4,7 +4,6 @@ import { prisma } from "@/lib/db";
 import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import { getBusinessProfile } from "@/services/digital-twin";
-import { buildBusinessEvidencePack } from "@/services/business-evidence-pack";
 
 export const crmDeskInputSchema = z.object({
   intent: z.enum([
@@ -219,9 +218,7 @@ function buildOperatorBrief(input: {
     insufficientEvidence.push("No open deals in this workspace — cannot prioritise a stuck deal.");
     pipelineRisk.push("INSUFFICIENT EVIDENCE: no open deals to score pipeline risk.");
   } else if (!input.stalledDeals.length) {
-    pipelineRisk.push(
-      "No deals quiet ≥14 days — pipeline stall risk currently low on workspace evidence.",
-    );
+    // Do not emit a fake PIPELINE RISK section when nothing is stalled.
   }
 
   for (const l of rankedLeads.slice(0, 3)) {
@@ -273,18 +270,6 @@ function buildOperatorBrief(input: {
     topPriorities.push(rec);
   }
   if (!input.goalsAtRisk.length && input.activeGoals.length) {
-    goalsKpi.push(
-      fmtRec({
-        what: "Keep active goals on watch-only",
-        why: "No AT_RISK goals in workspace",
-        evidence: `Active: ${input.activeGoals
-          .slice(0, 3)
-          .map((g) => g.name)
-          .join("; ")}`,
-        urgency: "low",
-        next: "Do not reopen unless a KPI alert appears",
-      }),
-    );
     ignore.push(
       `Active goals look stable (${input.activeGoals
         .slice(0, 3)
@@ -494,11 +479,10 @@ function buildOperatorBrief(input: {
   };
 
   const blocks: string[] = [];
-  if (input.workspaceLabel || input.businessSummary || input.audienceSummary) {
-    blocks.push("WORKSPACE CONTEXT");
-    if (input.workspaceLabel) blocks.push(`• Business: ${input.workspaceLabel}`);
-    if (input.businessSummary) blocks.push(`• What we do: ${input.businessSummary}`);
-    if (input.audienceSummary) blocks.push(`• Who we reach: ${input.audienceSummary}`);
+  if (input.workspaceLabel) {
+    blocks.push(
+      `PULSE: ${input.workspaceLabel} · ${input.counts.openDeals} open deals · ${input.counts.stalledDeals} stalled · ${input.counts.conversationsNeedingReply} needing reply`,
+    );
     blocks.push("");
   }
   blocks.push("TOP PRIORITIES");
@@ -719,14 +703,14 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       intent === "operator_brief"
         ? Promise.all([
             buildChiefOfStaffFacts(orgId).catch(() => null),
-            parsed.request
+            parsed.request && /\b(knowledge|policy|handbook|playbook|document)\b/i.test(parsed.request)
               ? retrieveRelevantKnowledge({
                   organisationId: orgId,
                   query: parsed.request,
                   limit: 4,
                 }).catch(() => null)
               : Promise.resolve(null),
-            buildBusinessEvidencePack(orgId).catch(() => null),
+            Promise.resolve(null),
           ])
         : null;
 
@@ -1066,7 +1050,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     }
 
     if (parsed.intent === "operator_brief") {
-      const [[cos, knowledge, evidencePack], profile] = await Promise.all([
+      const [[cos, knowledge], profile] = await Promise.all([
         (operatorBriefPromise ?? Promise.resolve([null, null, null] as const)),
         getBusinessProfile(orgId).catch(() => null),
       ]);
@@ -1133,15 +1117,10 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         audienceSummary: whoWeReach ? String(whoWeReach).slice(0, 240) : null,
       });
 
-      const evidenceFooter =
-        evidencePack?.summaryLines?.length
-          ? `\n\nEVIDENCE PACK\n${evidencePack.summaryLines.join("\n")}`
-          : "";
-
       return {
         output: {
           shortAnswer: brief.shortAnswer,
-          summary: `${brief.summary}${evidenceFooter}`,
+          summary: brief.summary,
           source: "internal_crm" as const,
           organisationId: orgId,
           counts,

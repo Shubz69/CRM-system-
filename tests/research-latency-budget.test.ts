@@ -48,6 +48,10 @@ vi.mock("@/services/social-intelligence", () => ({
   ingestResearchJobSocialContent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("@/services/digital-twin", () => ({
+  getBusinessProfile: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("@/lib/env", () => ({
   getEnv: () => ({ RESEARCH_ADAPTER_CONCURRENCY: "2" }),
 }));
@@ -201,8 +205,8 @@ describe("Quick vs Deep research LLM budget", () => {
     expect(completeStructuredSafe).not.toHaveBeenCalled();
     expect(result.output.sourceCount).toBe(1);
     expect(result.output.findings.length).toBeGreaterThan(0);
-    expect(result.output.phase).toBe("PARTIAL_WITH_SOURCES");
     expect(result.output.findings[0]?.sourceUrl).toBe(SAMPLE_SOURCE.url);
+    expect(result.output.summary).toMatch(/DIRECT ANSWER/);
   });
 
   it("STANDARD still attempts extract when the deadline has room", async () => {

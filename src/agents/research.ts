@@ -13,7 +13,14 @@ import {
   persistResearchSourceWithSnapshot,
   sourceBackedFindingsFromSources,
 } from "@/services/research-evidence";
-import { deterministicResearchBrief } from "@/lib/research-visible-evidence";
+import { synthesiseResearchBrief } from "@/lib/research-visible-evidence";
+import { getBusinessProfile } from "@/services/digital-twin";
+import {
+  expandResearchQueries,
+  filterSourcesForEntity,
+  identityFromProfile,
+  isBrandSpecificQuery,
+} from "@/lib/research-entity-resolution";
 import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
   dedupeSourceResults,
@@ -253,6 +260,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     await assertEntitlement(organisationId, "research");
     await assertWithinSpendCap(organisationId, researchAgent.estimateCostCents(parsed));
 
+    const profilePromise = getBusinessProfile(organisationId).catch(() => null);
+
     const model = resolveModelForTier("cheap");
     let costCents = 0;
     const executeStarted = Date.now();
@@ -274,10 +283,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         : depth === "DEEP"
           ? RESEARCH_QUERY_CAP.DEEP
           : RESEARCH_QUERY_CAP.STANDARD;
-    const year = new Date().getFullYear();
+    const identity = identityFromProfile(await profilePromise);
+    const brandSpecific = identity ? isBrandSpecificQuery(topic, identity) : false;
     const queries = [
       ...authorityFirstQueries(topic),
-      ...new Set([topic, `${topic} ${year}`]),
+      ...expandResearchQueries(topic, identity, queryCap),
     ].slice(0, queryCap);
     latency.expandMs = Date.now() - tExpand0;
 
@@ -465,13 +475,18 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
     const secondary = rankSourceResults(deduped.filter((r) => !isPrimaryAuthorityUrl(r.url)));
     // High-stakes: fill primary reserve first so blogs cannot crowd out authorities.
-    const ranked = isHighStakes
+    const rankedUnfiltered = isHighStakes
       ? [
           ...primary.slice(0, primaryReserve),
           ...secondary.slice(0, Math.max(0, maxSources - Math.min(primary.length, primaryReserve))),
           ...primary.slice(primaryReserve),
         ].slice(0, maxSources)
       : [...primary, ...secondary].slice(0, maxSources);
+    const entityFilter = filterSourcesForEntity(rankedUnfiltered, identity, brandSpecific);
+    const ranked =
+      entityFilter.kept.length > 0 || brandSpecific
+        ? entityFilter.kept.slice(0, maxSources)
+        : rankedUnfiltered;
 
     const tPersistSources0 = Date.now();
     const sourceRows = await Promise.all(
@@ -528,7 +543,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           tier: "cheap",
           model,
           maxTokens: fast ? 2048 : 8192,
-          skipRepair: fast || remainingMs() < RESEARCH_EXTRACT_MIN_MS + 4_000,
+          skipRepair: remainingMs() < RESEARCH_EXTRACT_MIN_MS + 3_000,
           jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
           repairHint:
             'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
@@ -670,15 +685,16 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       (missingWebKeys ? WEB_SEARCH_MISSING_KEY_MESSAGE : null) ||
       "No sources were returned from the configured adapters.";
     const baseSummary =
-      findings.length > 0 && !extractionDegraded
-        ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
-        : findings.length > 0
-          ? deterministicResearchBrief(topic, ranked)
-          : ranked.length > 0
-            ? deterministicResearchBrief(topic, ranked)
-            : emptyReason;
+      ranked.length === 0
+        ? emptyReason
+        : synthesiseResearchBrief({
+            topic,
+            businessName: identity?.canonicalName,
+            audience: identity?.audience,
+            sources: ranked,
+            findings: findings.map((f) => ({ claim: f.claim, sourceUrl: f.sourceUrl })),
+          });
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
-    const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);
 
     const jobError =
       ranked.length > 0 ? null : authRequired || missingWebKeys ? "AUTH_REQUIRED" : "no_sources";
@@ -704,21 +720,27 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           : e.message,
       })),
       ...(jobError ? { error: jobError } : {}),
-      ...(partialWithSources
+      ...(ranked.length > 0 && findings.length === 0
         ? {
             phase: "PARTIAL_WITH_SOURCES",
             caveats: [
-              "Structured finding extraction did not complete — treat listed sources and quoted excerpts as leads for verification, not verified claims.",
+              "Sources were retrieved but no grounded findings could be extracted. Open the linked pages before acting.",
             ],
           }
-        : {}),
+        : extractionDegraded && ranked.length > 0 && findings.length > 0
+          ? {
+              caveats: [
+                "FAST synthesis used retrieved titles and excerpts. Verify claims on the source page before acting.",
+              ],
+            }
+          : {}),
     };
 
     await updateOrgScopedById(prisma.researchJob, {
             id: jobId,
             organisationId,
             data: {
-        status: ranked.length ? (findings.length && !extractionDegraded ? "COMPLETED" : "PARTIAL") : "FAILED",
+        status: ranked.length ? (findings.length > 0 ? "COMPLETED" : "PARTIAL") : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
         finishedAt: new Date(),
