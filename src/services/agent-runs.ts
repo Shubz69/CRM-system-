@@ -346,7 +346,9 @@ export async function createAndEnqueueAgentRun(input: {
     !input.referenceAssetId &&
     (looksLikeCrmInternal(request) || looksLikeOperatorBrief(request) || syntheticJudgment) &&
     (syntheticJudgment ||
-      !/\b(research|look up|investigate|compare|gdpr|ico guidance)\b/i.test(request));
+      !/\b(research|look up|investigate|compare|gdpr|ico guidance|saying about|trends? relevant|first \d+ customers)\b/i.test(
+        request,
+      ));
 
   const quickResearchSync =
     isQuickResearchAsk(answerMode, request) && !input.referenceAssetId;

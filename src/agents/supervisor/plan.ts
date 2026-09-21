@@ -323,7 +323,10 @@ export function looksLikeResearch(request: string): boolean {
     /\b(research|look up|find (out|sources|articles|reviews)|investigate|competitive analysis|market scan)\b/i.test(
       request,
     ) ||
-    /\b(reviews? of|people (saying|think)|mentions? of)\b/i.test(request) ||
+    /\b(reviews? of|people (saying|think)|mentions? of|saying about|market saying|trends? relevant)\b/i.test(
+      request,
+    ) ||
+    /\bfirst \d+ customers\b/i.test(request) ||
     /\bwhat does the (ico|fca|asa|ofcom|hmrc|gov\.uk)\b/i.test(request) ||
     /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
     (/\bcompare\b.+\band\b/i.test(request) &&

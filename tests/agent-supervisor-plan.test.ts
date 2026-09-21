@@ -377,5 +377,19 @@ describe("supervisor planning", () => {
     if (reviews.kind === "plan") {
       expect(reviews.plan.steps[0]?.agentName).toBe("research");
     }
+    const market = planAgentRunDeterministic("What is the market saying about Tonaura?", {
+      answerMode: "QUICK",
+    });
+    expect(market.kind).toBe("plan");
+    if (market.kind === "plan") {
+      expect(market.plan.steps[0]?.agentName).toBe("research");
+    }
+    const customers = planAgentRunDeterministic("How should Tonaura get its first 100 customers?", {
+      answerMode: "QUICK",
+    });
+    expect(customers.kind).toBe("plan");
+    if (customers.kind === "plan") {
+      expect(customers.plan.steps[0]?.agentName).toBe("research");
+    }
   });
 });
