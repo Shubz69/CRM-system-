@@ -24,6 +24,12 @@ export const RESEARCH_EVIDENCE_AGENTS = new Set(["research", "social_listening"]
  */
 export const RESEARCH_QUICK_CEILING_MS = 12_000;
 
+/** Salvage grace after the 12s FAST ceiling. */
+export const RESEARCH_QUICK_GRACE_MS = 750;
+
+/** Absolute user-facing FAST terminal — must not remain RUNNING past this. */
+export const FAST_HARD_TERMINAL_MS = RESEARCH_QUICK_CEILING_MS + RESEARCH_QUICK_GRACE_MS;
+
 /** FAST extract only when at least this much wall-clock remains after search. */
 export const RESEARCH_FAST_EXTRACT_MIN_MS = 2_500;
 
@@ -39,7 +45,7 @@ export const RESEARCH_HARD_CEILING_MS = 30_000;
  * serverless — 3.5s aborted plant-hire searches before any URL returned.
  */
 export const RESEARCH_SOURCE_FETCH_MS = {
-  FAST: 7_000,
+  FAST: 4_000,
   STANDARD: 6_000,
   DEEP: 7_000,
 } as const;
@@ -118,7 +124,7 @@ export function looksLikeResearchOutput(output: unknown): boolean {
 
 /** Supervisor wall-clock cap (seconds) for research / social-listening plans. */
 export function researchWallClockCapSeconds(answerMode: string | null | undefined): number {
-  return answerMode === "QUICK" ? Math.ceil(RESEARCH_QUICK_CEILING_MS / 1000) + 4 : 30;
+  return answerMode === "QUICK" ? Math.ceil(FAST_HARD_TERMINAL_MS / 1000) : 30;
 }
 
 export function isResearchPlanStepName(agentName: string): boolean {

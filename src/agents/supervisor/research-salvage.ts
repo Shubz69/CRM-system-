@@ -4,14 +4,20 @@
  * Never invents URLs or statistics — only persisted sources/findings/brief.
  */
 import { prisma } from "@/lib/db";
-import { asSafePrismaId } from "@/lib/safe-prisma-id";
+import { asSafePrismaId, updateOrgScopedById } from "@/lib/safe-prisma-id";
 import {
   attachVisibleResearchEvidence,
   sourceBackedFindingsFromSources,
   type VisibleFinding,
   type VisibleSource,
 } from "@/lib/research-visible-evidence";
-import { looksLikeResearchOutput } from "@/agents/supervisor/research-deadline";
+import {
+  FAST_HARD_TERMINAL_MS,
+  RESEARCH_HARD_CEILING_MS,
+  looksLikeResearchOutput,
+} from "@/agents/supervisor/research-deadline";
+import { logger } from "@/lib/logger";
+import { Prisma } from "@prisma/client";
 
 export type SalvagedResearchPartial = {
   researchJobId?: string;
@@ -292,4 +298,82 @@ export async function hydrateBlankResearchFinalOutput(input: {
     salvaged: Boolean(salvaged),
     sourceCount: salvaged?.sourceCount ?? sourceCountOf(attached),
   };
+}
+
+const OPEN_RUN = ["PENDING", "PLANNING", "RUNNING"] as const;
+
+/**
+ * If a FAST/research run is still open past its hard terminal, persist PARTIAL/FAILED
+ * so the client never polls RUNNING after the deadline. Late execute finishRun
+ * must not overwrite this (see extraWhere on execute finishRun).
+ */
+export async function forceTerminalStaleResearchRun(input: {
+  organisationId: string;
+  runId: string;
+}): Promise<{ forced: boolean; status: string }> {
+  const run = await prisma.agentRun.findFirst({
+    where: {
+      id: { equals: String(asSafePrismaId(input.runId)) },
+      organisationId: { equals: String(asSafePrismaId(input.organisationId)) },
+    },
+    select: {
+      id: true,
+      status: true,
+      request: true,
+      answerMode: true,
+      startedAt: true,
+      createdAt: true,
+      maxWallClockSeconds: true,
+    },
+  });
+  if (!run) return { forced: false, status: "MISSING" };
+  if (!OPEN_RUN.includes(run.status as (typeof OPEN_RUN)[number])) {
+    return { forced: false, status: run.status };
+  }
+  const started = (run.startedAt ?? run.createdAt).getTime();
+  const capMs =
+    run.answerMode === "QUICK"
+      ? FAST_HARD_TERMINAL_MS
+      : Math.min(
+          (run.maxWallClockSeconds && run.maxWallClockSeconds > 0
+            ? run.maxWallClockSeconds * 1000
+            : RESEARCH_HARD_CEILING_MS),
+          RESEARCH_HARD_CEILING_MS,
+        );
+  if (Date.now() - started < capMs) {
+    return { forced: false, status: run.status };
+  }
+  const salvaged = await salvageResearchPartialFromDb({
+    organisationId: input.organisationId,
+    agentRunId: run.id,
+  }).catch(() => null);
+  const hasEvidence = Boolean(salvaged && (salvaged.sourceCount > 0 || salvaged.findings.length > 0));
+  const raw = salvaged ?? honestEmptyResearchPartial(run.request);
+  const attached = attachVisibleResearchEvidence(raw);
+  const status = hasEvidence ? "PARTIAL" : "FAILED";
+  const updated = await updateOrgScopedById(prisma.agentRun, {
+    id: run.id,
+    organisationId: input.organisationId,
+    extraWhere: { status: { in: [...OPEN_RUN] } },
+    data: {
+      status,
+      finishedAt: new Date(),
+      error: "MAX_WALL_CLOCK",
+      finalOutput: attached as Prisma.InputJsonValue,
+      userFacingError: hasEvidence
+        ? "I stopped because this was taking too long. Sources gathered before the limit are below."
+        : "I couldn't finish that sourced scan in time. Nothing below was invented — try again in a moment.",
+    },
+  });
+  if (updated.count === 1) {
+    logger.warn("Forced stale research run to terminal", {
+      runId: run.id,
+      organisationId: input.organisationId,
+      status,
+      elapsedMs: Date.now() - started,
+      capMs,
+      salvaged: hasEvidence ? 1 : 0,
+    });
+  }
+  return { forced: updated.count === 1, status };
 }

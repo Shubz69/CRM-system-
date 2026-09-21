@@ -92,6 +92,7 @@ import {
   RESEARCH_HARD_CEILING_MS,
   RESEARCH_QUERY_CAP,
   RESEARCH_QUICK_CEILING_MS,
+  FAST_HARD_TERMINAL_MS,
   RESEARCH_SOURCE_CAP,
   RESEARCH_SOURCE_FETCH_MS,
   raceWithTimeout,
@@ -121,6 +122,7 @@ describe("research latency budgets", () => {
     expect(RESEARCH_SOURCE_FETCH_MS.DEEP).toBeLessThanOrEqual(8_000);
     expect(RESEARCH_QUERY_CAP.FAST).toBeLessThanOrEqual(2);
     expect(RESEARCH_SOURCE_CAP.FAST).toBeLessThanOrEqual(5);
+    expect(FAST_HARD_TERMINAL_MS).toBeLessThanOrEqual(13_000);
     expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(16);
     expect(researchWallClockCapSeconds("DEEP")).toBeLessThanOrEqual(30);
     expect(researchWallClockCapSeconds("EXECUTIVE")).toBeLessThanOrEqual(30);

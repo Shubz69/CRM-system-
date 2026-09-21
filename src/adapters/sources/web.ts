@@ -18,6 +18,25 @@ import { recordAiExecution } from "@/services/ai-execution";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
+/** Skip a quota-dead provider for a short window so parallel FAST jobs don't each wait. */
+const providerSkipUntil = new Map<string, number>();
+const PROVIDER_SKIP_MS = 60_000;
+
+function markProviderDegraded(provider: string, error: unknown): void {
+  if (!(error instanceof Error)) return;
+  if (!/\b(402|429|432)\b|quota|usage limit|plan'?s set usage/i.test(error.message)) return;
+  providerSkipUntil.set(provider, Date.now() + PROVIDER_SKIP_MS);
+}
+
+function isProviderDegraded(provider: string): boolean {
+  const until = providerSkipUntil.get(provider) || 0;
+  if (until <= Date.now()) {
+    if (until) providerSkipUntil.delete(provider);
+    return false;
+  }
+  return true;
+}
+
 /**
  * General web search via Tavily (default) or Exa — selected by WEB_SEARCH_PROVIDER.
  * On genuine primary availability/quota failures, falls back to the other supported
@@ -316,12 +335,24 @@ export async function searchWebWithFallback(
   }
 
   let lastError: unknown = null;
+  let budgetLeft =
+    options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : options.qualityBudget === "FAST" ? 4_000 : 6_000;
   for (let i = 0; i < order.length; i++) {
     const provider = order[i]!;
     const apiKey = keyFor(provider, env);
     if (!apiKey) continue;
+    if (isProviderDegraded(provider)) {
+      lastError = new SourceUnavailableError("web", "Web research results were unavailable for this search.");
+      continue;
+    }
+    if (budgetLeft < 400) break;
+    const slice =
+      options.qualityBudget === "FAST"
+        ? Math.min(budgetLeft, i === 0 ? 2_200 : budgetLeft)
+        : budgetLeft;
+    const t0 = Date.now();
     try {
-      const results = await runProvider(provider, query, options, apiKey, limit);
+      const results = await runProvider(provider, query, { ...options, timeoutMs: slice }, apiKey, limit);
       if (i > 0) {
         logger.warn("Web search used supported fallback after primary availability failure", {
           organisationId: options.organisationId,
@@ -331,11 +362,11 @@ export async function searchWebWithFallback(
       return results;
     } catch (error) {
       lastError = error;
-      // FAST: skip Exa after a hung/timeout primary (would double the wait).
-      // Still fall back on immediate auth/quota/5xx so a bad Tavily key on
-      // Vercel does not hide a working EXA_API_KEY.
+      budgetLeft -= Date.now() - t0;
+      markProviderDegraded(provider, error);
       const canFallback =
         i < order.length - 1 &&
+        budgetLeft >= 400 &&
         isWebProviderAvailabilityFailure(error) &&
         (options.qualityBudget !== "FAST" || isQuickHttpProviderFailure(error));
       logger.warn("Web search provider attempt failed", {
@@ -344,7 +375,6 @@ export async function searchWebWithFallback(
         availabilityFailure: isWebProviderAvailabilityFailure(error),
         authFailure: isWebProviderAuthFailure(error),
         willFallback: canFallback,
-        // Never log raw vendor body / keys.
         statusHint: error instanceof Error ? error.message.replace(/https?:\/\/\S+/g, "[url]").slice(0, 120) : "unknown",
       });
       if (!canFallback) break;

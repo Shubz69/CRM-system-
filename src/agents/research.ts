@@ -493,7 +493,11 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     );
     latency.searchMs = Date.now() - tSearch0;
 
-    const profile = await profilePromise;
+    const profileWait = Math.min(400, Math.max(0, remainingMs() - 200));
+    const profile =
+      profileWait > 0
+        ? await raceWithTimeout(profilePromise, profileWait, () => null)
+        : null;
     identity = identityFromProfile(profile) || identity;
     brandSpecific = identity ? isBrandSpecificQuery(topic, identity) : false;
 

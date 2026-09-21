@@ -46,6 +46,7 @@ import {
   researchWallClockCapSeconds,
   shouldSkipOptionalEnrichment,
   raceWithTimeout,
+  FAST_HARD_TERMINAL_MS,
   RESEARCH_QUICK_CEILING_MS,
   RESEARCH_SOURCE_FETCH_MS,
 } from "@/agents/supervisor/research-deadline";
@@ -98,6 +99,7 @@ async function finishRun(input: {
   const updated = await updateOrgScopedById(prisma.agentRun, {
       id: input.runId,
       organisationId: input.organisationId,
+      extraWhere: { status: { in: ["PENDING", "PLANNING", "RUNNING"] } },
       data: {
       status: input.status,
       finishedAt: input.keepOpen ? null : new Date(),
@@ -109,7 +111,25 @@ async function finishRun(input: {
     },
   });
   if (updated.count !== 1) {
-    throw new Error("Failed to update agent run (org scope mismatch?)");
+    const current = await prisma.agentRun.findFirst({
+      where: {
+        id: { equals: String(asSafePrismaId(input.runId)) },
+        organisationId: { equals: String(asSafePrismaId(input.organisationId)) },
+      },
+      select: { status: true, finalOutput: true, partialResults: true, userFacingError: true },
+    });
+    logger.warn("finishRun skipped — run already terminal", {
+      runId: input.runId,
+      attempted: input.status,
+      current: current?.status ?? "missing",
+    });
+    return {
+      runId: input.runId,
+      status: (current?.status as AgentRunStatus) ?? input.status,
+      finalOutput: current?.finalOutput ?? input.finalOutput ?? null,
+      partialResults: current?.partialResults ?? input.partialResults ?? null,
+      userFacingError: current?.userFacingError ?? input.userFacingError ?? null,
+    };
   }
 
   if (
@@ -307,7 +327,7 @@ async function tryQuickResearchFastPath(input: {
       knowledgeContext: null,
       deadlineAt,
     }),
-    RESEARCH_QUICK_CEILING_MS + 750,
+    FAST_HARD_TERMINAL_MS,
     () => QUICK_RESEARCH_TIMEOUT,
   );
 

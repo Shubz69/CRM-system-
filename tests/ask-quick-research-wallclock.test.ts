@@ -166,7 +166,7 @@ describe("Quick research dispatch helpers", () => {
     expect(looksLikeResearch("Research plant hire UK pricing")).toBe(true);
     expect(isQuickResearchAsk("QUICK", "Research plant hire UK pricing")).toBe(true);
     expect(isQuickResearchAsk("DEEP", "Research plant hire UK pricing")).toBe(false);
-    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(12);
+    expect(researchWallClockCapSeconds("QUICK")).toBeLessThanOrEqual(13);
   });
 });
 

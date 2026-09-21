@@ -28,11 +28,12 @@ import {
   isQuickResearchAsk,
 } from "@/agents/supervisor/plan";
 import { executeAgentRun } from "@/agents/supervisor/execute";
-import { researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
+import { FAST_HARD_TERMINAL_MS, researchWallClockCapSeconds } from "@/agents/supervisor/research-deadline";
 import {
   hydrateBlankResearchFinalOutput,
   honestEmptyResearchPartial,
   salvageResearchPartialFromDb,
+  forceTerminalStaleResearchRun,
 } from "@/agents/supervisor/research-salvage";
 import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
 import { isHostedWorkerLive, shouldEnqueueDurableAgentRun } from "@/services/worker-heartbeat";
@@ -498,7 +499,26 @@ export async function createAndEnqueueAgentRun(input: {
       };
     }
 
-    await runExecute();
+    const execPromise = runExecute();
+    after(async () => {
+      try {
+        await execPromise;
+      } catch {
+        /* terminal salvage below / on poll */
+      }
+    });
+    const timed = await Promise.race([
+      execPromise.then(() => "done" as const),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), FAST_HARD_TERMINAL_MS);
+      }),
+    ]);
+    if (timed === "timeout" && quickResearchSync) {
+      await forceTerminalStaleResearchRun({
+        organisationId: input.organisationId,
+        runId: run.id,
+      });
+    }
     const done = await prisma.agentRun.findFirst({
       where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
       select: { status: true, finalOutput: true, plainEnglishPlan: true, totalCostCents: true },
@@ -1016,6 +1036,19 @@ export async function getAgentRunProgress(input: {
     },
   });
   if (!run) return null;
+
+  if (
+    looksLikeResearch(run.request) &&
+    (run.status === "PENDING" || run.status === "PLANNING" || run.status === "RUNNING")
+  ) {
+    const forced = await forceTerminalStaleResearchRun({
+      organisationId: input.organisationId,
+      runId: run.id,
+    });
+    if (forced.forced) {
+      return getAgentRunProgress(input);
+    }
+  }
 
   const planSteps =
     run.plan && typeof run.plan === "object" && Array.isArray((run.plan as { steps?: unknown }).steps)
