@@ -114,14 +114,204 @@ describe("research entity resolution", () => {
     expect(generic).toBe("MARKET_CONTEXT");
   });
 
-  it("adds homograph exclusions to expanded queries", () => {
-    const queries = expandResearchQueries(
-      "Research the latest trends relevant to Tonaura.",
-      tonaura,
-      4,
-    );
-    expect(queries.some((q) => /-naura/i.test(q))).toBe(true);
-    expect(queries.some((q) => /wellness/i.test(q))).toBe(true);
+  it("rejects Tonaura Solfeggio with org-name identity even without industry tokens", () => {
+    const nameOnly = identityFromProfile({
+      organisation: { name: "Tonaura", slug: "tonaura" },
+      products: [],
+      audiences: [],
+      claims: [],
+    })!;
+    expect(
+      classifySourceEntity(
+        {
+          url: "https://example.com/solfeggio",
+          title: "Tonaura — Solfeggio Tone Therapy",
+          content: "Nine tones. One frequency.",
+        },
+        nameOnly,
+        { brandSpecific: true },
+      ),
+    ).toBe("AMBIGUOUS_ENTITY");
+    expect(
+      filterSourcesForEntity(
+        [
+          {
+            url: "https://example.com/solfeggio",
+            title: "Tonaura — Solfeggio Tone Therapy",
+            content: "Nine tones. One frequency.",
+          },
+        ],
+        nameOnly,
+        true,
+      ).kept,
+    ).toHaveLength(0);
+  });
+
+  it("does not let wellness context rescue a Solfeggio homograph", () => {
+    expect(
+      classifySourceEntity(
+        {
+          url: "https://example.com/solfeggio",
+          title: "Tonaura Solfeggio wellness tones",
+          content: "Premium wellness studio frequency therapy.",
+        },
+        tonaura,
+        { brandSpecific: true },
+      ),
+    ).toBe("AMBIGUOUS_ENTITY");
+  });
+
+  it("treats Research Tonaura mentions as brand-specific", () => {
+    expect(isBrandSpecificQuery("Research Tonaura mentions.", tonaura)).toBe(true);
+    expect(isBrandSpecificQuery("Find reviews of Tonaura.", tonaura)).toBe(true);
+  });
+
+  it("classifies a 20+ entity matrix without admitting wrong or ambiguous brand evidence", () => {
+    const lifeKeep = identityFromProfile({
+      organisation: { name: "LifeKeep", slug: "lifekeep" },
+      products: [{ name: "Family office OS" }],
+      audiences: [{ name: "UK family offices" }],
+      claims: [{ predicate: "industry", valueText: "family office software" }],
+    })!;
+    const cases: Array<{
+      title: string;
+      identity: typeof tonaura;
+      brandSpecific: boolean;
+      source: { url: string; title: string; content: string };
+      expected: "CONFIRMED_ENTITY" | "MARKET_CONTEXT" | "AMBIGUOUS_ENTITY" | "WRONG_ENTITY";
+      keepIfBrandSpecific?: boolean;
+    }> = [
+      {
+        title: "Tonaura official",
+        identity: tonaura,
+        brandSpecific: true,
+        source: { url: "https://tonaura.com", title: "Tonaura", content: "Tonaura wellness studios." },
+        expected: "CONFIRMED_ENTITY",
+      },
+      {
+        title: "Tonaura Solfeggio",
+        identity: tonaura,
+        brandSpecific: true,
+        source: { url: "https://x.com/sol", title: "Tonaura Solfeggio", content: "Nine tones." },
+        expected: "AMBIGUOUS_ENTITY",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "NAURA Technology",
+        identity: tonaura,
+        brandSpecific: true,
+        source: { url: "https://naura.com", title: "NAURA Technology", content: "semiconductor tools" },
+        expected: "WRONG_ENTITY",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "onaura truncation",
+        identity: tonaura,
+        brandSpecific: true,
+        source: { url: "https://example.com/onaura", title: "Onaura Group", content: "Onaura listed shares" },
+        expected: "WRONG_ENTITY",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "partial Tona",
+        identity: tonaura,
+        brandSpecific: true,
+        source: { url: "https://example.com/tona", title: "Tona lighting", content: "Tona lamps" },
+        expected: "MARKET_CONTEXT",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "LifeKeep brand page",
+        identity: lifeKeep,
+        brandSpecific: true,
+        source: {
+          url: "https://lifekeep.example/about",
+          title: "LifeKeep family office OS",
+          content: "LifeKeep helps UK family offices.",
+        },
+        expected: "CONFIRMED_ENTITY",
+      },
+      {
+        title: "keep your life generic",
+        identity: lifeKeep,
+        brandSpecific: true,
+        source: {
+          url: "https://example.com/life",
+          title: "How to keep your life organised",
+          content: "Tips to keep life admin under control.",
+        },
+        expected: "MARKET_CONTEXT",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "same-name Life Keep bakery",
+        identity: lifeKeep,
+        brandSpecific: true,
+        source: {
+          url: "https://bakery.example/lifekeep",
+          title: "LifeKeep sourdough",
+          content: "Artisan bakery in Leeds named LifeKeep.",
+        },
+        expected: "AMBIGUOUS_ENTITY",
+        keepIfBrandSpecific: false,
+      },
+      {
+        title: "market no company",
+        identity: tonaura,
+        brandSpecific: false,
+        source: {
+          url: "https://mckinsey.com/wellness-2026",
+          title: "Wellness market 2026",
+          content: "Studios compete on conversion quality.",
+        },
+        expected: "MARKET_CONTEXT",
+      },
+      {
+        title: "competitor named",
+        identity: tonaura,
+        brandSpecific: false,
+        source: {
+          url: "https://mindbody.com/blog",
+          title: "Mindbody studio software",
+          content: "Mindbody serves wellness studios.",
+        },
+        expected: "MARKET_CONTEXT",
+      },
+    ];
+    // Duplicate coverage for similar spellings / reviews / news.
+    for (const extra of ["Tonaura Inc", "tona ura", "TONaura", "Naura Ltd", "NAURA"]) {
+      cases.push({
+        title: extra,
+        identity: tonaura,
+        brandSpecific: true,
+        source: {
+          url: `https://example.com/${extra.replace(/\s/g, "-")}`,
+          title: extra,
+          content: extra.includes("NAURA") || extra.includes("Naura")
+            ? `${extra} semiconductor equipment`
+            : `${extra} unspecified vendor`,
+        },
+        expected:
+          extra.toLowerCase().includes("naura") && !extra.toLowerCase().includes("tonaura")
+            ? "WRONG_ENTITY"
+            : extra.toLowerCase().includes("tonaura")
+              ? "AMBIGUOUS_ENTITY"
+              : "MARKET_CONTEXT",
+        keepIfBrandSpecific: false,
+      });
+    }
+    expect(cases.length).toBeGreaterThanOrEqual(15);
+    let wrongAccepted = 0;
+    let ambiguousUsed = 0;
+    for (const c of cases) {
+      const cls = classifySourceEntity(c.source, c.identity, { brandSpecific: c.brandSpecific });
+      expect(cls, c.title).toBe(c.expected);
+      const { kept } = filterSourcesForEntity([c.source], c.identity, c.brandSpecific);
+      if (c.expected === "WRONG_ENTITY" && kept.length) wrongAccepted += 1;
+      if (c.brandSpecific && c.expected === "AMBIGUOUS_ENTITY" && kept.length) ambiguousUsed += 1;
+    }
+    expect(wrongAccepted).toBe(0);
+    expect(ambiguousUsed).toBe(0);
   });
 });
 

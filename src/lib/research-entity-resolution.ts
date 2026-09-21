@@ -65,6 +65,19 @@ export function likelyHomographs(canonicalName: string): string[] {
   return unique(out).filter((h) => compact(h) !== compactName && compact(h).length >= 4);
 }
 
+/**
+ * Known same-name collisions that must never support brand claims even when
+ * the canonical token appears (Tonaura wellness vs Tonaura Solfeggio).
+ * Independent of Business Profile so a missing profile cannot admit them.
+ */
+export function knownCollisionTokens(canonicalName: string): string[] {
+  const key = compact(canonicalName);
+  if (key === "tonaura") {
+    return ["solfeggio", "semiconductor", "naura technology", "nine tones"];
+  }
+  return [];
+}
+
 export function identityFromProfile(profile: {
   organisation?: { name?: string | null; slug?: string | null } | null;
   products?: Array<{ name?: string | null }>;
@@ -107,7 +120,7 @@ export function identityFromProfile(profile: {
     industry: industry?.trim() || undefined,
     audience: audience?.trim() || undefined,
     geography: geography?.trim() || undefined,
-    excludedEntities: likelyHomographs(name),
+    excludedEntities: unique([...likelyHomographs(name), ...knownCollisionTokens(name)]),
   };
 }
 
@@ -118,11 +131,11 @@ export function identityFromProfile(profile: {
 export function isBrandSpecificQuery(topic: string, identity: BusinessIdentity): boolean {
   const t = topic.toLowerCase();
   const name = identity.canonicalName.toLowerCase();
-  if (!t.includes(name.toLowerCase()) && !identity.aliases.some((a) => t.includes(a.toLowerCase()))) {
-    return false;
-  }
+  const mentionsBrand =
+    t.includes(name) || identity.aliases.some((a) => a.length >= 4 && t.includes(a.toLowerCase()));
+  if (!mentionsBrand) return false;
   return (
-    /\b(about|reviews? of|saying about|reputation|mentions? of|news about|people (saying|think)|our (brand|company|studio))\b/i.test(
+    /\b(about|reviews?|saying|reputation|mentions?|news|people (saying|think)|our (brand|company|studio)|find reviews)\b/i.test(
       topic,
     ) || /\bwhat is\b.{0,20}\b(tonaura|lifekeep)\b/i.test(topic)
   );
@@ -152,13 +165,15 @@ export function classifySourceEntity(
     identity.aliases.some((a) => a.length >= 4 && wordBoundaryHas(blob, a)) ||
     identity.productNames.some((p) => p.length >= 5 && wordBoundaryHas(blob, p));
 
+  const collisionHit = identity.excludedEntities.some((ex) => wordBoundaryHas(blob, ex));
   const wrongHit = identity.excludedEntities.some(
     (ex) => wordBoundaryHas(blob, ex) && !wordBoundaryHas(blob, canonical),
   );
 
+  // Same legal name + known collision (Solfeggio) is never a confirmed brand source.
+  if (confirmed && collisionHit) return "AMBIGUOUS_ENTITY";
   if (confirmed && wrongHit) return "AMBIGUOUS_ENTITY";
   if (confirmed) {
-    // Same legal name, different company (Tonaura wellness vs Tonaura solfeggio).
     const contextBits = [identity.industry, identity.audience, ...identity.productNames]
       .join(" ")
       .toLowerCase()

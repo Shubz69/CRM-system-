@@ -751,7 +751,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const emptyLeads: LeadRow[] = [];
     const emptyApprovals: ApprovalRow[] = [];
 
-    const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals, companyCount] =
+    const [deals, conversations, goals, contentPieces, hotLeads, contactCount, pendingApprovals, companyCount, operatorOrg, operatorClaims, operatorProducts, operatorAudiences] =
       await Promise.all([
         needDeals
           ? prisma.deal.findMany({
@@ -772,7 +772,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
           ? prisma.conversation.findMany({
               where: { organisationId: orgId, deletedAt: null },
               orderBy: { updatedAt: "desc" },
-              take: intent === "operator_brief" ? 60 : 40,
+              take: intent === "operator_brief" ? 20 : 40,
               select: {
                 id: true,
                 needsHumanReview: true,
@@ -835,6 +835,45 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
               .catch(() => emptyApprovals)
           : Promise.resolve(emptyApprovals),
         companyCountPromise,
+        intent === "operator_brief"
+          ? prisma.organisation
+              .findUnique({
+                where: { id: orgId },
+                select: { name: true },
+              })
+              .catch(() => null)
+          : Promise.resolve(null),
+        intent === "operator_brief"
+          ? prisma.businessClaim
+              .findMany({
+                where: {
+                  organisationId: orgId,
+                  status: { in: ["CONFIRMED", "OBSERVED", "INFERRED"] },
+                },
+                take: 8,
+                orderBy: { observedAt: "desc" },
+                select: { predicate: true, valueText: true },
+              })
+              .catch(() => [] as Array<{ predicate: string | null; valueText: string | null }>)
+          : Promise.resolve([] as Array<{ predicate: string | null; valueText: string | null }>),
+        intent === "operator_brief"
+          ? prisma.productOffering
+              .findMany({
+                where: { organisationId: orgId, status: "ACTIVE" },
+                take: 3,
+                select: { name: true },
+              })
+              .catch(() => [] as Array<{ name: string | null }>)
+          : Promise.resolve([] as Array<{ name: string | null }>),
+        intent === "operator_brief"
+          ? prisma.audienceSegment
+              .findMany({
+                where: { organisationId: orgId },
+                take: 3,
+                select: { name: true },
+              })
+              .catch(() => [] as Array<{ name: string | null }>)
+          : Promise.resolve([] as Array<{ name: string | null }>),
       ]);
 
     if (contactFocused) {
@@ -1055,10 +1094,8 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     }
 
     if (parsed.intent === "operator_brief") {
-      const [[cos, knowledge], profile] = await Promise.all([
-        (operatorBriefPromise ?? Promise.resolve([null, null, null] as const)),
-        getBusinessProfile(orgId).catch(() => null),
-      ]);
+      const [cos, knowledge] = await (operatorBriefPromise ??
+        Promise.resolve([null, null, null] as const));
 
       const opportunities = (cos?.sections.OPPORTUNITIES || []).slice(0, 5).map((o) => ({
         title: o.title,
@@ -1074,22 +1111,22 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       }));
 
       const whatWeDo =
-        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+        operatorClaims.find((c) =>
           /what_we_do|what you do|business_description/i.test(String(c.predicate || "")),
         )?.valueText ||
-        (profile?.products || [])
+        operatorProducts
           .slice(0, 2)
-          .map((p: { name?: string | null }) => p.name)
+          .map((p) => p.name)
           .filter(Boolean)
           .join("; ") ||
         null;
       const whoWeReach =
-        (profile?.claims || []).find((c: { predicate?: string | null }) =>
+        operatorClaims.find((c) =>
           /who_to_reach|audience|who you reach/i.test(String(c.predicate || "")),
         )?.valueText ||
-        (profile?.audiences || [])
+        operatorAudiences
           .slice(0, 2)
-          .map((a: { name?: string | null }) => a.name)
+          .map((a) => a.name)
           .filter(Boolean)
           .join("; ") ||
         null;
@@ -1117,7 +1154,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         contactCount,
         counts,
         request: parsed.request,
-        workspaceLabel: profile?.organisation?.name || null,
+        workspaceLabel: operatorOrg?.name || null,
         businessSummary: whatWeDo ? String(whatWeDo).slice(0, 240) : null,
         audienceSummary: whoWeReach ? String(whoWeReach).slice(0, 240) : null,
       });

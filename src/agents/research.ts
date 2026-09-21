@@ -261,6 +261,20 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     await assertWithinSpendCap(organisationId, researchAgent.estimateCostCents(parsed));
 
     const profilePromise = getBusinessProfile(organisationId).catch(() => null);
+    const orgLitePromise = (async () => {
+      try {
+        const orgApi = prisma.organisation as
+          | { findUnique?: (args: unknown) => Promise<{ name?: string | null; slug?: string | null } | null> }
+          | undefined;
+        if (!orgApi?.findUnique) return null;
+        return await orgApi.findUnique({
+          where: { id: organisationId },
+          select: { name: true, slug: true },
+        });
+      } catch {
+        return null;
+      }
+    })();
 
     const model = resolveModelForTier("cheap");
     let costCents = 0;
@@ -276,6 +290,8 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     };
 
     // Skip query-expand LLM — heuristic queries stay inside the 30s / 8s ceiling.
+    // Do not wait for the full digital-twin profile before searching — org name
+    // is enough to exclude homographs if the profile is slow or empty.
     const tExpand0 = Date.now();
     const queryCap =
       depth === "FAST"
@@ -283,8 +299,14 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         : depth === "DEEP"
           ? RESEARCH_QUERY_CAP.DEEP
           : RESEARCH_QUERY_CAP.STANDARD;
-    const identity = identityFromProfile(await profilePromise);
-    const brandSpecific = identity ? isBrandSpecificQuery(topic, identity) : false;
+    const orgLite = await orgLitePromise;
+    let identity = identityFromProfile({
+      organisation: orgLite,
+      products: [],
+      audiences: [],
+      claims: [],
+    });
+    let brandSpecific = identity ? isBrandSpecificQuery(topic, identity) : false;
     const queries = [
       ...authorityFirstQueries(topic),
       ...expandResearchQueries(topic, identity, queryCap),
@@ -471,6 +493,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     );
     latency.searchMs = Date.now() - tSearch0;
 
+    const profile = await profilePromise;
+    identity = identityFromProfile(profile) || identity;
+    brandSpecific = identity ? isBrandSpecificQuery(topic, identity) : false;
+
     const deduped = dedupeSourceResults(collected);
     const primary = deduped.filter((r) => isPrimaryAuthorityUrl(r.url));
     const secondary = rankSourceResults(deduped.filter((r) => !isPrimaryAuthorityUrl(r.url)));
@@ -529,7 +555,7 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const remainingBeforeExtract = remainingMs();
     const extractFloor = fast ? RESEARCH_FAST_EXTRACT_MIN_MS : RESEARCH_EXTRACT_MIN_MS;
     const skipLlmExtract =
-      remainingBeforeExtract < extractFloor || !catalog;
+      fast || remainingBeforeExtract < extractFloor || !catalog;
     if (!skipLlmExtract) {
       await assertWithinSpendCap(organisationId, 2);
       const findingLimit = Math.min(maxSources, fast ? 8 : 15);

@@ -1636,15 +1636,17 @@ export async function executeAgentRun(input: {
     ...latencyTrace,
   });
 
+  const findingsLen = Array.isArray((shapedFinal as { findings?: unknown[] }).findings)
+    ? ((shapedFinal as { findings?: unknown[] }).findings?.length ?? 0)
+    : 0;
   const researchPartial =
     shapedFinal &&
     typeof shapedFinal === "object" &&
+    findingsLen === 0 &&
     ((shapedFinal as { phase?: string }).phase === "PARTIAL_WITH_SOURCES" ||
       (shapedFinal as { phase?: string }).phase === "PARTIAL_WITH_GROUNDED_QUALITY" ||
       ((shapedFinal as { sourceCount?: number }).sourceCount != null &&
-        Number((shapedFinal as { sourceCount?: number }).sourceCount) > 0 &&
-        Array.isArray((shapedFinal as { findings?: unknown[] }).findings) &&
-        ((shapedFinal as { findings?: unknown[] }).findings?.length ?? 0) === 0));
+        Number((shapedFinal as { sourceCount?: number }).sourceCount) > 0));
 
   return finishRun({
     organisationId: input.organisationId,
