@@ -135,10 +135,31 @@ export function isBrandSpecificQuery(topic: string, identity: BusinessIdentity):
     t.includes(name) || identity.aliases.some((a) => a.length >= 4 && t.includes(a.toLowerCase()));
   if (!mentionsBrand) return false;
   return (
-    /\b(about|reviews?|saying|reputation|mentions?|news|people (saying|think)|our (brand|company|studio)|find reviews)\b/i.test(
+    /\b(about|reviews?|saying|reputation|mentions?|news|people (saying|think)|our (brand|company|studio)|find reviews|marketing|themes?|lean into|content ideas?)\b/i.test(
       topic,
     ) || /\bwhat is\b.{0,20}\b(tonaura|lifekeep)\b/i.test(topic)
   );
+}
+
+function nearBrandHost(hostBrand: string, canonicalName: string): boolean {
+  const h = compact(hostBrand);
+  const n = compact(canonicalName);
+  if (h.length < 6 || n.length < 6 || h === n) return false;
+  if (Math.abs(h.length - n.length) > 2) return false;
+  if (oneEditCompact(h, n)) return true;
+  const stem = n.slice(-4);
+  const head = n.slice(0, 4);
+  return (stem.length === 4 && h.endsWith(stem)) || (head.length === 4 && h.startsWith(head));
+}
+
+function oneEditCompact(a: string, b: string): boolean {
+  if (a.length !== b.length || a.length < 6) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) d += 1;
+    if (d > 1) return false;
+  }
+  return d === 1;
 }
 
 export function classifySourceEntity(
@@ -157,6 +178,11 @@ export function classifySourceEntity(
 
   if (identity.domains.some((d) => host === d || host.endsWith(`.${d}`))) {
     return "CONFIRMED_ENTITY";
+  }
+
+  const hostBrand = host.split(".")[0] || "";
+  if (opts?.brandSpecific && nearBrandHost(hostBrand, identity.canonicalName)) {
+    return "AMBIGUOUS_ENTITY";
   }
 
   const canonical = identity.canonicalName;

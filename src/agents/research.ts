@@ -709,7 +709,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const emptyReason =
       authRequired?.message ||
       (missingWebKeys ? WEB_SEARCH_MISSING_KEY_MESSAGE : null) ||
-      "No sources were returned from the configured adapters.";
+      (brandSpecific && identity
+        ? `I found no sources I can confirm are about ${identity.canonicalName}. Pages that only share a similar name were excluded.`
+        : "No sources were returned from the configured adapters.");
     const baseSummary =
       ranked.length === 0
         ? emptyReason
@@ -723,7 +725,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
 
     const jobError =
-      ranked.length > 0 ? null : authRequired || missingWebKeys ? "AUTH_REQUIRED" : "no_sources";
+      ranked.length > 0
+        ? null
+        : authRequired || missingWebKeys
+          ? "AUTH_REQUIRED"
+          : brandSpecific
+            ? null
+            : "no_sources";
     const output: ResearchOutput = {
       researchJobId: jobId,
       topic,
@@ -766,7 +774,13 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
             id: jobId,
             organisationId,
             data: {
-        status: ranked.length ? (findings.length > 0 ? "COMPLETED" : "PARTIAL") : "FAILED",
+        status: ranked.length
+          ? findings.length > 0
+            ? "COMPLETED"
+            : "PARTIAL"
+          : brandSpecific && !authRequired && !missingWebKeys
+            ? "COMPLETED"
+            : "FAILED",
         brief: output as unknown as Prisma.InputJsonValue,
         totalCostCents: costCents,
         finishedAt: new Date(),
@@ -774,7 +788,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
           ? null
           : jobError === "AUTH_REQUIRED"
             ? emptyReason
-            : "I couldn't reach any research sources. Please retry in a moment.",
+            : brandSpecific
+              ? null
+              : "I couldn't reach any research sources. Please retry in a moment.",
         // AUTH_REQUIRED is the ops-visible code for missing web search credentials.
         // Keep technical env/hosting guidance in server logs only — never in customer UI.
         error: jobError,

@@ -161,9 +161,29 @@ describe("research entity resolution", () => {
     ).toBe("AMBIGUOUS_ENTITY");
   });
 
+  it("treats one-edit hostnames like altaura.ai as AMBIGUOUS on brand-specific asks", () => {
+    expect(
+      classifySourceEntity(
+        {
+          url: "https://altaura.ai/clarity",
+          title: "Strategic Marketing & Brand Clarity",
+          content: "Clarity before tactics.",
+        },
+        tonaura,
+        { brandSpecific: true },
+      ),
+    ).toBe("AMBIGUOUS_ENTITY");
+  });
+
   it("treats Research Tonaura mentions as brand-specific", () => {
     expect(isBrandSpecificQuery("Research Tonaura mentions.", tonaura)).toBe(true);
     expect(isBrandSpecificQuery("Find reviews of Tonaura.", tonaura)).toBe(true);
+    expect(
+      isBrandSpecificQuery(
+        "What marketing themes should Tonaura lean into based on our business?",
+        tonaura,
+      ),
+    ).toBe(true);
   });
 
   it("classifies a 20+ entity matrix without admitting wrong or ambiguous brand evidence", () => {

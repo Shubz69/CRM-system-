@@ -131,6 +131,8 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\bstalled\b.*\bdeals?\b|\bdeals?\b.*\bstalled\b|\bwhich deals?\b/.test(t) ||
     /\bdeals?\b.{0,40}\b(quiet|went quiet|ages|stale)\b|\b(quiet|stale)\b.{0,40}\bdeals?\b/.test(t) ||
     /\b(conversations? needing (a )?human|needs? (my )?attention|follow[- ]?ups?|customers? need)\b/.test(t) ||
+    /\b(which )?conversations?\b.{0,40}\breply\b|\breply\b.{0,40}\bconversations?\b/.test(t) ||
+    /\bneed(s|ing)? (a )?reply\b/.test(t) ||
     /\bhow many\s+conversations\b/.test(t) ||
     /\b(goals?\b.{0,40}\bat risk|at risk\b.{0,40}\bgoals?|goals? marked at risk|kpi|goals? need|which goal)\b/.test(
       t,
@@ -318,9 +320,10 @@ export function looksLikeResearch(request: string): boolean {
     return false;
   }
   return (
-    /\b(research|look up|find (out|sources|articles)|investigate|competitive analysis|market scan)\b/i.test(
+    /\b(research|look up|find (out|sources|articles|reviews)|investigate|competitive analysis|market scan)\b/i.test(
       request,
     ) ||
+    /\b(reviews? of|people (saying|think)|mentions? of)\b/i.test(request) ||
     /\bwhat does the (ico|fca|asa|ofcom|hmrc|gov\.uk)\b/i.test(request) ||
     /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
     (/\bcompare\b.+\band\b/i.test(request) &&

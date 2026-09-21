@@ -349,7 +349,7 @@ describe("supervisor planning", () => {
     }
   });
 
-  it("routes deals needing attention to operator brief, not a cloned pipeline dump", () => {
+  it("routes deal attention to operator brief, not a cloned pipeline dump", () => {
     const result = planAgentRunDeterministic("Which deals need my attention?", {
       answerMode: "QUICK",
     });
@@ -359,6 +359,23 @@ describe("supervisor planning", () => {
       expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe(
         "operator_brief",
       );
+    }
+  });
+
+  it("routes inbox reply and brand reviews without helper-card clarification", () => {
+    const inbox = planAgentRunDeterministic("Which conversations need a reply?", {
+      answerMode: "QUICK",
+    });
+    expect(inbox.kind).toBe("plan");
+    if (inbox.kind === "plan") {
+      expect(inbox.plan.steps[0]?.agentName).toBe("crm_desk");
+    }
+    const reviews = planAgentRunDeterministic("Find reviews of Tonaura.", {
+      answerMode: "QUICK",
+    });
+    expect(reviews.kind).toBe("plan");
+    if (reviews.kind === "plan") {
+      expect(reviews.plan.steps[0]?.agentName).toBe("research");
     }
   });
 });

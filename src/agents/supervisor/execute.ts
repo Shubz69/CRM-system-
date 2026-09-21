@@ -401,7 +401,11 @@ async function tryQuickResearchFastPath(input: {
       ((result.output as { sources: unknown[] }).sources?.length ?? 0) > 0) ||
       (Array.isArray((result.output as { findings?: unknown }).findings) &&
         ((result.output as { findings: unknown[] }).findings?.length ?? 0) > 0));
-  const authRequired = !hasEvidence && isWebResearchAuthRequiredOutput(result.output);
+  const honestEmptyBrand =
+    !hasEvidence &&
+    typeof (result.output as { summary?: unknown }).summary === "string" &&
+    /no sources i can confirm/i.test(String((result.output as { summary: string }).summary));
+  const authRequired = !hasEvidence && !honestEmptyBrand && isWebResearchAuthRequiredOutput(result.output);
   const authMessage =
     authRequired && typeof (result.output as { summary?: string }).summary === "string"
       ? (result.output as { summary: string }).summary
@@ -410,15 +414,15 @@ async function tryQuickResearchFastPath(input: {
     organisationId: input.organisationId,
     request: input.run.request,
     runId: input.run.id,
-    status: hasEvidence ? "COMPLETED" : authRequired ? "FAILED" : "PARTIAL",
+    status: hasEvidence || honestEmptyBrand ? "COMPLETED" : authRequired ? "FAILED" : "PARTIAL",
     totalCostCents: result.costCents ?? 0,
     partialResults: {
       steps: [{ agentName: "research", userFacingLabel: "Research", output: result.output }],
       latencyTrace,
     },
     finalOutput: shaped,
-    error: hasEvidence ? null : authRequired ? "AUTH_REQUIRED" : "no_sources",
-    userFacingError: hasEvidence ? null : authMessage,
+    error: hasEvidence || honestEmptyBrand ? null : authRequired ? "AUTH_REQUIRED" : "no_sources",
+    userFacingError: hasEvidence || honestEmptyBrand ? null : authMessage,
   });
 }
 
