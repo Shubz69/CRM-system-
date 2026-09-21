@@ -13,7 +13,7 @@ import {
   getOrganisationAiBudget,
   getOrganisationPeriodSpendCents,
 } from "@/services/ai-spend-gate";
-import { ensureBuiltinToolsRegistered, listTools } from "@/kernel";
+import { ensureBuiltinToolsRegistered } from "@/kernel";
 import {
   answerModeFromFormatOption,
   detectAnswerModeFromLanguage,
@@ -1159,12 +1159,14 @@ export async function getAgentRunProgress(input: {
     })),
     nextActions: nextActionsFor(run.status, displayOutput, run.answerMode),
     kernel: {
-      toolsInvoked,
-      registeredTools: listTools().map((t) => ({
-        name: t.name,
-        risk: t.risk,
-        description: t.description,
+      toolsInvoked: toolsInvoked.map((t) => ({
+        ...t,
+        toolName: t.toolName.replace(/\btavily\b/gi, "web").replace(/\bexa\b/gi, "web"),
+        error: t.error && /tavily|exa|apify|prisma|openai|anthropic|claude/i.test(t.error)
+          ? "Tool call did not complete."
+          : t.error,
       })),
+      registeredTools: [],
       knowledgeUsed,
       memoryUsed,
     },

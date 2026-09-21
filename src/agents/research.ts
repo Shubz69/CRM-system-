@@ -657,7 +657,10 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     );
     latency.persistMs = persistSourcesMs + (Date.now() - tPersistFindings0);
 
-    const unavailableNotes = formatUnavailableSourceNotes(adapterErrors);
+    // When fallback search already returned sources, do not append primary-provider
+    // outage notes (and never name vendors) on a successful scan.
+    const unavailableNotes =
+      ranked.length === 0 ? formatUnavailableSourceNotes(adapterErrors) : [];
     const authRequired = adapterErrors.find(
       (e) => e.code === "AUTH_REQUIRED" || (e.platform === "web" && e.code === "SOURCE_NOT_CONFIGURED"),
     );
@@ -694,7 +697,12 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
         author: r.author ?? undefined,
       })),
       summary,
-      adapterErrors: adapterErrors.slice(0, 20),
+      adapterErrors: ranked.length > 0 ? [] : adapterErrors.slice(0, 20).map((e) => ({
+        platform: e.platform === "web" ? "web" : "source",
+        message: /tavily|exa|apify|openai|anthropic|claude|prisma|432|quota/i.test(e.message)
+          ? "A search source was unavailable; results below use the sources that succeeded."
+          : e.message,
+      })),
       ...(jobError ? { error: jobError } : {}),
       ...(partialWithSources
         ? {

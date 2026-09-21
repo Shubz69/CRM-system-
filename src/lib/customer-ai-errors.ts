@@ -3,7 +3,7 @@
  */
 
 const PROVIDER_LEAK =
-  /\b(anthropic|claude|openai|gpt-4|gpt-3|groq|mistral|deepseek|gemini|ai provider|model:\s*claude|sonnet-4)\b/i;
+  /\b(anthropic|claude|openai|gpt-4|gpt-3|groq|mistral|deepseek|gemini|tavily|exa|apify|prisma|postgres|redis|zod|ai provider|model:\s*claude|sonnet-4)\b/i;
 
 export const CUSTOMER_AI_UNAVAILABLE =
   "Agent Desk intelligence is temporarily unavailable.";
@@ -12,7 +12,49 @@ export const CUSTOMER_AI_VALIDATE_FAILED =
   "Agent Desk couldn't validate this information right now. Please try again.";
 
 export function isProviderLeakingMessage(message: string): boolean {
-  return PROVIDER_LEAK.test(message) || /not_found_error|model:\s*[\w.-]+/i.test(message);
+  return (
+    PROVIDER_LEAK.test(message) ||
+    /\bapi key\b/i.test(message) ||
+    /\bembedding(s)?\b/i.test(message) ||
+    /not_found_error|model:\s*[\w.-]+/i.test(message)
+  );
+}
+
+function customerSafeToolName(name: string): string {
+  return name
+    .replace(/\btavily\b/gi, "web")
+    .replace(/\bexa\b/gi, "web")
+    .replace(/\bapify\b/gi, "source")
+    .replace(/\bopenai\b/gi, "ai")
+    .replace(/\banthropic\b/gi, "ai");
+}
+
+/** Strip vendor identifiers from client Ask payloads (admin kernel included). */
+export function sanitizeAskClientPayload<T>(value: T): T {
+  const walk = (node: unknown, key?: string): unknown => {
+    if (typeof node === "string") {
+      if (key === "url" || key === "sourceUrl" || key === "href") return node;
+      if (key === "toolName" || key === "name") return customerSafeToolName(node);
+      if (isProviderLeakingMessage(node)) {
+        return node.replace(PROVIDER_LEAK, "service").replace(/\bapi key\b/gi, "credential");
+      }
+      return node;
+    }
+    if (Array.isArray(node)) return node.map((item) => walk(item));
+    if (node && typeof node === "object") {
+      const entries = Object.entries(node as Record<string, unknown>).filter(
+        ([k]) =>
+          k !== "__proto__" &&
+          k !== "constructor" &&
+          k !== "prototype" &&
+          k !== "registeredTools" &&
+          k !== "rawMetadata",
+      );
+      return Object.fromEntries(entries.map(([k, v]) => [k, walk(v, k)]));
+    }
+    return node;
+  };
+  return walk(value) as T;
 }
 
 /** Map internal AI failures to a safe customer message. */

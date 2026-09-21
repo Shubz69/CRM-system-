@@ -303,4 +303,62 @@ describe("supervisor planning", () => {
       expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
     }
   });
+
+  it("does not helper-card diagnostic growth or branded posting asks", () => {
+    const growth = planAgentRunDeterministic("Why are we not growing?", {
+      answerMode: "QUICK",
+    });
+    expect(growth.kind).toBe("plan");
+    if (growth.kind === "plan") {
+      expect(growth.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((growth.plan.steps[0]?.input as { intent?: string }).intent).toBe(
+        "operator_brief",
+      );
+    }
+
+    const blocking = planAgentRunDeterministic("What is blocking Tonaura?", {
+      answerMode: "QUICK",
+    });
+    expect(blocking.kind).toBe("plan");
+    if (blocking.kind === "plan") {
+      expect(blocking.plan.steps[0]?.agentName).toBe("crm_desk");
+    }
+
+    const post = planAgentRunDeterministic("What should LifeKeep post this week?", {
+      answerMode: "QUICK",
+    });
+    expect(post.kind).toBe("plan");
+    if (post.kind === "plan") {
+      expect(post.plan.steps[0]?.agentName).toBe("research");
+    }
+
+    const ideas = planAgentRunDeterministic("Give me three content ideas for Tonaura.", {
+      answerMode: "QUICK",
+    });
+    expect(ideas.kind).toBe("plan");
+    if (ideas.kind === "plan") {
+      expect(ideas.plan.steps[0]?.agentName).toBe("research");
+    }
+
+    const marketOpp = planAgentRunDeterministic("Find opportunities for LifeKeep", {
+      answerMode: "QUICK",
+    });
+    expect(marketOpp.kind).toBe("plan");
+    if (marketOpp.kind === "plan") {
+      expect(marketOpp.plan.steps[0]?.agentName).toBe("research");
+    }
+  });
+
+  it("routes deals needing attention to operator brief, not a cloned pipeline dump", () => {
+    const result = planAgentRunDeterministic("Which deals need my attention?", {
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((result.plan.steps[0]?.input as { intent?: string }).intent).toBe(
+        "operator_brief",
+      );
+    }
+  });
 });

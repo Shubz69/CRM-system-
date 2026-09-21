@@ -93,7 +93,8 @@ export function looksLikeOperatorBrief(request: string): boolean {
       t,
     ) ||
     /\b(who should i talk to|who is waiting on me|anything overdue|where are we behind|blocking progress)\b/.test(t) ||
-    /\b(needs? attention|what needs me|pipeline and inbox)\b/.test(t) ||
+    /\b(needs? attention|need my attention|what needs me|pipeline and inbox)\b/.test(t) ||
+    /\b(deals?|pipeline).{0,28}\bneed(s|ing)?\b.{0,16}\battention\b/.test(t) ||
     /\b(revenue priority|next revenue|prioritis[e].{0,40}revenue|commercial priorit)\b/.test(t) ||
     /\b(open risks|pipeline risks?|losing momentum|blocking growth)\b/.test(t) ||
     /\bwhat should (i|we) (prioritis[e]|focus on|do).{0,40}\b(week|today|now)\b/.test(t) ||
@@ -104,7 +105,12 @@ export function looksLikeOperatorBrief(request: string): boolean {
     // Marketing / content ideation is intentionally NOT operator_brief: those
     // prompts deserve research (or content strategy), not a repeated CRM pulse.
     /\b(find|show|list|surface)\b.{0,24}\b(problems?|issues?|risks?|gaps?)\b/.test(t) ||
-    /\bproblems? in (my|our|the)\b.{0,20}\b(business|workspace|crm|pipeline)\b/.test(t)
+    /\bproblems? in (my|our|the)\b.{0,20}\b(business|workspace|crm|pipeline)\b/.test(t) ||
+    /\bwhy (are we|aren'?t we|are we not|isn'?t (the |our )?(business|company))\b.{0,20}\bgrow/.test(t) ||
+    /\bnot growing\b/.test(t) ||
+    /\bwhat( is|'s) blocking\b/.test(t) ||
+    /\banalys[ee] (our|the|my) (current )?business\b/.test(t) ||
+    /\bbiggest risk (in|for) (the |our )?(company|business)\b/.test(t)
   );
 }
 
@@ -160,7 +166,8 @@ export function looksLikeCrmInternal(request: string): boolean {
     /\b(waiting on me|inbox.{0,40}(waiting|human|reply)|needing (a )?human|needs? human)\b/.test(t) ||
     /\bdeals?\b.*\bstuck\b|\bstuck\b.*\bdeals?\b/.test(t) ||
     /\bpipeline health\b|\bhealth of (my|our|the) pipeline\b/.test(t) ||
-    /\bopportunit(y|ies)\b/.test(t) ||
+    (/\bopportunit(y|ies)\b/.test(t) &&
+      /\b(my|our|this|crm|workspace|review|detected|inbox|pipeline)\b/.test(t)) ||
     /\b(crm pulse|status check|inbox snapshot|what needs me|what'?s urgent|any fires|top risk)\b/.test(t) ||
     (/\b(how many open|don'?t invent deals)\b/.test(t) &&
       !/\b(research|gdpr|ico|requirements)\b/.test(t))
@@ -320,12 +327,14 @@ export function looksLikeResearch(request: string): boolean {
       !/\b(pipeline|deals?|goals?|inbox|crm|contacts?|companies)\b/i.test(request)) ||
     // Content / marketing strategy asks need evidence + synthesis, not the
     // same WORKSPACE CONTEXT operator brief as "what should I do today?".
-    /\b(marketing themes?|content ideas?|what (should|can) (i|we) (post|publish|say))\b/i.test(
-      request,
-    ) ||
+    /\b(marketing themes?|content ideas?|content plan|content strategy)\b/i.test(request) ||
+    /\bwhat (should|can) .{0,48}\b(post|publish|say)\b/i.test(request) ||
+    /\bpost this (week|month)\b/i.test(request) ||
+    /\b(give me|suggest|create).{0,40}\b(content ideas?|posts?)\b/i.test(request) ||
     /\blean into\b.{0,40}\b(marketing|content|brand|audience)\b/i.test(request) ||
     (/\b(content|marketing|audience|brand)\b/i.test(request) &&
-      /\bbased on (our|my) (business|audience|profile)\b/i.test(request))
+      /\bbased on (our|my) (business|audience|profile)\b/i.test(request)) ||
+    /\bfind opportunit(y|ies)\b/i.test(request)
   );
 }
 
@@ -706,8 +715,10 @@ export function planAgentRunDeterministic(
       return planCrmDesk(trimmed, { preferOperatorBrief });
     }
     // Short ambiguous-but-normal business questions → answer from CRM state, don't clarify.
+    // Do not steal content/posting asks just because they mention "week".
     if (
       trimmed.split(/\s+/).length <= 12 &&
+      !/\b(post|publish|content idea|marketing theme|content plan)\b/i.test(trimmed) &&
       /\b(pipeline|inbox|crm|deal|lead|customer|focus|urgent|risk|overdue|healthy|attention|today|week|status check|fires|pulse|snapshot|blocking progress|waiting on me)\b/i.test(
         trimmed,
       )

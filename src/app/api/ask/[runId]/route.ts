@@ -3,6 +3,7 @@ import { jsonError, requirePermission } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import { getAgentRunProgress } from "@/services/agent-runs";
 import { canViewAiSpend } from "@/lib/permissions";
+import { sanitizeAskClientPayload } from "@/lib/customer-ai-errors";
 import {
   WorkspaceAccessError,
   assertActiveWorkspaceAccess,
@@ -38,19 +39,21 @@ export async function GET(
         role: session.role,
       })
     ) {
-      return Response.json({
-        ...progress,
-        totalCostCents: 0,
-        costNote: null,
-        pendingCostNote: null,
-        pendingCostEstimateCents: null,
-        remainingAllowanceNote: null,
-        steps: progress.steps.map((s) => ({ ...s, costCents: 0 })),
-        kernel: undefined,
-      });
+      return Response.json(
+        sanitizeAskClientPayload({
+          ...progress,
+          totalCostCents: 0,
+          costNote: null,
+          pendingCostNote: null,
+          pendingCostEstimateCents: null,
+          remainingAllowanceNote: null,
+          steps: progress.steps.map((s) => ({ ...s, costCents: 0 })),
+          kernel: undefined,
+        }),
+      );
     }
 
-    return Response.json(progress);
+    return Response.json(sanitizeAskClientPayload(progress));
   } catch (error) {
     if (error instanceof WorkspaceAccessError) {
       const status = error.code === "NO_WORKSPACE_MEMBERSHIP" ? 403 : 401;

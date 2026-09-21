@@ -17,6 +17,7 @@ import {
   WorkspaceAccessError,
   toUserFacingAskError,
 } from "@/services/workspace-access";
+import { sanitizeAskClientPayload } from "@/lib/customer-ai-errors";
 
 /** Sync Quick CRM path may run executeAgentRun in-request — allow headroom. */
 export const maxDuration = 60;
@@ -101,7 +102,7 @@ export async function POST(req: NextRequest) {
       syncFastPath,
       acceptMs,
       ...(status ? { status } : {}),
-      ...(finalOutput !== undefined ? { finalOutput } : {}),
+      ...(finalOutput !== undefined ? { finalOutput: sanitizeAskClientPayload(finalOutput) } : {}),
       ...(typeof totalCostCents === "number" ? { totalCostCents } : {}),
       ...(costNote !== undefined ? { costNote } : {}),
       message: plainEnglishPlan || "Started — you'll see progress as each step finishes.",

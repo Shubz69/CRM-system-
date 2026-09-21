@@ -115,10 +115,42 @@ export function deterministicResearchBrief(
         .filter(Boolean),
     ),
   ];
-  const titles = sources
-    .map((s) => (s.title || "").replace(/\s+/g, " ").trim())
-    .filter(Boolean)
+  const titled = sources
+    .map((s) => {
+      let domain = "";
+      try {
+        domain = new URL(s.url).hostname.replace(/^www\./, "");
+      } catch {
+        domain = "";
+      }
+      return {
+        title: (s.title || "").replace(/\s+/g, " ").trim(),
+        domain,
+        excerpt: (s.content || "").replace(/\s+/g, " ").trim().slice(0, 140),
+      };
+    })
+    .filter((s) => s.title || s.domain)
     .slice(0, 5);
+  const titles = titled.map((s) => s.title).filter(Boolean);
+
+  const wantsContentAngles =
+    /\b(content ideas?|content plan|content strategy|what .{0,48}\b(post|publish)|post this (week|month)|marketing themes?)\b/i.test(
+      cleanTopic,
+    );
+
+  if (wantsContentAngles && titled.length > 0) {
+    const angles = titled.slice(0, 3).map((s, i) => {
+      const lead = s.title || s.domain;
+      const why = s.excerpt ? ` ${s.excerpt}` : "";
+      return `${i + 1}. ${lead} — source-backed angle from ${s.domain || "retrieved page"}.${why}`;
+    });
+    return [
+      `Source-backed content angles for “${cleanTopic}” (titles/excerpts from retrieved pages — verify before posting):`,
+      ...angles,
+      "These are evidence leads, not invented posts or unverified statistics.",
+    ].join(" ");
+  }
+
   const parts = [
     `Evidence scan for “${cleanTopic}”: ${sources.length} source${sources.length === 1 ? "" : "s"}`,
     domains.length
