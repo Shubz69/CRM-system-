@@ -702,7 +702,12 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
     const operatorBriefPromise =
       intent === "operator_brief"
         ? Promise.all([
-            buildChiefOfStaffFacts(orgId).catch(() => null),
+            Promise.race([
+              buildChiefOfStaffFacts(orgId).catch(() => null),
+              new Promise<null>((resolve) => {
+                setTimeout(() => resolve(null), 2_500);
+              }),
+            ]),
             parsed.request && /\b(knowledge|policy|handbook|playbook|document)\b/i.test(parsed.request)
               ? retrieveRelevantKnowledge({
                   organisationId: orgId,

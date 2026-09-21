@@ -131,6 +131,7 @@ export function isBrandSpecificQuery(topic: string, identity: BusinessIdentity):
 export function classifySourceEntity(
   source: ClassifiableSource,
   identity: BusinessIdentity,
+  opts?: { brandSpecific?: boolean },
 ): EntityClass {
   const blob = `${source.url}\n${source.title || ""}\n${source.content || ""}`;
   const host = (() => {
@@ -156,7 +157,18 @@ export function classifySourceEntity(
   );
 
   if (confirmed && wrongHit) return "AMBIGUOUS_ENTITY";
-  if (confirmed) return "CONFIRMED_ENTITY";
+  if (confirmed) {
+    // Same legal name, different company (Tonaura wellness vs Tonaura solfeggio).
+    const contextBits = [identity.industry, identity.audience, ...identity.productNames]
+      .join(" ")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 5);
+    const blobLower = blob.toLowerCase();
+    const contextHit = contextBits.some((t) => blobLower.includes(t));
+    if (opts?.brandSpecific && !contextHit) return "AMBIGUOUS_ENTITY";
+    return "CONFIRMED_ENTITY";
+  }
   if (wrongHit) return "WRONG_ENTITY";
   return "MARKET_CONTEXT";
 }
@@ -177,7 +189,7 @@ export function filterSourcesForEntity<T extends ClassifiableSource>(
   const kept: T[] = [];
   const droppedWrong: T[] = [];
   for (const source of sources) {
-    const entityClass = classifySourceEntity(source, identity);
+    const entityClass = classifySourceEntity(source, identity, { brandSpecific });
     classifications.push({ url: source.url, entityClass });
     if (entityClass === "WRONG_ENTITY") {
       droppedWrong.push(source);

@@ -31,6 +31,20 @@ describe("research entity resolution", () => {
     ).toBe("WRONG_ENTITY");
   });
 
+  it("treats same-name unrelated Tonaura pages as AMBIGUOUS on brand-specific asks", () => {
+    expect(
+      classifySourceEntity(
+        {
+          url: "https://example.com/solfeggio",
+          title: "Tonaura — Solfeggio Tone Therapy",
+          content: "Nine tones. One frequency.",
+        },
+        tonaura,
+        { brandSpecific: true },
+      ),
+    ).toBe("AMBIGUOUS_ENTITY");
+  });
+
   it("keeps Tonaura domain and name as CONFIRMED_ENTITY", () => {
     expect(
       classifySourceEntity(
