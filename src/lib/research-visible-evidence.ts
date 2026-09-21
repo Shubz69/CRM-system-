@@ -69,9 +69,13 @@ export function sourceBackedFindingsFromSources(
     if (!source.url || out.length >= limit) continue;
     const excerpt = (source.content || "").replace(/\s+/g, " ").trim().slice(0, 220);
     const title = (source.title || "").trim();
-    const claim = excerpt
-      ? `${title || source.url}: ${excerpt}`
-      : title || `Source recorded: ${source.url}`;
+    // Prefer a readable observation: title as the lead, excerpt as evidence —
+    // never invent statistics beyond what the source text already states.
+    const claim = title
+      ? excerpt
+        ? `${title} — ${excerpt}`
+        : title
+      : excerpt || `Source recorded: ${source.url}`;
     out.push({
       claim: claim.slice(0, 800),
       sourceUrl: source.url,
@@ -83,6 +87,49 @@ export function sourceBackedFindingsFromSources(
     });
   }
   return out;
+}
+
+/**
+ * Deterministic multi-source brief when LLM extract is skipped (FAST) or fails.
+ * Uses only titles/domains/excerpts already retrieved — never invents facts.
+ */
+export function deterministicResearchBrief(
+  topic: string,
+  sources: Array<{
+    url: string;
+    title?: string | null;
+    content?: string | null;
+  }>,
+): string {
+  const cleanTopic = topic.replace(/\s+/g, " ").trim().slice(0, 160);
+  const domains = [
+    ...new Set(
+      sources
+        .map((s) => {
+          try {
+            return new URL(s.url).hostname.replace(/^www\./, "");
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean),
+    ),
+  ];
+  const titles = sources
+    .map((s) => (s.title || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const parts = [
+    `Evidence scan for “${cleanTopic}”: ${sources.length} source${sources.length === 1 ? "" : "s"}`,
+    domains.length
+      ? `across ${domains.slice(0, 5).join(", ")}${domains.length > 5 ? ", …" : ""}`
+      : null,
+    titles.length
+      ? `Key source leads: ${titles.map((t, i) => `(${i + 1}) ${t}`).join("; ")}.`
+      : "Open the linked sources below to verify details before acting.",
+    "This is a source-backed fast scan (observations from retrieved pages), not model-invented synthesis.",
+  ].filter(Boolean);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 export function normalizeVisibleSources(output: unknown): VisibleSource[] {

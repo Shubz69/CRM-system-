@@ -101,11 +101,10 @@ export function looksLikeOperatorBrief(request: string): boolean {
     /\bautomation would help\b/.test(t) ||
     /\bwithout sending\b.{0,40}\b(extern|automatic)/.test(t) ||
     // Owner diagnostics — must not fall through to helper-card clarification.
+    // Marketing / content ideation is intentionally NOT operator_brief: those
+    // prompts deserve research (or content strategy), not a repeated CRM pulse.
     /\b(find|show|list|surface)\b.{0,24}\b(problems?|issues?|risks?|gaps?)\b/.test(t) ||
-    /\bproblems? in (my|our|the)\b.{0,20}\b(business|workspace|crm|pipeline)\b/.test(t) ||
-    /\b(marketing themes?|content ideas?|what (should|can) (i|we) (post|publish|say))\b/.test(t) ||
-    /\blean into\b.{0,40}\b(marketing|content|brand|audience)\b/.test(t) ||
-    /\b(based on (our|my) (business|audience|profile))\b/.test(t)
+    /\bproblems? in (my|our|the)\b.{0,20}\b(business|workspace|crm|pipeline)\b/.test(t)
   );
 }
 
@@ -318,7 +317,15 @@ export function looksLikeResearch(request: string): boolean {
     /\bwhat does the (ico|fca|asa|ofcom|hmrc|gov\.uk)\b/i.test(request) ||
     /\b(gdpr|ico guidance|regulatory|legislation)\b/i.test(request) ||
     (/\bcompare\b.+\band\b/i.test(request) &&
-      !/\b(pipeline|deals?|goals?|inbox|crm|contacts?|companies)\b/i.test(request))
+      !/\b(pipeline|deals?|goals?|inbox|crm|contacts?|companies)\b/i.test(request)) ||
+    // Content / marketing strategy asks need evidence + synthesis, not the
+    // same WORKSPACE CONTEXT operator brief as "what should I do today?".
+    /\b(marketing themes?|content ideas?|what (should|can) (i|we) (post|publish|say))\b/i.test(
+      request,
+    ) ||
+    /\blean into\b.{0,40}\b(marketing|content|brand|audience)\b/i.test(request) ||
+    (/\b(content|marketing|audience|brand)\b/i.test(request) &&
+      /\bbased on (our|my) (business|audience|profile)\b/i.test(request))
   );
 }
 

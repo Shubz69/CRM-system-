@@ -18,10 +18,14 @@ export const OPTIONAL_RESEARCH_ENRICHMENT_AGENTS = new Set(["analyst", "critic"]
 export const RESEARCH_EVIDENCE_AGENTS = new Set(["research", "social_listening"]);
 
 /**
- * Quick research hard cap (ms). Search + persist + source-backed findings only.
- * No query-expand LLM, no extract LLM, no analyst/critic.
+ * Quick research hard cap (ms). Search + persist + optional cheap extract when
+ * remaining wall-clock allows. Analyst/critic stay skipped.
+ * Aligns with Ask QUICK P90 ≤12s — not an unbounded wait.
  */
-export const RESEARCH_QUICK_CEILING_MS = 8_000;
+export const RESEARCH_QUICK_CEILING_MS = 12_000;
+
+/** FAST extract only when at least this much wall-clock remains after search. */
+export const RESEARCH_FAST_EXTRACT_MIN_MS = 2_500;
 
 /**
  * Even Deep/hard Ask research must PARTIAL or complete within this execute budget.

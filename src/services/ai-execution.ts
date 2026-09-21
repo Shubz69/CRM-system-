@@ -17,15 +17,19 @@ export async function recordAiExecution(input: {
   success: boolean;
   error?: string | null;
   metadata?: Record<string, unknown>;
+  /** Explicit USD estimate when token pricing does not apply (e.g. web search). */
+  estimatedCostUsd?: number | null;
 }) {
   const inputTokens = input.inputTokens ?? null;
   const outputTokens = input.outputTokens ?? null;
   const totalTokens =
     inputTokens != null && outputTokens != null ? inputTokens + outputTokens : null;
   const estimatedCost =
-    input.provider === "anthropic" && inputTokens != null && outputTokens != null
-      ? estimateAnthropicCost(input.model, inputTokens, outputTokens)
-      : null;
+    input.estimatedCostUsd != null
+      ? input.estimatedCostUsd
+      : input.provider === "anthropic" && inputTokens != null && outputTokens != null
+        ? estimateAnthropicCost(input.model, inputTokens, outputTokens)
+        : null;
 
   const organisationId = input.organisationId || (await getPlatformOrganisationId());
 

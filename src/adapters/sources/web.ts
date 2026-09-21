@@ -13,6 +13,8 @@ import {
   hashSourceQuery,
   setCachedSourceResults,
 } from "@/adapters/sources/cache";
+import { addBillableCents } from "@/adapters/sources/apify-billing";
+import { recordAiExecution } from "@/services/ai-execution";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
@@ -378,6 +380,25 @@ export const webSourceAdapter: SourceAdapter = {
 
     const results = await searchWebWithFallback(query, options);
     if (results.length) setCachedSourceResults(cacheKey, results);
+    // Web search is paid/metered even when LLM extract is skipped (FAST path).
+    // Attribute at least 1¢ so spend.spentCents cannot stay at a false zero.
+    if (results.length > 0) {
+      addBillableCents(options._billableCents, 1);
+      const served =
+        typeof results[0]?.rawMetadata?.provider === "string"
+          ? String(results[0].rawMetadata.provider)
+          : primary;
+      void recordAiExecution({
+        organisationId: options.organisationId,
+        provider: served === "exa" ? "exa" : "tavily",
+        model: "web-search",
+        taskType: "web_search",
+        feature: "research",
+        success: true,
+        estimatedCostUsd: 0.01,
+        metadata: { resultCount: results.length, qualityBudget: options.qualityBudget ?? null },
+      }).catch(() => undefined);
+    }
     return results;
   },
 };

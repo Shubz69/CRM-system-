@@ -111,6 +111,88 @@ export async function createOpportunityFromResearch(input: {
   return row.id;
 }
 
+/**
+ * Close the Research → Insight → Content handoff in one approved user action:
+ * opportunity + idea + brief + DRAFT piece (never publishes).
+ */
+export async function createDraftChainFromResearch(input: {
+  organisationId: string;
+  researchJobId: string;
+  agentRunId?: string | null;
+  title?: string;
+  platform?: string | null;
+}): Promise<{
+  opportunityId: string;
+  ideaId: string;
+  briefId: string;
+  pieceId: string;
+}> {
+  const job = await prisma.researchJob.findFirst({
+    where: { id: input.researchJobId, organisationId: input.organisationId },
+    include: {
+      findings: { take: 8, include: { source: { select: { url: true } } } },
+      sources: { take: 10, select: { url: true, platform: true } },
+    },
+  });
+  if (!job) throw new Error("Research job not found");
+
+  const opportunityId = await createOpportunityFromResearch({
+    organisationId: input.organisationId,
+    researchJobId: job.id,
+    agentRunId: input.agentRunId,
+    title: input.title,
+  });
+
+  const topClaims = job.findings.map((f) => f.claim).filter(Boolean).slice(0, 5);
+  const briefSummary =
+    typeof job.brief === "object" && job.brief && "summary" in (job.brief as object)
+      ? String((job.brief as { summary?: unknown }).summary ?? "").trim()
+      : "";
+  const angle =
+    topClaims[0]?.slice(0, 240) ||
+    briefSummary.slice(0, 240) ||
+    `Evidence-backed angle from research: ${job.topic.slice(0, 120)}`;
+  const ideaTitle =
+    input.title?.trim() ||
+    `Draft: ${job.topic.slice(0, 72)}${job.topic.length > 72 ? "…" : ""}`;
+
+  const ideaId = await createIdeaFromOpportunity({
+    organisationId: input.organisationId,
+    opportunityId,
+    title: ideaTitle,
+    angle,
+    hook: topClaims[1]?.slice(0, 180),
+    formatHint: input.platform || "LinkedIn",
+  });
+
+  const bodyParts = [
+    briefSummary || `Research on “${job.topic.slice(0, 160)}”.`,
+    topClaims.length
+      ? `\n\nEvidence-backed points:\n${topClaims.map((c, i) => `${i + 1}. ${c}`).join("\n")}`
+      : "",
+    job.sources.length
+      ? `\n\nSources:\n${job.sources
+          .slice(0, 5)
+          .map((s) => `- ${s.url}`)
+          .join("\n")}`
+      : "",
+    "\n\n[Edit this draft before approval. Nothing was published.]",
+  ];
+
+  const { briefId, pieceId } = await createBriefAndPiece({
+    organisationId: input.organisationId,
+    ideaId,
+    objective: `Turn research on “${job.topic.slice(0, 100)}” into publishable content.`,
+    keyMessage: angle,
+    cta: "Review and approve before publishing.",
+    pieceTitle: ideaTitle,
+    pieceBody: bodyParts.join("").slice(0, 12000),
+    platform: input.platform || "LinkedIn",
+  });
+
+  return { opportunityId, ideaId, briefId, pieceId };
+}
+
 export async function createIdeaFromOpportunity(input: {
   organisationId: string;
   opportunityId: string;

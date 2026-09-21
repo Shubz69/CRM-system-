@@ -771,17 +771,21 @@ export default function AskPage() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                action: "create_opportunity_from_research",
+                action: "create_draft_from_research",
                 researchJobId,
                 agentRunId: progress?.runId,
               }),
             },
           );
           const json = await res.json();
-          if (!res.ok) throw new Error(json.error || "Could not create content opportunity");
-          toast.success("Content opportunity created from this research.");
+          if (!res.ok) throw new Error(json.error || "Could not create draft from research");
+          toast.success("Draft created from this research — review it in Content before publishing.");
+          if (typeof json.pieceId === "string" && json.pieceId) {
+            router.push(`/content?piece=${encodeURIComponent(json.pieceId)}`);
+            return;
+          }
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Could not create opportunity");
+          toast.error(err instanceof Error ? err.message : "Could not create draft");
         }
       }
       const summary = renderAnswerBody(source);

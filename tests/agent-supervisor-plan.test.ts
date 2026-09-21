@@ -263,17 +263,33 @@ describe("supervisor planning", () => {
   });
 
   it("QUICK short marketing/content/diagnostic asks do not helper-card loop", () => {
-    const cases = [
+    const marketing = planAgentRunDeterministic(
       "What marketing themes should Tonaura lean into based on our business?",
+      { answerMode: "QUICK" },
+    );
+    expect(marketing.kind).toBe("plan");
+    if (marketing.kind === "plan") {
+      expect(marketing.plan.steps[0]?.agentName).toBe("research");
+    }
+
+    const content = planAgentRunDeterministic(
       "Suggest 3 content ideas grounded in our business and audience.",
-      "Find problems in my business right now.",
-    ];
-    for (const q of cases) {
-      const result = planAgentRunDeterministic(q, { answerMode: "QUICK" });
-      expect(result.kind).toBe("plan");
-      if (result.kind === "plan") {
-        expect(["crm_desk", "research"]).toContain(result.plan.steps[0]?.agentName);
-      }
+      { answerMode: "QUICK" },
+    );
+    expect(content.kind).toBe("plan");
+    if (content.kind === "plan") {
+      expect(content.plan.steps[0]?.agentName).toBe("research");
+    }
+
+    const problems = planAgentRunDeterministic("Find problems in my business right now.", {
+      answerMode: "QUICK",
+    });
+    expect(problems.kind).toBe("plan");
+    if (problems.kind === "plan") {
+      expect(problems.plan.steps[0]?.agentName).toBe("crm_desk");
+      expect((problems.plan.steps[0]?.input as { intent?: string }).intent).toBe(
+        "operator_brief",
+      );
     }
   });
 

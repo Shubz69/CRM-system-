@@ -201,6 +201,7 @@ export async function persistResearchSourceWithSnapshot(input: {
 
 export {
   attachVisibleResearchEvidence,
+  deterministicResearchBrief,
   normalizeVisibleFindings,
   normalizeVisibleSources,
   sourceBackedFindingsFromSources,

@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     const session = await requirePermissionForMutation("ask:use", req, raw);
     assertOrgExpensiveRouteAllowed(session.organisationId, "ask");
     const body = createSchema.parse(raw);
-    const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs, status, finalOutput, answerMode } =
+    const { runId, jobId, plainEnglishPlan, syncFastPath, acceptMs, status, finalOutput, answerMode, totalCostCents, costNote } =
       await createAndEnqueueAgentRun({
         organisationId: session.organisationId,
         userId: session.userId,
@@ -102,6 +102,8 @@ export async function POST(req: NextRequest) {
       acceptMs,
       ...(status ? { status } : {}),
       ...(finalOutput !== undefined ? { finalOutput } : {}),
+      ...(typeof totalCostCents === "number" ? { totalCostCents } : {}),
+      ...(costNote !== undefined ? { costNote } : {}),
       message: plainEnglishPlan || "Started — you'll see progress as each step finishes.",
     });
   } catch (error) {

@@ -2,6 +2,7 @@ import { listPublishTargets } from "@/services/publishing/publish-targets";
 import { cancelPublishingJob } from "@/services/publishing";
 import {
   createBriefAndPiece,
+  createDraftChainFromResearch,
   createDraftPiece,
   createIdeaFromOpportunity,
   createOpportunityFromResearch,
@@ -85,6 +86,13 @@ const postSchema = z.discriminatedUnion("action", [
     researchJobId: z.string().min(1),
     agentRunId: z.string().optional(),
     title: z.string().max(200).optional(),
+  }),
+  z.object({
+    action: z.literal("create_draft_from_research"),
+    researchJobId: z.string().min(1),
+    agentRunId: z.string().optional(),
+    title: z.string().max(200).optional(),
+    platform: z.string().max(40).optional(),
   }),
   z.object({
     action: z.literal("create_idea"),
@@ -176,6 +184,25 @@ export async function POST(req: NextRequest) {
           title: body.title,
         });
         return Response.json({ opportunityId: id });
+      }
+      case "create_draft_from_research": {
+        const platform = body.platform
+          ? normalizeContentPlatform(body.platform)
+          : "LinkedIn";
+        if (body.platform && !platform) {
+          return jsonError(
+            "Choose a supported platform: Instagram, LinkedIn, YouTube, YouTube Short, or TikTok.",
+            400,
+          );
+        }
+        const ids = await createDraftChainFromResearch({
+          organisationId: session.organisationId,
+          researchJobId: body.researchJobId,
+          agentRunId: body.agentRunId,
+          title: body.title,
+          platform,
+        });
+        return Response.json(ids);
       }
       case "create_idea": {
         const id = await createIdeaFromOpportunity({

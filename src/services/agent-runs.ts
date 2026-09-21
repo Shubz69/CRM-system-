@@ -217,7 +217,7 @@ export function costNote(
     }
     // Completed CRM/internal desk runs often truly cost 0¢ (no model spend).
     if (status === "COMPLETED") {
-      return "Under 1¢ recorded for this run (internal workspace answer or free-tier tooling).";
+      return "No paid AI usage recorded for this run (workspace data only, or search cost still settling).";
     }
     return "No recorded AI usage for this run yet.";
   }
@@ -284,6 +284,8 @@ export async function createAndEnqueueAgentRun(input: {
   status?: AgentRun["status"];
   finalOutput?: unknown;
   answerMode?: AgentAnswerMode | null;
+  totalCostCents?: number;
+  costNote?: string | null;
 }> {
   const acceptStarted = Date.now();
   ensureAgentsRegistered();
@@ -499,7 +501,7 @@ export async function createAndEnqueueAgentRun(input: {
     await runExecute();
     const done = await prisma.agentRun.findFirst({
       where: { id: { equals: String(asSafePrismaId(run.id)) }, organisationId: { equals: String(asSafePrismaId(input.organisationId)) } },
-      select: { status: true, finalOutput: true, plainEnglishPlan: true },
+      select: { status: true, finalOutput: true, plainEnglishPlan: true, totalCostCents: true },
     });
     return {
       runId: run.id,
@@ -510,6 +512,8 @@ export async function createAndEnqueueAgentRun(input: {
       status: done?.status,
       finalOutput: done?.finalOutput ?? undefined,
       answerMode: answerMode ?? null,
+      totalCostCents: done?.totalCostCents ?? 0,
+      costNote: costNote(done?.totalCostCents ?? 0, done?.status),
     };
   }
 

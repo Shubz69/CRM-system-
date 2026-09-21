@@ -13,6 +13,7 @@ import {
   persistResearchSourceWithSnapshot,
   sourceBackedFindingsFromSources,
 } from "@/services/research-evidence";
+import { deterministicResearchBrief } from "@/lib/research-visible-evidence";
 import { ingestResearchJobSocialContent } from "@/services/social-intelligence";
 import {
   dedupeSourceResults,
@@ -30,6 +31,7 @@ import { authorityFirstQueries, isPrimaryAuthorityUrl, ukPrimaryAuthorityDomains
 import { inferResearchListenPlatforms, labelResearchListenChannel } from "@/lib/research-listen-platforms";
 import {
   RESEARCH_EXTRACT_MIN_MS,
+  RESEARCH_FAST_EXTRACT_MIN_MS,
   RESEARCH_HARD_CEILING_MS,
   RESEARCH_QUERY_CAP,
   RESEARCH_QUICK_CEILING_MS,
@@ -210,7 +212,7 @@ function engagementScore(r: SourceResult): number {
 
 /**
  * Research agent — heuristic queries, parallel source search with hard timeouts,
- * optional extract LLM (skipped on FAST / tight deadline), then source-backed findings.
+ * optional extract LLM (skipped on tight deadline; FAST may cheap-extract when time remains), then source-backed findings.
  */
 export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
   name: "research",
@@ -510,22 +512,23 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
     let extractionDegraded = false;
     const tExtract0 = Date.now();
     const remainingBeforeExtract = remainingMs();
+    const extractFloor = fast ? RESEARCH_FAST_EXTRACT_MIN_MS : RESEARCH_EXTRACT_MIN_MS;
     const skipLlmExtract =
-      fast || remainingBeforeExtract < RESEARCH_EXTRACT_MIN_MS || !catalog;
+      remainingBeforeExtract < extractFloor || !catalog;
     if (!skipLlmExtract) {
       await assertWithinSpendCap(organisationId, 2);
-      const findingLimit = Math.min(maxSources, 15);
+      const findingLimit = Math.min(maxSources, fast ? 8 : 15);
       const extractBudget = Math.max(
         1_000,
-        Math.min(remainingMs() - 1_500, 12_000),
+        Math.min(remainingMs() - (fast ? 400 : 1_500), fast ? 4_000 : 12_000),
       );
       const extractResult = await raceWithTimeout(
         completeStructuredSafe(findingsExtractSchema, {
           organisationId: organisationId,
           tier: "cheap",
           model,
-          maxTokens: 8192,
-          skipRepair: remainingMs() < RESEARCH_EXTRACT_MIN_MS + 4_000,
+          maxTokens: fast ? 2048 : 8192,
+          skipRepair: fast || remainingMs() < RESEARCH_EXTRACT_MIN_MS + 4_000,
           jsonSchema: FINDINGS_EXTRACT_JSON_SCHEMA as unknown as Record<string, unknown>,
           repairHint:
             'Required shape: {"findings":[{"claim":"...","sourceUrl":"https://...","evidenceExcerpt":"...","claimKind":"OFFICIAL"}]}. sourceUrl must exactly match a provided URL.',
@@ -667,9 +670,9 @@ export const researchAgent: Agent<ResearchInput, ResearchOutput> = {
       findings.length > 0 && !extractionDegraded
         ? `Found ${findings.length} sourced finding${findings.length === 1 ? "" : "s"} from ${ranked.length} sources on ${topic}.`
         : findings.length > 0
-          ? `Research gathered ${ranked.length} sources on ${topic}. Structured extraction was incomplete, so the findings below quote source titles and excerpts for verification — they are not fully synthesised claims.`
+          ? deterministicResearchBrief(topic, ranked)
           : ranked.length > 0
-            ? `Research gathered ${ranked.length} sources on ${topic}, but structured evidence extraction was incomplete — review the listed source URLs; claims are not fully verified.`
+            ? deterministicResearchBrief(topic, ranked)
             : emptyReason;
     const summary = [baseSummary, ...unavailableNotes].join(" ").trim();
     const partialWithSources = ranked.length > 0 && (extractionDegraded || findings.length === 0);

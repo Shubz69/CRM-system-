@@ -7,7 +7,49 @@ import {
 } from "@/lib/ai-models";
 import { logger } from "@/lib/logger";
 import { assertWithinSpendCap } from "@/services/ai-spend-gate";
+import { recordAiExecution } from "@/services/ai-execution";
 import { zodToAnthropicJsonSchema } from "@/adapters/ai/zod-json-schema";
+
+function providerLastUsage(provider: AiProvider): {
+  inputTokens?: number;
+  outputTokens?: number;
+} {
+  const usage = (provider as AiProvider & {
+    lastUsage?: { inputTokens?: number; outputTokens?: number };
+  }).lastUsage;
+  return usage && typeof usage === "object" ? usage : {};
+}
+
+async function recordStructuredUsage(input: {
+  organisationId: string;
+  provider: AiProvider;
+  model: string;
+  success: boolean;
+  latencyMs: number;
+  error?: string | null;
+  repaired?: boolean;
+}) {
+  try {
+    const usage = providerLastUsage(input.provider);
+    await recordAiExecution({
+      organisationId: input.organisationId,
+      provider: input.provider.name,
+      model: input.model,
+      taskType: "structured_completion",
+      feature: "ask",
+      inputTokens: usage.inputTokens ?? null,
+      outputTokens: usage.outputTokens ?? null,
+      latencyMs: input.latencyMs,
+      success: input.success,
+      error: input.error ?? null,
+      metadata: { repaired: input.repaired ?? false },
+    });
+  } catch (error) {
+    logger.warn("structured AI usage record failed", {
+      message: error instanceof Error ? error.message : "unknown",
+    });
+  }
+}
 
 export type SafeStructuredResult<T> =
   | { ok: true; data: T; repaired: boolean; raw: unknown }
@@ -198,6 +240,7 @@ export async function completeStructuredSafe<T>(
   }
 
   const maxTokens = options.maxTokens ?? 8192;
+  const startedAt = Date.now();
 
   let firstRawText: string;
   try {
@@ -210,6 +253,14 @@ export async function completeStructuredSafe<T>(
       maxTokens,
     });
   } catch (error) {
+    await recordStructuredUsage({
+      organisationId: options.organisationId,
+      provider,
+      model,
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : "AI completion failed",
+    });
     return {
       ok: false,
       reason: error instanceof Error ? error.message : "AI completion failed",
@@ -228,8 +279,24 @@ export async function completeStructuredSafe<T>(
     const coercedFirst = coerceStructuredValue(firstValue);
     const first = schema.safeParse(coercedFirst);
     if (first.success) {
+      await recordStructuredUsage({
+        organisationId: options.organisationId,
+        provider,
+        model,
+        success: true,
+        latencyMs: Date.now() - startedAt,
+        repaired: false,
+      });
       return { ok: true, data: first.data, repaired: false, raw: coercedFirst };
     }
+    await recordStructuredUsage({
+      organisationId: options.organisationId,
+      provider,
+      model,
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      error: "SCHEMA_FAILED",
+    });
     return {
       ok: false,
       reason: "AI output failed Zod validation (repair skipped)",
@@ -238,7 +305,7 @@ export async function completeStructuredSafe<T>(
     };
   }
 
-  return runWithZodRepair({
+  const repaired = await runWithZodRepair({
     schema,
     firstValue,
     repair: async () => {
@@ -271,6 +338,17 @@ export async function completeStructuredSafe<T>(
       }
     },
   });
+
+  await recordStructuredUsage({
+    organisationId: options.organisationId,
+    provider,
+    model,
+    success: repaired.ok,
+    latencyMs: Date.now() - startedAt,
+    repaired: repaired.ok ? repaired.repaired : undefined,
+    error: repaired.ok ? null : repaired.reason,
+  });
+  return repaired;
 }
 
 /** Throws StructuredCompletionError if validation fails after one repair. */
