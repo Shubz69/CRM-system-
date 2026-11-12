@@ -10,6 +10,7 @@ import {
   listGoals,
 } from "@/services/goals";
 import { upsertDetectedOpportunity } from "@/services/opportunities/lifecycle";
+import { sweepEligibleOrganisationWhere } from "@/services/sweep-eligibility";
 import {
   deriveConfidence,
   deriveImpact,
@@ -333,50 +334,100 @@ export const OPPORTUNITY_DETECTORS: OpportunityDetector[] = [
   kpiAtRiskDetector,
 ];
 
-export async function runOpportunityDetectorsForOrg(organisationId: string) {
+/**
+ * A detector run that created/updated nothing (and did not fail) is only logged
+ * once per this window per org+detector, as a liveness heartbeat. Previously every
+ * sweep wrote INSERT + UPDATE per org × detector, which produced millions of
+ * empty OpportunityDetectorRun rows.
+ */
+const EMPTY_RUN_HEARTBEAT_MS = Number(
+  process.env.OPP_DETECTOR_EMPTY_RUN_HEARTBEAT_MS || 24 * 60 * 60_000,
+);
+const lastEmptyRunLoggedAt = new Map<string, number>();
+
+function claimEmptyRunHeartbeat(organisationId: string, detectorKey: string, now: number) {
+  const key = `${organisationId}:${detectorKey}`;
+  const last = lastEmptyRunLoggedAt.get(key);
+  if (last != null && now - last < EMPTY_RUN_HEARTBEAT_MS) return false;
+  lastEmptyRunLoggedAt.set(key, now);
+  if (lastEmptyRunLoggedAt.size > 5_000) {
+    for (const [k, at] of lastEmptyRunLoggedAt) {
+      if (now - at >= EMPTY_RUN_HEARTBEAT_MS) lastEmptyRunLoggedAt.delete(k);
+    }
+  }
+  return true;
+}
+
+export type RunOpportunityDetectorsOptions = {
+  /**
+   * Persist a run row even when nothing changed (manual "run detectors" from the UI).
+   * Background sweeps leave this off so no-op runs are not logged every time.
+   */
+  recordEmptyRuns?: boolean;
+};
+
+export async function runOpportunityDetectorsForOrg(
+  organisationId: string,
+  options: RunOpportunityDetectorsOptions = {},
+) {
   const totals = { created: 0, updated: 0, suppressed: 0 };
   for (const detector of OPPORTUNITY_DETECTORS) {
-    const run = await prisma.opportunityDetectorRun.create({
-      data: {
-        organisationId,
-        detectorKey: detector.key,
-        detectorVersion: detector.version,
-      },
-    });
+    const startedAt = new Date();
+    let result: DetectorResult | null = null;
+    let errorSummary: string | null = null;
     try {
-      const result = await detector.run({ organisationId });
-      await prisma.opportunityDetectorRun.update({
-        where: { id: run.id },
-        data: {
-          finishedAt: new Date(),
-          createdCount: result.created,
-          updatedCount: result.updated,
-          suppressedCount: result.suppressed,
-        },
-      });
+      result = await detector.run({ organisationId });
       totals.created += result.created;
       totals.updated += result.updated;
       totals.suppressed += result.suppressed;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown";
+      errorSummary = error instanceof Error ? error.message : "unknown";
       logger.error("Opportunity detector failed", {
         organisationId,
         detector: detector.key,
-        message,
-      });
-      await prisma.opportunityDetectorRun.update({
-        where: { id: run.id },
-        data: { finishedAt: new Date(), errorSummary: message },
+        message: errorSummary,
       });
     }
+
+    const changed = result != null && (result.created > 0 || result.updated > 0);
+    const shouldLog =
+      errorSummary != null ||
+      changed ||
+      options.recordEmptyRuns === true ||
+      claimEmptyRunHeartbeat(organisationId, detector.key, startedAt.getTime());
+    if (!shouldLog) continue;
+
+    // Single INSERT with final counts (was INSERT at start + UPDATE at finish).
+    await prisma.opportunityDetectorRun
+      .create({
+        data: {
+          organisationId,
+          detectorKey: detector.key,
+          detectorVersion: detector.version,
+          startedAt,
+          finishedAt: new Date(),
+          createdCount: result?.created ?? 0,
+          updatedCount: result?.updated ?? 0,
+          suppressedCount: result?.suppressed ?? 0,
+          errorSummary,
+        },
+      })
+      .catch((error) => {
+        // Org deleted mid-sweep etc. — never abort the remaining detectors/orgs.
+        logger.warn("Opportunity detector run log skipped", {
+          organisationId,
+          detector: detector.key,
+          message: error instanceof Error ? error.message : "unknown",
+        });
+      });
   }
   return totals;
 }
 
-/** Sweep all orgs (bounded). */
+/** Sweep real (member-bearing) orgs, bounded. */
 export async function runOpportunityDetectorSweep(limitOrgs = 50) {
   const orgs = await prisma.organisation.findMany({
-    where: { status: "ACTIVE", deletedAt: null },
+    where: sweepEligibleOrganisationWhere(),
     select: { id: true },
     take: limitOrgs,
     orderBy: { updatedAt: "desc" },

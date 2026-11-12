@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    /** Refuse to create/purge fixture orgs in the shared/production database. */
+    globalSetup: ["tests/setup/refuse-shared-db.ts"],
     /**
      * Remote Supabase pooler (connection_limit≈5) cannot sustain Vitest's default
      * file-parallel Prisma suites — tests hang then hit testTimeout as "timeouts".

@@ -15,6 +15,16 @@ import { maybeVerifyOpportunityAfterDetect } from "@/services/intelligence-quali
 import { createMission } from "@/services/mission-runtime";
 import { assertOpportunityTransition, computePriorityScore } from "@/services/opportunities/scoring";
 
+/** Key-order-independent JSON for change detection (jsonb reorders object keys). */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+}
+
 const OPEN_STATUSES: BusinessOpportunityStatus[] = [
   "DETECTED",
   "REVIEWED",
@@ -78,6 +88,34 @@ export async function upsertDetectedOpportunity(input: {
   }
 
   if (existing) {
+    const nextScoreFactors = {
+      ...factors,
+      ...(input.scoreFactorsExtra ?? {}),
+    };
+    // Detectors re-detect the same open opportunity every sweep. Skip the write
+    // when nothing material changed (no row churn, no "updated" run log).
+    const unchanged =
+      existing.title === input.title &&
+      existing.summary === input.summary &&
+      existing.impact === input.impact &&
+      existing.urgency === input.urgency &&
+      existing.confidence === input.confidence &&
+      existing.priorityScore === score &&
+      (input.estimatedValueCents === undefined ||
+        existing.estimatedValueCents === input.estimatedValueCents) &&
+      (input.currency === undefined || existing.currency === input.currency) &&
+      (input.expiresAt === undefined ||
+        existing.expiresAt?.getTime() === input.expiresAt.getTime()) &&
+      stableJson(existing.scoreFactors) === stableJson(nextScoreFactors);
+    if (unchanged) {
+      await maybeVerifyOpportunityAfterDetect({
+        organisationId: input.organisationId,
+        opportunityId: existing.id,
+        evidences: input.evidences,
+      });
+      return { opportunity: existing, created: false, updated: false, suppressed: false };
+    }
+
     const updated = await prisma.businessOpportunity.update({
       where: { id: existing.id },
       data: {
@@ -90,10 +128,7 @@ export async function upsertDetectedOpportunity(input: {
         estimatedValueCents: input.estimatedValueCents,
         currency: input.currency,
         expiresAt: input.expiresAt,
-        scoreFactors: {
-          ...factors,
-          ...(input.scoreFactorsExtra ?? {}),
-        } as Prisma.InputJsonValue,
+        scoreFactors: nextScoreFactors as Prisma.InputJsonValue,
       },
     });
     await maybeVerifyOpportunityAfterDetect({

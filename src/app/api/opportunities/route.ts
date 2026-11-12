@@ -66,7 +66,10 @@ export async function POST(req: Request) {
     const body = bodySchema.parse(raw);
 
     if (body.action === "run_detectors") {
-      const result = await runOpportunityDetectorsForOrg(session.organisationId);
+      // Manual trigger — always log the run so the operator sees it happened.
+      const result = await runOpportunityDetectorsForOrg(session.organisationId, {
+        recordEmptyRuns: true,
+      });
       return Response.json({ result });
     }
     if (!body.opportunityId) return jsonError("opportunityId required", 400);

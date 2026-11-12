@@ -1,10 +1,21 @@
 /**
  * Continuous collection runs + append-only SocialMetricSnapshot history.
  * Never overwrite prior totals; missing platform metrics stay explicit nulls.
+ *
+ * Write-load rules:
+ * - A snapshot is appended only when its metrics differ from the latest snapshot
+ *   for that content. Identical re-observations are skipped (never overwritten).
+ * - SocialContent.lastSeenAt only moves forward, at most once per
+ *   SOCIAL_CONTENT_LAST_SEEN_THROTTLE_MS (default 15 min) per content.
+ * - The scheduled sweep only snapshots PostPerformance rows that are newer than the
+ *   latest snapshot, and logs a no-op ContinuousCollectionRun at most once per
+ *   heartbeat window per org (it used to re-copy the latest snapshot and write a
+ *   run row for every org on every sweep).
  */
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { sweepEligibleOrganisationWhere } from "@/services/sweep-eligibility";
 
 export type MetricObservation = {
   socialContentId: string;
@@ -34,6 +45,28 @@ export type CollectionRunInput = {
 
 const STANDARD_METRICS = ["views", "likes", "comments", "shares", "score"] as const;
 
+const LAST_SEEN_THROTTLE_MS = Number(
+  process.env.SOCIAL_CONTENT_LAST_SEEN_THROTTLE_MS || 15 * 60_000,
+);
+const EMPTY_SWEEP_RUN_HEARTBEAT_MS = Number(
+  process.env.CONTINUOUS_INTEL_EMPTY_RUN_HEARTBEAT_MS || 24 * 60 * 60_000,
+);
+
+type MetricValues = {
+  views: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  score: number | null;
+};
+
+type LatestSnapshotRow = MetricValues & { socialContentId: string; capturedAt: Date };
+
+type LatestPerformanceRow = Omit<MetricValues, "score"> & {
+  socialContentId: string;
+  capturedAt: Date;
+};
+
 function inferMissing(obs: MetricObservation): string[] {
   if (obs.missingMetrics?.length) return [...obs.missingMetrics];
   const missing: string[] = [];
@@ -51,6 +84,65 @@ function hasAnyMetric(obs: MetricObservation): boolean {
     obs.shares != null ||
     obs.score != null
   );
+}
+
+function sameEngagement(
+  a: Omit<MetricValues, "score">,
+  b: Omit<MetricValues, "score">,
+): boolean {
+  return (
+    a.views === b.views &&
+    a.likes === b.likes &&
+    a.comments === b.comments &&
+    a.shares === b.shares
+  );
+}
+
+function sameMetrics(a: MetricValues, b: MetricValues): boolean {
+  return sameEngagement(a, b) && a.score === b.score;
+}
+
+/**
+ * Latest SocialMetricSnapshot per content — one indexed LATERAL probe per id
+ * (was one findFirst round trip per content).
+ */
+async function latestSnapshotsFor(
+  organisationId: string,
+  contentIds: string[],
+): Promise<Map<string, LatestSnapshotRow>> {
+  if (contentIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<LatestSnapshotRow[]>`
+    SELECT s."socialContentId", s."capturedAt", s."views", s."likes", s."comments", s."shares", s."score"
+    FROM unnest(${contentIds}::text[]) AS c(id)
+    CROSS JOIN LATERAL (
+      SELECT "socialContentId", "capturedAt", "views", "likes", "comments", "shares", "score"
+      FROM "SocialMetricSnapshot"
+      WHERE "organisationId" = ${organisationId} AND "socialContentId" = c.id
+      ORDER BY "capturedAt" DESC
+      LIMIT 1
+    ) s
+  `;
+  return new Map(rows.map((r) => [r.socialContentId, r]));
+}
+
+/** Latest PostPerformance per content (same LATERAL pattern). */
+async function latestPerformanceFor(
+  organisationId: string,
+  contentIds: string[],
+): Promise<Map<string, LatestPerformanceRow>> {
+  if (contentIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<LatestPerformanceRow[]>`
+    SELECT p."socialContentId", p."capturedAt", p."views", p."likes", p."comments", p."shares"
+    FROM unnest(${contentIds}::text[]) AS c(id)
+    CROSS JOIN LATERAL (
+      SELECT "socialContentId", "capturedAt", "views", "likes", "comments", "shares"
+      FROM "PostPerformance"
+      WHERE "organisationId" = ${organisationId} AND "socialContentId" = c.id
+      ORDER BY "capturedAt" DESC
+      LIMIT 1
+    ) p
+  `;
+  return new Map(rows.map((r) => [r.socialContentId, r]));
 }
 
 /**
@@ -75,7 +167,9 @@ export async function recordContinuousCollectionRun(
 
 /**
  * Append metric snapshots for known SocialContent rows.
- * Always inserts new rows — never updates an existing SocialMetricSnapshot.
+ * Inserts new rows only — never updates an existing SocialMetricSnapshot. An
+ * observation identical to the latest snapshot for that content is skipped
+ * (counted in `skippedUnchanged`) instead of being stored again.
  */
 export async function appendMetricHistory(input: {
   organisationId: string;
@@ -84,21 +178,32 @@ export async function appendMetricHistory(input: {
   appended: number;
   skippedEmpty: number;
   skippedUnknownContent: number;
+  skippedUnchanged: number;
   missingMetricNotes: Array<{ socialContentId: string; missingMetrics: string[] }>;
   snapshotIds: string[];
 }> {
-  let appended = 0;
   let skippedEmpty = 0;
   let skippedUnknownContent = 0;
+  let skippedUnchanged = 0;
   const missingMetricNotes: Array<{ socialContentId: string; missingMetrics: string[] }> = [];
-  const snapshotIds: string[] = [];
+
+  const ids = [...new Set(input.observations.map((o) => o.socialContentId))];
+  const contents = ids.length
+    ? await prisma.socialContent.findMany({
+        where: { organisationId: input.organisationId, id: { in: ids } },
+        select: { id: true, lastSeenAt: true },
+      })
+    : [];
+  const lastSeenById = new Map(contents.map((c) => [c.id, c.lastSeenAt]));
+  const latest = await latestSnapshotsFor(input.organisationId, [...lastSeenById.keys()]);
+
+  const rows: Prisma.SocialMetricSnapshotCreateManyInput[] = [];
+  /** capturedAt (ms) → content ids whose lastSeenAt should move forward. */
+  const lastSeenBumps = new Map<number, string[]>();
 
   for (const obs of input.observations) {
-    const content = await prisma.socialContent.findFirst({
-      where: { id: obs.socialContentId, organisationId: input.organisationId },
-      select: { id: true },
-    });
-    if (!content) {
+    const lastSeenAt = lastSeenById.get(obs.socialContentId);
+    if (lastSeenAt === undefined) {
       skippedUnknownContent += 1;
       continue;
     }
@@ -117,35 +222,72 @@ export async function appendMetricHistory(input: {
     }
 
     const capturedAt = obs.capturedAt ?? new Date();
-    const raw: Record<string, unknown> = {
-      ...(obs.raw ?? {}),
-      missingMetrics,
-      appendOnly: true,
+    const values: MetricValues = {
+      views: obs.views ?? null,
+      likes: obs.likes ?? null,
+      comments: obs.comments ?? null,
+      shares: obs.shares ?? null,
+      score: obs.score ?? null,
     };
 
-    const snap = await prisma.socialMetricSnapshot.create({
-      data: {
-        organisationId: input.organisationId,
-        socialContentId: obs.socialContentId,
-        capturedAt,
-        views: obs.views ?? null,
-        likes: obs.likes ?? null,
-        comments: obs.comments ?? null,
-        shares: obs.shares ?? null,
-        score: obs.score ?? null,
-        raw: raw as Prisma.InputJsonValue,
-      },
-    });
-    snapshotIds.push(snap.id);
-    appended += 1;
+    if (capturedAt.getTime() - lastSeenAt.getTime() >= LAST_SEEN_THROTTLE_MS) {
+      const list = lastSeenBumps.get(capturedAt.getTime()) ?? [];
+      list.push(obs.socialContentId);
+      lastSeenBumps.set(capturedAt.getTime(), list);
+      lastSeenById.set(obs.socialContentId, capturedAt);
+    }
 
-    await prisma.socialContent.update({
-      where: { id: obs.socialContentId },
+    const prev = latest.get(obs.socialContentId);
+    if (prev && sameMetrics(prev, values)) {
+      skippedUnchanged += 1;
+      continue;
+    }
+
+    rows.push({
+      organisationId: input.organisationId,
+      socialContentId: obs.socialContentId,
+      capturedAt,
+      ...values,
+      raw: {
+        ...(obs.raw ?? {}),
+        missingMetrics,
+        appendOnly: true,
+      } as Prisma.InputJsonValue,
+    });
+    latest.set(obs.socialContentId, {
+      socialContentId: obs.socialContentId,
+      capturedAt,
+      ...values,
+    });
+  }
+
+  const created = rows.length
+    ? await prisma.socialMetricSnapshot.createManyAndReturn({
+        data: rows,
+        select: { id: true },
+      })
+    : [];
+
+  for (const [ms, contentIds] of lastSeenBumps) {
+    const capturedAt = new Date(ms);
+    await prisma.socialContent.updateMany({
+      where: {
+        organisationId: input.organisationId,
+        id: { in: contentIds },
+        lastSeenAt: { lt: capturedAt },
+      },
       data: { lastSeenAt: capturedAt },
     });
   }
 
-  return { appended, skippedEmpty, skippedUnknownContent, missingMetricNotes, snapshotIds };
+  return {
+    appended: created.length,
+    skippedEmpty,
+    skippedUnknownContent,
+    skippedUnchanged,
+    missingMetricNotes,
+    snapshotIds: created.map((s) => s.id),
+  };
 }
 
 /**
@@ -184,6 +326,7 @@ export async function runContinuousCollectionPass(input: {
       ...(input.metadata ?? {}),
       skippedEmpty: appendResult.skippedEmpty,
       skippedUnknownContent: appendResult.skippedUnknownContent,
+      skippedUnchanged: appendResult.skippedUnchanged,
       missingMetricNotes: appendResult.missingMetricNotes.slice(0, 50),
       honesty:
         "Platform metrics that were not returned are recorded as null + listed in missingMetrics — never invented.",
@@ -193,10 +336,27 @@ export async function runContinuousCollectionPass(input: {
   return { run, ...appendResult };
 }
 
+/** In-process: last time a no-op scheduled_sweep run row was written per org. */
+const lastEmptySweepRunAt = new Map<string, number>();
+
+function claimEmptySweepHeartbeat(organisationId: string, now: number): boolean {
+  const last = lastEmptySweepRunAt.get(organisationId);
+  if (last != null && now - last < EMPTY_SWEEP_RUN_HEARTBEAT_MS) return false;
+  lastEmptySweepRunAt.set(organisationId, now);
+  if (lastEmptySweepRunAt.size > 5_000) {
+    for (const [k, at] of lastEmptySweepRunAt) {
+      if (now - at >= EMPTY_SWEEP_RUN_HEARTBEAT_MS) lastEmptySweepRunAt.delete(k);
+    }
+  }
+  return true;
+}
+
 /**
- * Postgres sweep: for each org, record a scheduled ContinuousCollectionRun and
- * append snapshots from latest PostPerformance / SocialContent engagement when present.
- * Never invents metrics — skips content with no observed engagement fields.
+ * Postgres sweep: for each org, append snapshots from PostPerformance rows that are
+ * newer than (and different from) the latest SocialMetricSnapshot for that content.
+ * Never invents metrics — skips content with no observed engagement fields, and never
+ * re-copies an existing snapshot. A no-op sweep is logged at most once per heartbeat
+ * window per org.
  */
 export async function sweepContinuousIntelligence(
   limitOrgs = 50,
@@ -216,7 +376,7 @@ export async function sweepContinuousIntelligence(
         select: { id: true },
       })
     : await prisma.organisation.findMany({
-        where: { deletedAt: null, isPlatform: false },
+        where: sweepEligibleOrganisationWhere(),
         select: { id: true },
         take: Math.max(1, Math.min(limitOrgs, 200)),
         orderBy: { lastActivityAt: "desc" },
@@ -234,74 +394,50 @@ export async function sweepContinuousIntelligence(
         orderBy: { lastSeenAt: "desc" },
       });
 
+      const contentIds = contents.map((c) => c.id);
+      const [latestSnaps, latestPerfs] = contentIds.length
+        ? await Promise.all([
+            latestSnapshotsFor(org.id, contentIds),
+            latestPerformanceFor(org.id, contentIds),
+          ])
+        : [new Map<string, LatestSnapshotRow>(), new Map<string, LatestPerformanceRow>()];
+
       const observations: MetricObservation[] = [];
       const providerKeys = new Set<string>();
 
       for (const content of contents) {
         providerKeys.add(content.platform);
 
-        const latestSnap = await prisma.socialMetricSnapshot.findFirst({
-          where: { organisationId: org.id, socialContentId: content.id },
-          orderBy: { capturedAt: "desc" },
-          select: {
-            views: true,
-            likes: true,
-            comments: true,
-            shares: true,
-            score: true,
-            capturedAt: true,
-          },
-        });
+        const perf = latestPerfs.get(content.id);
+        if (!perf) continue;
+        const snap = latestSnaps.get(content.id);
+        // Nothing observed since the last snapshot — re-copying it adds no information.
+        if (snap && perf.capturedAt.getTime() <= snap.capturedAt.getTime()) continue;
 
-        const latestPerf =
-          latestSnap == null
-            ? await prisma.postPerformance.findFirst({
-                where: {
-                  organisationId: org.id,
-                  socialContentId: content.id,
-                },
-                orderBy: { capturedAt: "desc" },
-                select: {
-                  views: true,
-                  likes: true,
-                  comments: true,
-                  shares: true,
-                  capturedAt: true,
-                },
-              })
-            : null;
-
-        const source = latestSnap ?? latestPerf;
-        if (!source) continue;
-
-        const views = source.views ?? null;
-        const likes = source.likes ?? null;
-        const comments = source.comments ?? null;
-        const shares = source.shares ?? null;
-        const score =
-          latestSnap && "score" in latestSnap ? (latestSnap.score ?? null) : null;
-
+        const engagement = {
+          views: perf.views ?? null,
+          likes: perf.likes ?? null,
+          comments: perf.comments ?? null,
+          shares: perf.shares ?? null,
+        };
         if (
-          views == null &&
-          likes == null &&
-          comments == null &&
-          shares == null &&
-          score == null
+          engagement.views == null &&
+          engagement.likes == null &&
+          engagement.comments == null &&
+          engagement.shares == null
         ) {
           continue;
         }
+        if (snap && sameEngagement(snap, engagement)) continue;
 
         observations.push({
           socialContentId: content.id,
           capturedAt: new Date(),
-          views,
-          likes,
-          comments,
-          shares,
-          score,
+          ...engagement,
+          score: null,
           raw: {
-            sweepSource: latestSnap ? "SocialMetricSnapshot" : "PostPerformance",
-            priorCapturedAt: source.capturedAt.toISOString(),
+            sweepSource: "PostPerformance",
+            priorCapturedAt: perf.capturedAt.toISOString(),
           },
         });
       }
@@ -314,24 +450,27 @@ export async function sweepContinuousIntelligence(
             : null;
 
       if (observations.length === 0) {
-        await recordContinuousCollectionRun({
-          organisationId: org.id,
-          kind: "scheduled_sweep",
-          providerKey,
-          status: "COMPLETED",
-          itemsCollected: 0,
-          metadata: {
-            note: "No existing PostPerformance/SocialContent engagement to snapshot — nothing invented.",
-          },
-        });
-        runsCreated += 1;
+        if (claimEmptySweepHeartbeat(org.id, Date.now())) {
+          await recordContinuousCollectionRun({
+            organisationId: org.id,
+            kind: "scheduled_sweep",
+            providerKey,
+            status: "COMPLETED",
+            itemsCollected: 0,
+            metadata: {
+              note: "No new PostPerformance engagement since the last snapshot — nothing invented.",
+              heartbeat: true,
+            },
+          });
+          runsCreated += 1;
+        }
         continue;
       }
 
+      const platformById = new Map(contents.map((c) => [c.id, c.platform]));
       const byProvider = new Map<string, MetricObservation[]>();
       for (const obs of observations) {
-        const content = contents.find((c) => c.id === obs.socialContentId);
-        const key = content?.platform ?? "unknown";
+        const key = platformById.get(obs.socialContentId) ?? "unknown";
         const list = byProvider.get(key) ?? [];
         list.push(obs);
         byProvider.set(key, list);
@@ -360,4 +499,3 @@ export async function sweepContinuousIntelligence(
     snapshotsAppended,
   };
 }
-

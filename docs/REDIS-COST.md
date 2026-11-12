@@ -82,7 +82,7 @@ After fix, idle hosted worker still generates some Redis commands from the **sin
 
 ## Outbox idle DB activity (Phase 12B)
 
-Hosted worker also runs a Postgres outbox sweep every `OUTBOX_SWEEP_INTERVAL_MS` (default **15s**) plus stale-claim recovery and a mission-queue recovery sweep every `MISSION_QUEUE_RECOVERY_INTERVAL_MS` (default **60s**).
+Hosted worker also runs a Postgres outbox sweep every `OUTBOX_SWEEP_INTERVAL_MS` (default **15s**) plus stale-claim recovery and a mission-queue recovery sweep every `MISSION_QUEUE_RECOVERY_INTERVAL_MS` (default **5 min**).
 
 These hit **Postgres only** — not Redis. No permanent BullMQ worker for the outbox.
 

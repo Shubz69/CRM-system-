@@ -365,7 +365,9 @@ export function AppShell({
 
       <div className="relative z-0 flex min-w-0 flex-col">
         <ImpersonationBanner />
-        <header className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[color-mix(in_oklab,var(--surface)_88%,transparent)] px-4 py-3 backdrop-blur-md md:px-6">
+        {/* Near-opaque instead of backdrop-blur: a blurred sticky header re-blurs every
+            scrolled frame of the tables beneath it. Same look, no per-frame filter. */}
+        <header className="sticky top-0 z-10 border-b border-[var(--border)]/70 bg-[color-mix(in_oklab,var(--surface)_96%,transparent)] px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
             <div className="lg:hidden">
               <button

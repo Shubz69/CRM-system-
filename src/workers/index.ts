@@ -36,9 +36,14 @@ import {
   getRedisCircuitSnapshot,
   isFatalRedisProviderError,
   isRedisCircuitOpen,
+  isRedisRecoveryProbeDue,
   noteRedisError,
+  noteRedisRecoveryProbeFailed,
   setRedisCircuitHooks,
 } from "@/jobs/redis-circuit";
+import { errorThrottleKey, logThrottled } from "@/jobs/redis-backoff";
+import { pruneRunLogs, RUN_LOG_RETENTION_DEFAULT_DAYS } from "@/services/run-log-retention";
+import { sweepEligibleOrganisationWhere } from "@/services/sweep-eligibility";
 import { processDueFollowUps, startInProcessFollowUpLoop } from "@/workers/followups";
 import { processAgentRunJob } from "@/workers/agent-runs-processor";
 import { aggregateDailyInsights } from "@/services/insights-aggregation";
@@ -92,61 +97,119 @@ const FOLLOW_UP_INTERVAL_MS = Number(process.env.FOLLOW_UP_SWEEP_INTERVAL_MS || 
 const MAINTENANCE_INTERVAL_MS = Number(process.env.MAINTENANCE_SWEEP_INTERVAL_MS || 60 * 60_000);
 /** Outbox Postgres sweep — not a permanent BullMQ worker (Redis cost rule). */
 const OUTBOX_INTERVAL_MS = Number(process.env.OUTBOX_SWEEP_INTERVAL_MS || 15_000);
+/** Recovery-only path (Redis loss) — every 5 min; each pass costs Redis commands per task. */
 const MISSION_QUEUE_RECOVERY_INTERVAL_MS = Number(
-  process.env.MISSION_QUEUE_RECOVERY_INTERVAL_MS || 60_000,
+  process.env.MISSION_QUEUE_RECOVERY_INTERVAL_MS || 5 * 60_000,
 );
-/** Opportunity detectors — conservative Postgres sweep (no new BullMQ worker). */
+/**
+ * Opportunity detectors — hourly Postgres sweep (no new BullMQ worker). Detector
+ * thresholds are measured in days (7/14/30), so 15-minute sweeps only added writes.
+ */
 const OPPORTUNITY_DETECTOR_INTERVAL_MS = Number(
-  process.env.OPPORTUNITY_DETECTOR_INTERVAL_MS || 15 * 60_000,
+  process.env.OPPORTUNITY_DETECTOR_INTERVAL_MS || 60 * 60_000,
 );
 const KPI_REFRESH_INTERVAL_MS = Number(process.env.KPI_REFRESH_INTERVAL_MS || 60 * 60_000);
 /** Phase 15 — publishing dispatch via Postgres sweep (no new BullMQ worker). */
 const PUBLISHING_SWEEP_INTERVAL_MS = Number(process.env.PUBLISHING_SWEEP_INTERVAL_MS || 30_000);
-/** Phase 16 — continuous intelligence metric sweep (no new BullMQ worker). */
+/**
+ * Phase 16 — continuous intelligence metric sweep (no new BullMQ worker). It only
+ * re-reads PostPerformance already in Postgres, so every 2h is plenty.
+ */
 const CONTINUOUS_INTEL_SWEEP_INTERVAL_MS = Number(
-  process.env.CONTINUOUS_INTEL_SWEEP_INTERVAL_MS || 30 * 60_000,
+  process.env.CONTINUOUS_INTEL_SWEEP_INTERVAL_MS || 2 * 60 * 60_000,
 );
+/**
+ * Run-log retention (OpportunityDetectorRun / ContinuousCollectionRun older than
+ * RUN_LOG_RETENTION_DAYS, default 30). OFF unless RUN_LOG_RETENTION_ENABLED=true —
+ * enabling it deletes data, so it needs the owner's go-ahead.
+ */
+const RUN_LOG_RETENTION_ENABLED = process.env.RUN_LOG_RETENTION_ENABLED === "true";
+const RUN_LOG_RETENTION_DAYS = Number(
+  process.env.RUN_LOG_RETENTION_DAYS || RUN_LOG_RETENTION_DEFAULT_DAYS,
+);
+/** BullMQ idle block time (seconds). New jobs still wake the worker immediately via the marker key. */
+const AGENT_RUN_DRAIN_DELAY_SEC = Number(process.env.AGENT_RUN_DRAIN_DELAY_SEC || 30);
+/** Unclassified worker errors above this rate pause the worker with exponential back-off. */
+const WORKER_ERROR_STORM_THRESHOLD = 20;
+const WORKER_ERROR_STORM_WINDOW_MS = 10_000;
+const WORKER_ERROR_PAUSE_BASE_MS = 30_000;
+const WORKER_ERROR_PAUSE_MAX_MS = 10 * 60_000;
 /** Phase 20F — process twin reconciliation (low frequency; no new BullMQ worker). */
 const PROCESS_TWIN_RECONCILE_INTERVAL_MS = Number(
   process.env.PROCESS_TWIN_RECONCILE_INTERVAL_MS || 6 * 60 * 60_000,
 );
-/** Bounded Redis recovery probe while fatal circuit is OPEN (~5 minutes). */
-const REDIS_CIRCUIT_RECOVERY_INTERVAL_MS = Number(
-  process.env.REDIS_CIRCUIT_RECOVERY_INTERVAL_MS || 5 * 60_000,
-);
+/**
+ * How often to check whether a recovery probe is due. The probe itself (one PING)
+ * follows the circuit's exponential schedule: 5 min, 10, 20, … capped at 60 min.
+ */
+const REDIS_CIRCUIT_PROBE_CHECK_MS = 30_000;
+
+/** Skip a tick while the previous run of the same sweep is still in flight. */
+const sweepsInFlight = new Set<string>();
+async function runExclusive(name: string, fn: () => Promise<void>): Promise<void> {
+  if (sweepsInFlight.has(name)) {
+    logThrottled("warn", `sweep-overlap:${name}`, "Sweep still running — skipping tick", {
+      sweep: name,
+    });
+    return;
+  }
+  sweepsInFlight.add(name);
+  try {
+    await fn();
+  } finally {
+    sweepsInFlight.delete(name);
+  }
+}
 
 /** Re-enqueue eligible READY mission tasks after Redis loss — skipped while circuit OPEN. */
 function startMissionQueueRecoverySweep() {
   intervals.push(
     setInterval(() => {
       if (isRedisCircuitOpen()) return;
-      recoverMissionQueueJobs().catch((error) => {
-        noteRedisError(error);
-        logger.error("Mission queue recovery failed", {
-          message: error instanceof Error ? error.message : "unknown",
-        });
+      void runExclusive("mission-queue-recovery", async () => {
+        await recoverMissionQueueJobs().then(
+          () => undefined,
+          (error) => {
+            noteRedisError(error);
+            logThrottled(
+              "error",
+              errorThrottleKey("mission-recovery", error),
+              "Mission queue recovery failed",
+              { message: error instanceof Error ? error.message : "unknown" },
+              15 * 60_000,
+            );
+          },
+        );
       });
     }, MISSION_QUEUE_RECOVERY_INTERVAL_MS),
   );
 }
 
 function startRedisCircuitRecoveryProbe() {
+  let probing = false;
   intervals.push(
     setInterval(() => {
-      if (!isRedisCircuitOpen()) return;
+      if (probing || !isRedisRecoveryProbeDue()) return;
+      probing = true;
       void (async () => {
-        const ok = await pingRedis(2000, { bypassCircuit: true });
+        const ok = await pingRedis(2000, { bypassCircuit: true }).catch(() => false);
         if (ok) {
           clearRedisCircuit("recovery_probe_ok");
+        } else {
+          noteRedisRecoveryProbeFailed();
         }
-      })().catch(() => undefined);
-    }, REDIS_CIRCUIT_RECOVERY_INTERVAL_MS),
+      })()
+        .catch(() => undefined)
+        .finally(() => {
+          probing = false;
+        });
+    }, REDIS_CIRCUIT_PROBE_CHECK_MS),
   );
 }
 
 async function runDailyAggregationSweep() {
   const orgs = await prisma.organisation.findMany({
-    where: { deletedAt: null, isPlatform: false },
+    where: sweepEligibleOrganisationWhere(),
     select: { id: true },
     take: 200,
   });
@@ -195,6 +258,23 @@ function startMaintenanceDbSweeps() {
       );
     }, MAINTENANCE_INTERVAL_MS),
   );
+
+  if (RUN_LOG_RETENTION_ENABLED) {
+    intervals.push(
+      setInterval(() => {
+        void runExclusive("run-log-retention", async () => {
+          // ≤20 batches × 5k rows per table per hour — clears a large backlog gradually.
+          await pruneRunLogs({ retentionDays: RUN_LOG_RETENTION_DAYS }).then(
+            () => undefined,
+            (error) =>
+              logger.error("Run-log retention sweep failed", {
+                message: error instanceof Error ? error.message : "unknown",
+              }),
+          );
+        });
+      }, MAINTENANCE_INTERVAL_MS),
+    );
+  }
 }
 
 /** Phase 12B — Postgres outbox + stale claim recovery (no extra BullMQ worker). */
@@ -219,7 +299,7 @@ function startOutboxDbSweep() {
 function startOpportunityDetectorSweep() {
   intervals.push(
     setInterval(() => {
-      void (async () => {
+      void runExclusive("opportunity-detectors", async () => {
         try {
           await expireDueOpportunities();
           await runOpportunityDetectorSweep(50);
@@ -228,7 +308,7 @@ function startOpportunityDetectorSweep() {
             message: error instanceof Error ? error.message : "unknown",
           });
         }
-      })();
+      });
     }, OPPORTUNITY_DETECTOR_INTERVAL_MS),
   );
 }
@@ -277,17 +357,19 @@ function startPublishingSweep() {
 function startContinuousIntelSweep() {
   intervals.push(
     setInterval(() => {
-      sweepContinuousIntelligence(50)
-        .then((result) => {
-          if (result.runsCreated > 0) {
-            logger.info("Continuous intelligence sweep complete", result);
-          }
-        })
-        .catch((error) =>
-          logger.error("Continuous intelligence sweep failed", {
-            message: error instanceof Error ? error.message : "unknown",
-          }),
-        );
+      void runExclusive("continuous-intel", () =>
+        sweepContinuousIntelligence(50)
+          .then((result) => {
+            if (result.runsCreated > 0) {
+              logger.info("Continuous intelligence sweep complete", result);
+            }
+          })
+          .catch((error) =>
+            logger.error("Continuous intelligence sweep failed", {
+              message: error instanceof Error ? error.message : "unknown",
+            }),
+          ),
+      );
     }, CONTINUOUS_INTEL_SWEEP_INTERVAL_MS),
   );
 }
@@ -301,7 +383,7 @@ function startProcessTwinReconcileSweep() {
           await ensureProcessDefinitions();
           const since = new Date(Date.now() - 7 * 24 * 60 * 60_000);
           const orgs = await prisma.organisation.findMany({
-            where: { deletedAt: null, isPlatform: false },
+            where: sweepEligibleOrganisationWhere(),
             select: { id: true },
             take: 100,
             orderBy: { lastActivityAt: "desc" },
@@ -340,9 +422,54 @@ async function startRedisWorkers() {
     lockDuration: AGENT_RUN_LOCK_DURATION_MS,
     stalledInterval: AGENT_RUN_STALLED_INTERVAL_MS,
     maxStalledCount: 2,
+    // Idle BZPOPMIN for 30s instead of 5s — ~6× fewer idle Redis commands.
+    drainDelay: AGENT_RUN_DRAIN_DELAY_SEC,
   });
 
   workers.push(agentRunsWorker);
+
+  /**
+   * Storm guard for error replies the circuit does not classify: BullMQ's fetch loop
+   * swallows non-connection errors (onlyEmitError) and retries immediately, so a
+   * repeating error reply would loop several times a second. Pause with exponential
+   * back-off instead (30s, 1m, 2m … capped at 10m); reset after a quiet period.
+   */
+  const recentWorkerErrors: number[] = [];
+  let stormPauseMs = 0;
+  let stormResumeTimer: NodeJS.Timeout | null = null;
+  let lastStormAt = 0;
+  function noteWorkerErrorForStormGuard() {
+    const now = Date.now();
+    recentWorkerErrors.push(now);
+    while (recentWorkerErrors.length && now - recentWorkerErrors[0]! > WORKER_ERROR_STORM_WINDOW_MS) {
+      recentWorkerErrors.shift();
+    }
+    if (recentWorkerErrors.length < WORKER_ERROR_STORM_THRESHOLD) return;
+    if (stormResumeTimer || agentRunsWorker.isPaused() || shuttingDown) return;
+    recentWorkerErrors.length = 0;
+    stormPauseMs =
+      now - lastStormAt > WORKER_ERROR_PAUSE_MAX_MS * 2
+        ? WORKER_ERROR_PAUSE_BASE_MS
+        : Math.min(Math.max(stormPauseMs * 2, WORKER_ERROR_PAUSE_BASE_MS), WORKER_ERROR_PAUSE_MAX_MS);
+    lastStormAt = now;
+    logger.error("BullMQ agent-runs worker error storm — pausing fetch loop", {
+      pauseMs: stormPauseMs,
+      threshold: WORKER_ERROR_STORM_THRESHOLD,
+      windowMs: WORKER_ERROR_STORM_WINDOW_MS,
+    });
+    void agentRunsWorker.pause(true).catch(() => undefined);
+    stormResumeTimer = setTimeout(() => {
+      stormResumeTimer = null;
+      // The fatal-provider circuit owns resume while it is OPEN.
+      if (shuttingDown || isRedisCircuitOpen()) return;
+      if (agentRunsWorker.isPaused()) {
+        agentRunsWorker.resume();
+        logger.info("BullMQ agent-runs worker resumed after error-storm pause", {
+          pausedMs: stormPauseMs,
+        });
+      }
+    }, stormPauseMs);
+  }
 
   /**
    * BullMQ 5.x: Worker.pause() sets paused=true and stops the main fetch loop
@@ -373,7 +500,11 @@ async function startRedisWorkers() {
   agentRunsWorker.on("error", (err) => {
     if (noteRedisError(err)) return;
     if (isFatalRedisProviderError(err) && isRedisCircuitOpen()) return;
-    logger.error("BullMQ agent-runs worker error", { message: err.message });
+    noteWorkerErrorForStormGuard();
+    // Same error repeating in a loop — log once per minute with a suppressed count.
+    logThrottled("error", errorThrottleKey("bullmq-worker", err), "BullMQ agent-runs worker error", {
+      message: err.message,
+    });
   });
 
   agentRunsWorker.on("ready", () =>
@@ -419,10 +550,21 @@ async function startRedisWorkers() {
     recordQueueOp("active");
   });
 
+  // Started while the provider was already rate-limiting (circuit opened by the boot
+  // ping): stay paused until the recovery probe succeeds instead of looping.
+  // (After the "error" listener is attached — an unhandled "error" event would crash.)
+  if (isRedisCircuitOpen()) {
+    await agentRunsWorker.pause(true).catch(() => undefined);
+    logger.error("BullMQ agent-runs worker started paused — Redis provider circuit OPEN", {
+      circuit: getRedisCircuitSnapshot(),
+    });
+  }
+
   markWorkerStarted({
     queues: [queueName],
     prefix: getQueuePrefix(),
   });
+  if (isRedisCircuitOpen()) markWorkerDegraded(true, "REDIS_PROVIDER_QUOTA");
   const heartbeatInstanceId = `${process.pid}-${Date.now()}`;
   const pulseHeartbeat = () =>
     writeWorkerHeartbeat({
@@ -523,7 +665,9 @@ async function main() {
   }
 
   const redisOk = await pingRedis();
-  if (redisOk) {
+  // Rate-limited / over quota is not "down": exiting would make Railway restart-loop
+  // (ON_FAILURE) and reconnect repeatedly. Start paused behind the circuit instead.
+  if (redisOk || isRedisCircuitOpen()) {
     await startRedisWorkers();
     return;
   }

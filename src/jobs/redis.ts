@@ -16,6 +16,7 @@ import {
   isRedisCircuitOpen,
   noteRedisError,
 } from "@/jobs/redis-circuit";
+import { errorThrottleKey, logThrottled, redisReconnectDelayMs } from "@/jobs/redis-backoff";
 
 let shared: IORedis | null = null;
 let lastPingAt = 0;
@@ -133,8 +134,15 @@ function redisConnectionOptions(url: string, overrides: RedisOptions = {}): Redi
     (isTls && /upstash\.io/i.test(url) && process.env.VERCEL === "1");
 
   return {
+    // BullMQ Workers require maxRetriesPerRequest=null (commands wait for reconnect
+    // instead of failing). enableOfflineQueue stays on for the same reason; the
+    // fatal-provider circuit is what stops Agent Desk traffic during rate limits.
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
+    // Exponential reconnect back-off with jitter (ioredis default is linear, ≤2s).
+    retryStrategy: redisReconnectDelayMs,
+    // Never reconnect on error replies (rate-limit / quota) — that only adds traffic.
+    reconnectOnError: () => false,
     ...(isTls
       ? {
           tls: {
@@ -168,7 +176,10 @@ export function getRedisConnection(opts?: { lazyConnect?: boolean }): IORedis {
         // Deduplicated — circuit already OPEN.
         return;
       }
-      logger.error("Redis connection error", { message: err.message });
+      // Reconnect loops repeat the same error — log once per window.
+      logThrottled("error", errorThrottleKey("redis-conn", err), "Redis connection error", {
+        message: err.message,
+      });
     });
   }
   return shared;
@@ -236,7 +247,7 @@ export async function pingRedis(
   } catch (error) {
     noteRedisError(error);
     if (!(isFatalRedisProviderError(error) && isRedisCircuitOpen())) {
-      logger.warn("Redis ping failed", {
+      logThrottled("warn", errorThrottleKey("redis-ping", error), "Redis ping failed", {
         message: error instanceof Error ? error.message : "unknown",
       });
     }

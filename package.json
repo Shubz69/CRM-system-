@@ -25,6 +25,7 @@
     "org:create": "tsx scripts/create-organisation.ts",
     "demo:purge": "tsx scripts/purge-demo-data.ts",
     "org:audit": "tsx scripts/audit-organisations.ts",
+    "db:prune-run-logs": "tsx scripts/prune-run-logs.ts",
     "db:studio": "prisma studio",
     "db:dev": "tsx scripts/dev-db.ts",
     "db:upgrade": "tsx scripts/apply-schema-upgrade.ts",

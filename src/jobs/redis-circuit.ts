@@ -8,7 +8,11 @@ import { logger } from "@/lib/logger";
 
 export type RedisCircuitState = "CLOSED" | "OPEN";
 
-const FATAL_QUOTA_RE = /max\s+requests\s+limit\s+exceeded/i;
+const FATAL_QUOTA_RE = /max\s+(?:daily\s+)?requests?\s+limit\s+exceeded/i;
+/** Provider rate-limit replies, e.g. "ERR Your database has been temporarily rate-limited". */
+const RATE_LIMIT_RE = /rate[\s-]?limit/i;
+/** Redis error replies start with an upper-case error code such as `ERR`. */
+const REDIS_ERR_REPLY_RE = /(?:^|[\s:])ERR\s/;
 
 let state: RedisCircuitState = "CLOSED";
 let openedAt: number | null = null;
@@ -18,20 +22,48 @@ let suppressedWhileOpen = 0;
 let lastReminderAt = 0;
 let onOpenHook: (() => void | Promise<void>) | null = null;
 let onRecoverHook: (() => void | Promise<void>) | null = null;
+/** Failed recovery probes (and quick re-opens) since the circuit last settled. */
+let recoveryAttempts = 0;
+let nextProbeAt = 0;
+let lastRecoveredAt = 0;
 
 /** Optional low-frequency reminder while OPEN (default 15 minutes). */
 const REMINDER_MS = Number(process.env.REDIS_CIRCUIT_REMINDER_MS || 15 * 60_000);
+/** First recovery probe delay after OPEN; doubles per failed probe (default 5 minutes). */
+const RECOVERY_BASE_MS = Number(process.env.REDIS_CIRCUIT_RECOVERY_INTERVAL_MS || 5 * 60_000);
+const RECOVERY_MAX_MS = Number(process.env.REDIS_CIRCUIT_RECOVERY_MAX_MS || 60 * 60_000);
+/** Re-opening within this window after a recovery keeps the longer back-off. */
+const FLAP_WINDOW_MS = 10 * 60_000;
 
 /**
- * Deterministic classifier for fatal provider-level Redis command replies.
- * Does NOT treat socket disconnects / timeouts as fatal.
+ * Deterministic classifier for fatal provider-level Redis command replies:
+ * quota exhaustion and provider rate limiting. Does NOT treat socket disconnects /
+ * timeouts as fatal, and only treats "rate limit" as fatal when it is a Redis
+ * `ERR …` reply (so an AI-provider 429 surfacing as a failed job never trips it).
  */
 export function isFatalRedisProviderError(error: unknown): boolean {
   const msg = messageFromError(error);
   if (!msg) return false;
   // Exclude common transient connection patterns even if message is noisy.
   if (isTransientRedisNoise(msg)) return false;
-  return FATAL_QUOTA_RE.test(msg);
+  if (FATAL_QUOTA_RE.test(msg)) return true;
+  return REDIS_ERR_REPLY_RE.test(msg) && RATE_LIMIT_RE.test(msg);
+}
+
+function recoveryDelayMs(): number {
+  return Math.min(RECOVERY_BASE_MS * 2 ** Math.min(recoveryAttempts, 10), RECOVERY_MAX_MS);
+}
+
+/** True when the worker should spend one PING probing for recovery (exponential back-off). */
+export function isRedisRecoveryProbeDue(now = Date.now()): boolean {
+  return state === "OPEN" && now >= nextProbeAt;
+}
+
+/** Record a failed recovery probe — the next probe waits twice as long (capped). */
+export function noteRedisRecoveryProbeFailed(now = Date.now()): void {
+  if (state !== "OPEN") return;
+  recoveryAttempts += 1;
+  nextProbeAt = now + recoveryDelayMs();
 }
 
 function messageFromError(error: unknown): string {
@@ -114,11 +146,19 @@ export function noteRedisError(error: unknown): boolean {
   openTransitionCount += 1;
   suppressedWhileOpen = 0;
   lastReminderAt = Date.now();
+  // Flapping (re-opened soon after a recovery) keeps growing the back-off.
+  if (lastRecoveredAt && openedAt - lastRecoveredAt < FLAP_WINDOW_MS) {
+    recoveryAttempts += 1;
+  } else {
+    recoveryAttempts = 0;
+  }
+  nextProbeAt = openedAt + recoveryDelayMs();
 
   logger.error("Redis fatal provider circuit OPEN — stopping BullMQ Redis traffic", {
     code: "REDIS_PROVIDER_QUOTA",
     reason: openReason,
     openTransitionCount,
+    nextProbeInMs: nextProbeAt - openedAt,
   });
 
   try {
@@ -160,6 +200,7 @@ export function clearRedisCircuit(reason = "recovery_probe_ok"): boolean {
   const wasOpenedAt = openedAt;
   state = "CLOSED";
   openedAt = null;
+  lastRecoveredAt = Date.now();
   const previousReason = openReason;
   openReason = null;
 
@@ -217,4 +258,7 @@ export function resetRedisCircuitForTests(): void {
   lastReminderAt = 0;
   onOpenHook = null;
   onRecoverHook = null;
+  recoveryAttempts = 0;
+  nextProbeAt = 0;
+  lastRecoveredAt = 0;
 }

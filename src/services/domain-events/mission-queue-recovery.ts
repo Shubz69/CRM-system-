@@ -10,6 +10,7 @@ import { enqueueAgentRunJob } from "@/jobs/agent-runs";
 import { missionTaskJobId, pingRedis } from "@/jobs/redis";
 import { getAgentRunsQueue } from "@/jobs/queues";
 import { isRedisCircuitOpen } from "@/jobs/redis-circuit";
+import { logThrottled } from "@/jobs/redis-backoff";
 
 /**
  * Find READY tasks that should have queue work and ensure a BullMQ job exists.
@@ -19,13 +20,26 @@ export async function recoverMissionQueueJobs(input?: {
   organisationId?: string;
   limit?: number;
 }): Promise<{ examined: number; enqueued: number; skipped: number }> {
+  // Logged at most every 15 minutes — this runs on a timer while Redis is down.
   if (isRedisCircuitOpen()) {
-    logger.warn("Mission queue recovery skipped — Redis provider circuit OPEN");
+    logThrottled(
+      "warn",
+      "mission-recovery:circuit-open",
+      "Mission queue recovery skipped — Redis provider circuit OPEN",
+      {},
+      15 * 60_000,
+    );
     return { examined: 0, enqueued: 0, skipped: 0 };
   }
 
   if (!(await pingRedis())) {
-    logger.warn("Mission queue recovery skipped — Redis unavailable");
+    logThrottled(
+      "warn",
+      "mission-recovery:redis-down",
+      "Mission queue recovery skipped — Redis unavailable",
+      {},
+      15 * 60_000,
+    );
     return { examined: 0, enqueued: 0, skipped: 0 };
   }
 

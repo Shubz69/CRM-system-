@@ -31,6 +31,12 @@ function localAckLabel(prompt: string): string {
   return "Preparing your answer…";
 }
 
+/** Progress poll cadence: 400ms, then +150ms per poll up to 2s; ≥5s while the tab is hidden. */
+const ASK_POLL_MIN_MS = 400;
+const ASK_POLL_STEP_MS = 150;
+const ASK_POLL_MAX_MS = 2_000;
+const ASK_POLL_HIDDEN_MS = 5_000;
+
 /** Event-handler clock — kept outside the component so purity lint does not treat submit as render. */
 function askNowMs(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -285,7 +291,8 @@ export default function AskPage() {
   const [uploading, setUploading] = useState(false);
   const [editablePrompt, setEditablePrompt] = useState("");
   const [wantImageUpload, setWantImageUpload] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollGenRef = useRef(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const lowAllowanceToastShown = useRef(false);
@@ -300,14 +307,17 @@ export default function AskPage() {
   }, []);
 
   const stopPolling = useCallback(() => {
+    // Invalidate any in-flight poll loop, then clear its pending timer.
+    pollGenRef.current += 1;
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
 
+  /** @returns true when polling should stop (terminal status or session gone). */
   const poll = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
       try {
         const res = await fetch(`/api/ask/${id}`);
         const json = (await res.json()) as Progress & {
@@ -316,19 +326,20 @@ export default function AskPage() {
         };
         if (res.status === 401 && json.code === "SESSION_ORG_INVALID") {
           toast.error(json.error || "Please sign in again.");
+          stopPolling();
           await signOut({ callbackUrl: "/login" });
-          return;
+          return true;
         }
         if (res.status === 401) {
           // Transient next-auth/JWT pool blips — skip this tick instead of toast-spamming.
-          return;
+          return false;
         }
         if (res.status === 403 && json.code === "NO_WORKSPACE_MEMBERSHIP") {
           toast.error(
             json.error ||
               "This account isn't linked to a workspace yet. Ask an admin to add you.",
           );
-          return;
+          return false;
         }
         if (!res.ok) {
           const msg = json.error || "Could not load progress";
@@ -359,7 +370,9 @@ export default function AskPage() {
           json.status === "AWAITING_PROMPT_CONFIRM"
         ) {
           stopPolling();
+          return true;
         }
+        return false;
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Progress check failed";
         toast.error(
@@ -367,9 +380,44 @@ export default function AskPage() {
             ? "Something went wrong loading progress. Please try again."
             : msg,
         );
+        return false;
       }
     },
     [stopPolling],
+  );
+
+  /**
+   * Sequential progress polling: the next request is scheduled only after the
+   * previous one returns (was a fixed 200ms setInterval that stacked overlapping
+   * requests, each costing several DB queries). Starts fast and eases off to 2s;
+   * 5s while the tab is hidden.
+   */
+  const startPolling = useCallback(
+    (id: string) => {
+      stopPolling();
+      const gen = pollGenRef.current;
+      let attempt = 0;
+      const schedule = () => {
+        attempt += 1;
+        const base = Math.min(
+          ASK_POLL_MIN_MS + (attempt - 1) * ASK_POLL_STEP_MS,
+          ASK_POLL_MAX_MS,
+        );
+        const delay =
+          typeof document !== "undefined" && document.hidden
+            ? Math.max(base, ASK_POLL_HIDDEN_MS)
+            : base;
+        pollRef.current = setTimeout(() => void tick(), delay);
+      };
+      const tick = async () => {
+        if (pollGenRef.current !== gen) return;
+        const done = await poll(id);
+        if (done || pollGenRef.current !== gen) return;
+        schedule();
+      };
+      schedule();
+    },
+    [poll, stopPolling],
   );
 
   useEffect(() => () => stopPolling(), [stopPolling]);
@@ -558,8 +606,9 @@ export default function AskPage() {
           return;
         }
       }
-      await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 200);
+      if (!(await poll(json.runId))) {
+        startPolling(json.runId);
+      }
     } catch (err) {
       setProgress(null);
       setRunId(null);
@@ -606,8 +655,9 @@ export default function AskPage() {
         return;
       }
       stopPolling();
-      await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 200);
+      if (!(await poll(json.runId))) {
+        startPolling(json.runId);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(
@@ -640,8 +690,9 @@ export default function AskPage() {
         return;
       }
       stopPolling();
-      await poll(json.runId);
-      pollRef.current = setInterval(() => void poll(json.runId), 200);
+      if (!(await poll(json.runId))) {
+        startPolling(json.runId);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed";
       toast.error(

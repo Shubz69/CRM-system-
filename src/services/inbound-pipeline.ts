@@ -190,10 +190,22 @@ export async function processInboundMessage(
   const autopilotActive = isAutopilotOperating(organisation.autopilotMode, { provider });
 
   try {
-    await prisma.organisation.update({
-      where: { id: organisation.id },
-      data: { lastActivityAt: new Date() },
+    // Throttled: a burst of inbound DMs used to rewrite the Organisation row per message.
+    const activityNow = new Date();
+    await prisma.organisation.updateMany({
+      where: {
+        id: organisation.id,
+        OR: [
+          { lastActivityAt: null },
+          { lastActivityAt: { lt: new Date(activityNow.getTime() - 5 * 60_000) } },
+        ],
+      },
+      data: { lastActivityAt: activityNow },
     });
+
+    // Load before the transaction: the Contact row lock taken below is held until
+    // COMMIT, so nothing slow (module loading) should run while it is held.
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
 
     const result = await prisma.$transaction(async (tx) => {
       let channel = await tx.messagingChannel.findFirst({
@@ -513,7 +525,6 @@ export async function processInboundMessage(
         leadCreated = true;
       }
 
-      const { appendDomainEvent } = await import("@/services/domain-events/append");
       if (contactCreated) {
         await appendDomainEvent(tx, {
           organisationId: input.organisationId,

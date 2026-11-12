@@ -2684,6 +2684,8 @@ model PostPerformance {
   @@index([organisationId, pieceId, capturedAt])
   @@index([organisationId, publishingJobId])
   @@index([organisationId, capturedAt])
+  /// Continuous-intel sweep: latest performance per SocialContent.
+  @@index([organisationId, socialContentId, capturedAt])
 }
 
 
@@ -3478,6 +3480,10 @@ model OpportunityDetectorRun {
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, detectorKey, startedAt])
+  /// AI Ops "recent detector runs" (org-wide, newest first).
+  @@index([organisationId, startedAt])
+  /// Retention deletes / global time-window counts.
+  @@index([startedAt])
 }
 
 // ─── Phase 14 — Integration mesh / sync / skills ─────────────────────────────
@@ -3906,6 +3912,10 @@ model ContinuousCollectionRun {
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@index([organisationId, kind, observedAt])
+  /// Social intelligence page + SLO window counts (org-wide, by observedAt).
+  @@index([organisationId, observedAt])
+  /// Retention deletes.
+  @@index([createdAt])
 }
 
 /// Prediction Lab — record predictions for later scoring (no fake accuracy claims).

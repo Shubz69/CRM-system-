@@ -4,6 +4,8 @@
  * One write every ~15s — not a polling loop from the web app.
  */
 import { getBullMqPrefix, getRedisConnection } from "@/jobs/redis";
+import { isRedisCircuitOpen, noteRedisError } from "@/jobs/redis-circuit";
+import { errorThrottleKey, logThrottled } from "@/jobs/redis-backoff";
 import { logger } from "@/lib/logger";
 
 export const WORKER_HEARTBEAT_TTL_SECONDS = 45;
@@ -49,6 +51,8 @@ export async function writeWorkerHeartbeat(input: {
   instanceId: string;
   queues: string[];
 }): Promise<void> {
+  // No Redis traffic while the provider is rate-limiting / over quota.
+  if (isRedisCircuitOpen()) return;
   try {
     const prefix = getBullMqPrefix();
     const conn = getRedisConnection();
@@ -65,7 +69,8 @@ export async function writeWorkerHeartbeat(input: {
       WORKER_HEARTBEAT_TTL_SECONDS,
     );
   } catch (error) {
-    logger.warn("Worker heartbeat write skipped", {
+    if (noteRedisError(error)) return;
+    logThrottled("warn", errorThrottleKey("heartbeat", error), "Worker heartbeat write skipped", {
       message: error instanceof Error ? error.message : "unknown",
     });
   }

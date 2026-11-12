@@ -81,7 +81,7 @@ Ask context: `assembleAskBusinessContext` injects a small budgeted block into ag
 
 Postgres intervals (no new BullMQ worker):
 
-- Opportunity detectors default **15 minutes** (`OPPORTUNITY_DETECTOR_INTERVAL_MS`)
+- Opportunity detectors default **60 minutes** (`OPPORTUNITY_DETECTOR_INTERVAL_MS`); a no-op run (nothing created/updated) is logged at most once per 24h per org+detector
 - KPI calculator refresh default **60 minutes** (`KPI_REFRESH_INTERVAL_MS`)
 
 ## APIs / UI

@@ -10,6 +10,7 @@ import { PageLoading } from "@/components/ui/page-state";
 import { statusLabel } from "@/lib/customer-labels";
 import { useSession } from "next-auth/react";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 type ConversationListItem = {
   id: string;
@@ -146,12 +147,10 @@ export default function InboxPage() {
     ])
       .catch((e) => toast.error(e.message))
       .finally(() => setLoading(false));
-
-    const timer = setInterval(() => {
-      loadList().catch(() => undefined);
-    }, 8000);
-    return () => clearInterval(timer);
   }, [loadList]);
+
+  // Refresh the list every 8s while the tab is visible (no overlap, paused when hidden).
+  useVisibleInterval(loadList, 8000);
 
   useEffect(() => {
     const fromQuery = searchParams.get("c") || searchParams.get("conversationId");

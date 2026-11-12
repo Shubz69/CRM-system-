@@ -36,6 +36,7 @@ export async function GET(req: Request) {
       highValueLeads,
       needsAttention,
       recentBookings,
+      engagedLeads,
     ] = await Promise.all([
       prisma.conversation.count({ where: { organisationId: orgId, deletedAt: null, ...dateFilter } }),
       prisma.lead.count({ where: { organisationId: orgId, deletedAt: null, ...dateFilter } }),
@@ -111,6 +112,14 @@ export async function GET(req: Request) {
         orderBy: { createdAt: "desc" },
         take: 5,
       }),
+      // Was awaited serially after the batch above (extra round trip per load).
+      prisma.lead.count({
+        where: {
+          organisationId: orgId,
+          deletedAt: null,
+          stage: { slug: { in: ["engaged", "contacted", "qualifying"] } },
+        },
+      }),
     ]);
 
     const bookingConversion = newLeads > 0 ? callsBooked / newLeads : 0;
@@ -155,13 +164,7 @@ export async function GET(req: Request) {
       recentBookings,
       funnel: {
         newLeads,
-        engaged: await prisma.lead.count({
-          where: {
-            organisationId: orgId,
-            deletedAt: null,
-            stage: { slug: { in: ["engaged", "contacted", "qualifying"] } },
-          },
-        }),
+        engaged: engagedLeads,
         qualified: qualifiedLeads,
         booked: callsBooked,
       },

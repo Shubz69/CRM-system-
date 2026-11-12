@@ -133,3 +133,57 @@ describe("BullMQ pause mechanism contract (installed Worker API)", () => {
     expect(typeof Worker.prototype.isPaused).toBe("function");
   });
 });
+
+describe("redis provider rate limit + back-off", () => {
+  beforeEach(() => {
+    resetRedisCircuitForTests();
+  });
+
+  afterEach(() => {
+    resetRedisCircuitForTests();
+  });
+
+  it("treats a provider rate-limit ERR reply as fatal", () => {
+    expect(
+      isFatalRedisProviderError(new Error("ERR Your database has been temporarily rate-limited")),
+    ).toBe(true);
+    expect(
+      isFatalRedisProviderError(new Error("ReplyError: ERR rate limit exceeded")),
+    ).toBe(true);
+  });
+
+  it("does not trip on non-Redis rate limits (e.g. AI provider 429 in a failed job)", () => {
+    expect(isFatalRedisProviderError(new Error("429 rate_limit_error: rate limit exceeded"))).toBe(
+      false,
+    );
+    expect(isFatalRedisProviderError(new Error("Anthropic rate limited, retry later"))).toBe(false);
+  });
+
+  it("recovery probes back off exponentially while the circuit stays open", async () => {
+    const { isRedisRecoveryProbeDue, noteRedisRecoveryProbeFailed } = await import(
+      "@/jobs/redis-circuit"
+    );
+    const t0 = Date.now();
+    noteRedisError(new Error("ERR Your database has been temporarily rate-limited"));
+    expect(isRedisCircuitOpen()).toBe(true);
+    expect(isRedisRecoveryProbeDue(t0)).toBe(false);
+    expect(isRedisRecoveryProbeDue(t0 + 5 * 60_000 + 1_000)).toBe(true);
+
+    const t1 = t0 + 5 * 60_000 + 1_000;
+    noteRedisRecoveryProbeFailed(t1);
+    expect(isRedisRecoveryProbeDue(t1 + 9 * 60_000)).toBe(false);
+    expect(isRedisRecoveryProbeDue(t1 + 10 * 60_000)).toBe(true);
+  });
+
+  it("reconnect delay grows exponentially and is capped", async () => {
+    const { redisReconnectDelayMs } = await import("@/jobs/redis-backoff");
+    const d1 = redisReconnectDelayMs(1);
+    const d4 = redisReconnectDelayMs(4);
+    const d50 = redisReconnectDelayMs(50);
+    expect(d1).toBeGreaterThanOrEqual(400);
+    expect(d1).toBeLessThanOrEqual(600);
+    expect(d4).toBeGreaterThanOrEqual(3_200);
+    expect(d4).toBeLessThanOrEqual(4_800);
+    expect(d50).toBeLessThanOrEqual(36_000);
+  });
+});

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Bell } from "lucide-react";
+import { useVisibleInterval } from "@/hooks/use-visible-interval";
 
 type Notification = {
   id: string;
@@ -33,9 +34,10 @@ export function NotificationsMenu() {
 
   useEffect(() => {
     void load();
-    const id = window.setInterval(() => void load(), 30_000);
-    return () => window.clearInterval(id);
   }, []);
+
+  // Every 30s while the tab is visible — background tabs no longer poll.
+  useVisibleInterval(load, 30_000);
 
   async function markAllRead() {
     await fetch("/api/notifications", {
