@@ -43,7 +43,23 @@ type Approval = {
   kind: string;
   createdAt: string;
   automationRule?: { name: string } | null;
+  summary?: string | null;
+  payload?: { finalContent?: unknown } | null;
+  recipient?: { name: string | null; handle: string | null } | null;
 };
+
+/** One line saying what will be sent and to whom, so nothing is approved blind. */
+function approvalDetail(a: Approval): string {
+  const to = a.recipient
+    ? a.recipient.name || (a.recipient.handle ? `@${a.recipient.handle.replace(/^@/, "")}` : "")
+    : "";
+  const text =
+    (typeof a.payload?.finalContent === "string" && a.payload.finalContent) || a.summary || "";
+  const snippet = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  if (to && snippet) return `To ${to}: “${snippet}”`;
+  if (snippet) return `“${snippet}”`;
+  return a.automationRule?.name ? a.automationRule.name : "Automation approval";
+}
 
 function summarizeActions(actions: unknown): string {
   if (!Array.isArray(actions) || actions.length === 0) return "none yet";
@@ -158,7 +174,12 @@ export default function AutomationsPage() {
       body: JSON.stringify({ id, decision }),
     });
     const json = await response.json();
-    if (!response.ok) return toast.error(json.error || "Failed");
+    if (!response.ok) {
+      toast.error(json.error || "Failed");
+      // A refused send may have retired the draft — refresh so it drops off.
+      await load();
+      return;
+    }
     toast.success(decision === "APPROVED" ? "Approved — actions ran" : "Rejected");
     await load();
   }
@@ -289,9 +310,7 @@ export default function AutomationsPage() {
             <article key={a.id} className="surface-attention flex flex-wrap items-center gap-2 p-4">
               <div className="min-w-0 flex-1">
                 <p className="font-medium">{a.title}</p>
-                <p className="text-xs text-[var(--muted)]">
-                  {a.automationRule?.name ? a.automationRule.name : "Automation approval"}
-                </p>
+                <p className="text-xs text-[var(--muted)]">{approvalDetail(a)}</p>
               </div>
               <button className="btn btn-primary" type="button" onClick={() => void decide(a.id, "APPROVED")}>
                 Approve

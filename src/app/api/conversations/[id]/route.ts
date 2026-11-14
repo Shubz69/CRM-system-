@@ -7,6 +7,7 @@ import { roleHasPermission } from "@/lib/permissions";
 import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { markHumanLeadChange } from "@/services/lead-stage-guard";
 import { cancelPendingFollowUps } from "@/services/followups";
+import { expirePendingAiDrafts } from "@/services/automation-os";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
@@ -348,6 +349,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         organisationId: session.organisationId,
         conversationId: id,
         reason: "Human replied",
+      });
+      // AI drafts waiting for approval were written before this reply — approving one now
+      // would send an outdated or duplicate answer.
+      await expirePendingAiDrafts({
+        organisationId: session.organisationId,
+        conversationId: id,
+        reason: "A team member replied in the inbox",
       });
 
       return Response.json({

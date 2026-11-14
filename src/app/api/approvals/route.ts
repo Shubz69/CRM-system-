@@ -63,8 +63,36 @@ export async function GET() {
         },
       }),
     ]);
+
+    // Say who each outbound message goes to — approving a reply without seeing the
+    // recipient is approving blind.
+    const contactIds = [
+      ...new Set(
+        approvals
+          .map((a) => (a.payload as { contactId?: unknown } | null)?.contactId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    ];
+    const contacts = contactIds.length
+      ? await prisma.contact.findMany({
+          where: { organisationId: session.organisationId, id: { in: contactIds } },
+          select: { id: true, fullName: true, instagramUsername: true },
+        })
+      : [];
+    const byId = new Map(contacts.map((c) => [c.id, c]));
+    const withRecipients = approvals.map((a) => {
+      const contactId = (a.payload as { contactId?: unknown } | null)?.contactId;
+      const contact = typeof contactId === "string" ? byId.get(contactId) : undefined;
+      return {
+        ...a,
+        recipient: contact
+          ? { name: contact.fullName, handle: contact.instagramUsername }
+          : null,
+      };
+    });
+
     return Response.json({
-      approvals,
+      approvals: withRecipients,
       publishingJobs: publishingPending,
       missions: missionsPending,
     });

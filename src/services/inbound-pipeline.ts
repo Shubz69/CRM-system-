@@ -1189,6 +1189,7 @@ export async function processInboundMessage(
             agentVersion: routed.model,
             inboundMessageId: result.inboundMessage.id,
             leadId: result.lead.id,
+            expectedActivityVersion: result.conversation.activityVersion,
           },
         });
         await prisma.conversation.update({

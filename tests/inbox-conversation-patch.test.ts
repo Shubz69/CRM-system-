@@ -18,12 +18,14 @@ const prismaMocks = vi.hoisted(() => ({
 
 const sessionState = vi.hoisted(() => ({ role: "OWNER" as string }));
 const dispatchMock = vi.hoisted(() => vi.fn());
+const expireDraftsMock = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("@/lib/db", () => ({ prisma: prismaMocks }));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 vi.mock("@/services/audit", () => ({ writeAuditLog: vi.fn(async () => undefined) }));
 vi.mock("@/services/followups", () => ({ cancelPendingFollowUps: vi.fn(async () => undefined) }));
 vi.mock("@/services/messaging/outbound", () => ({ dispatchOutboundMessage: dispatchMock }));
+vi.mock("@/services/automation-os", () => ({ expirePendingAiDrafts: expireDraftsMock }));
 vi.mock("@/lib/session", () => {
   class WorkspaceChangedError extends Error {}
   const session = () => ({ userId: "user_1", organisationId: "org_1", role: sessionState.role });
@@ -95,6 +97,10 @@ describe("PATCH /api/conversations/[id]", () => {
     const call = dispatchMock.mock.calls[0]![0];
     expect(call.idempotencyKey).toBe("human-reply:conv_1:user_1:client:inbox-reply:abc-123");
     expect(call.expectedActivityVersion).toBe(7);
+    // A person replied, so AI drafts written before this reply must not be approvable.
+    expect(expireDraftsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ organisationId: "org_1", conversationId: "conv_1" }),
+    );
   });
 
   it("server fallback key changes with time, so the same text sent later is not swallowed", async () => {

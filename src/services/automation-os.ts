@@ -351,6 +351,52 @@ export type AiOutboundApprovalPayload = {
   approvedByUserId?: string | null;
   approvedAt?: string;
   outboundDispatchId?: string;
+  /**
+   * Conversation activity version the draft was written against. Approve & Send refuses
+   * (STALE_CONTEXT) if the customer or the team has written since.
+   */
+  expectedActivityVersion?: number;
+};
+
+/**
+ * Retire pending AI reply drafts for a conversation. Used when a newer draft replaces
+ * them (the customer wrote again) or a person replied by hand — otherwise owners could
+ * approve outdated replies, or approve three drafts and send three answers.
+ */
+export async function expirePendingAiDrafts(input: {
+  organisationId: string;
+  conversationId: string;
+  reason: string;
+}): Promise<number> {
+  const result = await prisma.approvalRequest.updateMany({
+    where: {
+      organisationId: input.organisationId,
+      kind: "ai_outbound_message",
+      status: ApprovalRequestStatus.PENDING,
+      payload: { path: ["conversationId"], equals: input.conversationId },
+    },
+    data: {
+      status: ApprovalRequestStatus.EXPIRED,
+      decidedAt: new Date(),
+      decisionNote: input.reason,
+    },
+  });
+  return result.count;
+}
+
+/** Send outcomes after which this draft can never be sent — it leaves the queue. */
+const TERMINAL_APPROVAL_SEND_CODES: Record<string, string> = {
+  STALE_CONTEXT:
+    "Not sent — the conversation has moved on since this draft was written. Open it in the inbox and reply from there.",
+  CONTACT_OPTED_OUT: "Not sent — this contact opted out.",
+  DO_NOT_CONTACT: "Not sent — this contact is marked do-not-contact.",
+  CONTACT_SUPPRESSED: "Not sent — this contact opted out.",
+  CONTACT_NOT_FOUND: "Not sent — this contact no longer exists.",
+  CONVERSATION_CLOSED: "Not sent — this conversation is closed.",
+  MESSAGING_WINDOW_CLOSED: "Not sent — the messaging window for this conversation has closed.",
+  META_INSTAGRAM_NO_PRIOR_INBOUND: "Not sent — Instagram only allows replies after the customer messages first.",
+  ZERNIO_NO_PRIOR_INBOUND: "Not sent — Instagram only allows replies after the customer messages first.",
+  PROVIDER_POLICY_BLOCKED: "Not sent — blocked by the messaging platform's rules.",
 };
 
 /** Queue an AI/automated social outbound for human Edit | Reject | Approve & Send. */
@@ -360,6 +406,15 @@ export async function createAiOutboundApprovalRequest(input: {
   summary?: string;
   payload: AiOutboundApprovalPayload;
 }): Promise<string> {
+  // A new AI draft is written with the whole conversation in view, so it replaces any
+  // earlier drafts still waiting for approval on the same conversation.
+  if (input.payload.source === "AI" && input.payload.conversationId) {
+    await expirePendingAiDrafts({
+      organisationId: input.organisationId,
+      conversationId: input.payload.conversationId,
+      reason: "Replaced by a newer draft after the customer wrote again",
+    });
+  }
   return createApprovalRequest({
     organisationId: input.organisationId,
     kind: "ai_outbound_message",
@@ -418,6 +473,37 @@ export async function decideApprovalRequest(input: {
       throw new Error(
         "Approval payload organisation mismatch — refusing to execute cross-tenant actions",
       );
+    }
+  }
+
+  // Drafts queued before activity versions were recorded can't use the send-time stale
+  // check, so refuse them if anyone has written in the conversation since they were made.
+  if (
+    existing.kind === "ai_outbound_message" &&
+    status === ApprovalRequestStatus.APPROVED &&
+    typeof payload.expectedActivityVersion !== "number" &&
+    typeof payload.conversationId === "string"
+  ) {
+    const newer = await prisma.message.findFirst({
+      where: {
+        conversationId: payload.conversationId,
+        organisationId: input.organisationId,
+        createdAt: { gt: existing.createdAt },
+      },
+      select: { id: true },
+    });
+    if (newer) {
+      const reason = TERMINAL_APPROVAL_SEND_CODES.STALE_CONTEXT!;
+      await prisma.approvalRequest.update({
+        where: { id: existing.id },
+        data: {
+          status: ApprovalRequestStatus.EXPIRED,
+          decidedAt: new Date(),
+          decidedByUserId: input.decidedByUserId ?? null,
+          decisionNote: reason,
+        },
+      });
+      throw new Error(reason);
     }
   }
 
@@ -481,6 +567,8 @@ export async function decideApprovalRequest(input: {
       threadId: p.threadId ?? undefined,
       agentVersion: p.agentVersion,
       actorId: input.decidedByUserId ?? undefined,
+      expectedActivityVersion:
+        typeof p.expectedActivityVersion === "number" ? p.expectedActivityVersion : undefined,
       metadata: {
         approvalRequestId: existing.id,
         originalDraft: p.originalDraft,
@@ -492,11 +580,21 @@ export async function decideApprovalRequest(input: {
         inboundMessageId: p.inboundMessageId,
       },
     });
-    if (!send.ok) {
+    // ALREADY_CONFIRMED: this exact draft was delivered before (idempotency) — not a failure.
+    if (!send.ok && send.code !== "ALREADY_CONFIRMED") {
+      const code = typeof send.code === "string" ? send.code : "";
+      const terminalReason = TERMINAL_APPROVAL_SEND_CODES[code];
+      // The row was marked APPROVED before sending. Never leave it "approved" with nothing
+      // sent: drop drafts that can never go out, and put the rest back in the queue.
+      await prisma.approvalRequest.update({
+        where: { id: existing.id },
+        data: terminalReason
+          ? { status: ApprovalRequestStatus.EXPIRED, decisionNote: terminalReason }
+          : { status: ApprovalRequestStatus.PENDING, decidedAt: null, decidedByUserId: null },
+      });
       throw new Error(
-        typeof send.code === "string"
-          ? `Approve & Send failed: ${send.code}`
-          : "Approve & Send failed",
+        terminalReason ??
+          "Not sent — the messaging provider didn't accept it. The draft is still waiting; try again.",
       );
     }
     actionsRun = 1;

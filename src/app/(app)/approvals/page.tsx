@@ -19,7 +19,15 @@ type Approval = {
   payload: ApprovalPayload;
   createdAt: string;
   automationRule?: { id: string; name: string; triggerType: string } | null;
+  recipient?: { name: string | null; handle: string | null } | null;
 };
+
+function recipientLabel(r: Approval["recipient"]): string | null {
+  if (!r) return null;
+  const handle = r.handle ? `@${r.handle.replace(/^@/, "")}` : null;
+  if (r.name && handle) return `${r.name} (${handle})`;
+  return r.name || handle;
+}
 
 type PubJob = {
   id: string;
@@ -115,6 +123,9 @@ export default function ApprovalsPage() {
                   {a.kind} · {a.status}
                 </span>
               </div>
+              {recipientLabel(a.recipient) && (
+                <p className="text-xs text-[var(--muted)]">To {recipientLabel(a.recipient)}</p>
+              )}
               <p className="text-sm">{actionDescription(a)}</p>
               {a.automationRule && (
                 <p className="text-xs text-[var(--muted)]">
@@ -159,6 +170,8 @@ export default function ApprovalsPage() {
                       await load();
                     } catch (e) {
                       toast.error(e instanceof Error ? e.message : "Failed");
+                      // A refused send may have retired the draft — refresh so it drops off.
+                      await load();
                     }
                   }}
                 >
