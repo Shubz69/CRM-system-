@@ -161,11 +161,11 @@ export default function AcceptInviteClient() {
           <input
             className="input mt-2"
             type="password"
-            minLength={10}
+            required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-            placeholder="Required for new accounts"
+            autoComplete="current-password"
+            placeholder="Your existing password, or a new one (10+ characters)"
           />
         </label>
         <button className="btn btn-primary w-full" type="submit" disabled={busy || !token}>

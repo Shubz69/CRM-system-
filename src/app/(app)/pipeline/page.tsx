@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { csvRow } from "@/lib/csv";
 
 type Lead = {
   id: string;
@@ -63,19 +64,20 @@ export default function PipelinePage() {
   }
 
   function exportCsv() {
-    const rows = [["Lead", "Username", "Stage", "Score", "Status"]];
+    const rows: Array<Array<string | number>> = [["Lead", "Username", "Stage", "Score", "Status"]];
     for (const stage of stages) {
       for (const lead of stage.leads) {
         rows.push([
           lead.contact.fullName || "",
           lead.contact.instagramUsername || "",
           stage.name,
-          String(lead.score),
+          lead.score,
           lead.qualificationStatus,
         ]);
       }
     }
-    const csv = rows.map((r) => r.map((c) => `"${c.replaceAll('"', '""')}"`).join(",")).join("\n");
+    // csvRow neutralises formula cells (names come from Instagram, e.g. "=HYPERLINK(...)").
+    const csv = rows.map(csvRow).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

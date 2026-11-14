@@ -7,11 +7,13 @@ const patchSchema = z.object({ id: z.string().optional(), all: z.boolean().optio
 export async function GET() {
   try {
     const session = await requireSession();
-    const notifications = await prisma.notification.findMany({
-      where: { organisationId: session.organisationId, OR: [{ userId: session.userId }, { userId: null }] },
-      orderBy: { createdAt: "desc" }, take: 50,
-    });
-    return Response.json({ notifications, unreadCount: notifications.filter((notification) => !notification.readAt).length });
+    const where = { organisationId: session.organisationId, OR: [{ userId: session.userId }, { userId: null }] };
+    const [notifications, unreadCount] = await Promise.all([
+      prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, take: 50 }),
+      // Real unread total — not just among the 50 most recent.
+      prisma.notification.count({ where: { ...where, readAt: null } }),
+    ]);
+    return Response.json({ notifications, unreadCount });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
@@ -25,7 +27,8 @@ export async function PATCH(req: Request) {
     const body = patchSchema.parse(await req.json());
     if (!body.id && !body.all) return jsonError("id or all is required");
     await prisma.notification.updateMany({
-      where: { organisationId: session.organisationId, OR: [{ userId: session.userId }, { userId: null }], ...(body.all ? {} : { id: body.id }) },
+      // readAt: null keeps the original read time of notifications already read.
+      where: { organisationId: session.organisationId, OR: [{ userId: session.userId }, { userId: null }], readAt: null, ...(body.all ? {} : { id: body.id }) },
       data: { readAt: new Date() },
     });
     return Response.json({ ok: true });

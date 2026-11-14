@@ -11,9 +11,23 @@ type Snapshot = {
   contacts: number;
   companies: number;
   openDeals: number;
-  dealValueCents: number;
+  /** Open deal value per currency — never summed across currencies. */
+  openValueByCurrency: Array<{ currency: string; amountCents: number }>;
   stages: number;
 };
+
+function formatMoney(cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency || "USD",
+      maximumFractionDigits: 0,
+    }).format(cents / 100);
+  } catch {
+    // Unknown currency code — show the code rather than a wrong symbol.
+    return `${currency} ${(cents / 100).toLocaleString()}`;
+  }
+}
 
 export default function CrmHubPage() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
@@ -22,23 +36,18 @@ export default function CrmHubPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/contacts").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/contacts?countOnly=1").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/companies").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/deals").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/pipeline").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/deals?summary=1").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/pipeline/stages").then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([contacts, companies, deals, pipeline]) => {
-        const dealList = (deals?.deals ?? []) as Array<{
-          status: string;
-          amountCents: number | null;
-        }>;
-        const open = dealList.filter((d) => d.status === "OPEN");
         setSnap({
-          contacts: (contacts?.contacts ?? []).length,
+          contacts: typeof contacts?.total === "number" ? contacts.total : 0,
           companies: (companies?.companies ?? []).length,
-          openDeals: open.length,
-          dealValueCents: open.reduce((n, d) => n + (d.amountCents ?? 0), 0),
-          stages: (pipeline?.pipeline?.stages ?? []).length,
+          openDeals: typeof deals?.openDeals === "number" ? deals.openDeals : 0,
+          openValueByCurrency: deals?.openValueByCurrency ?? [],
+          stages: (pipeline?.stages ?? []).length,
         });
       })
       .catch(() => setSnap(null))
@@ -56,11 +65,17 @@ export default function CrmHubPage() {
           <Metric title="Contacts" value={String(snap.contacts)} href="/contacts" />
           <Metric title="Companies" value={String(snap.companies)} href="/companies" />
           <Metric title="Open deals" value={String(snap.openDeals)} href="/deals" />
-          {snap.dealValueCents > 0 ? (
+          {snap.openValueByCurrency.length > 0 ? (
             <Metric
               title="Open pipeline value"
-              value={`£${(snap.dealValueCents / 100).toLocaleString()}`}
-              body="Sum of open deal amounts"
+              value={snap.openValueByCurrency
+                .map((v) => formatMoney(v.amountCents, v.currency))
+                .join(" · ")}
+              body={
+                snap.openValueByCurrency.length > 1
+                  ? "Sum of open deal amounts, per currency"
+                  : "Sum of open deal amounts"
+              }
               href="/pipeline"
             />
           ) : (

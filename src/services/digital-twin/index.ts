@@ -142,6 +142,49 @@ export async function createAudienceSegment(input: {
   });
 }
 
+/**
+ * Idempotent variant for singleton rows (e.g. onboarding's "Primary offering"): update the
+ * org's existing offering with this name, or create it. Repeated saves never duplicate.
+ */
+export async function upsertProductOfferingByName(input: {
+  organisationId: string;
+  name: string;
+  description?: string;
+}) {
+  const existing = await prisma.productOffering.findFirst({
+    where: { organisationId: input.organisationId, name: input.name },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (existing) {
+    return prisma.productOffering.update({
+      where: { id: existing.id },
+      data: { description: input.description },
+    });
+  }
+  return createProductOffering(input);
+}
+
+/** Idempotent variant of createAudienceSegment keyed by (organisation, name). */
+export async function upsertAudienceSegmentByName(input: {
+  organisationId: string;
+  name: string;
+  description?: string;
+}) {
+  const existing = await prisma.audienceSegment.findFirst({
+    where: { organisationId: input.organisationId, name: input.name },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (existing) {
+    return prisma.audienceSegment.update({
+      where: { id: existing.id },
+      data: { description: input.description },
+    });
+  }
+  return createAudienceSegment(input);
+}
+
 export async function upsertBusinessClaim(input: {
   organisationId: string;
   subjectType: string;

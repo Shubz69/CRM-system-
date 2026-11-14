@@ -31,6 +31,7 @@ import {
 import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/opt-out";
 import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
+import { aiMayMoveStage, aiMaySetQualification } from "@/services/lead-stage-guard";
 import { recordUsage } from "@/services/usage";
 import {
   capabilityAllowsAuto,
@@ -57,6 +58,45 @@ import {
   resolveChannelInstagramUsername,
 } from "@/services/messaging/channel-identity";
 
+/**
+ * The inbound write transaction runs ~15–20 sequential statements (contact, conversation,
+ * message, lead, up to four domain events at three statements each) through the Supabase
+ * transaction pooler. Prisma's 5s default expired in production under cold starts, which
+ * dropped Zernio/ManyChat DMs with "Transaction already closed" / "Transaction not found".
+ */
+const INBOUND_TRANSACTION_OPTIONS = {
+  maxWait: Number(process.env.INBOUND_TX_MAX_WAIT_MS || 10_000),
+  timeout: Number(process.env.INBOUND_TX_TIMEOUT_MS || 25_000),
+} as const;
+
+const INBOUND_TX_MAX_ATTEMPTS = 3;
+
+/**
+ * Postgres aborts a transaction on a unique violation (every later statement fails with
+ * 25P02), so a racing insert — two DMs from a brand-new lead ~1s apart — cannot be
+ * recovered inside it. Re-run the whole transaction instead: the retry reads the
+ * contact / identifier / conversation / message rows the other request committed.
+ */
+async function retryOnUniqueConflict<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== "P2002" ||
+        attempt >= INBOUND_TX_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+      logger.warn("Inbound transaction hit a concurrent insert; retrying", {
+        attempt,
+        target: JSON.stringify(error.meta?.target ?? null),
+      });
+    }
+  }
+}
+
 function mapQualificationStatus(status: string): QualificationStatus {
   switch (status) {
     case "qualified":
@@ -68,19 +108,6 @@ function mapQualificationStatus(status: string): QualificationStatus {
     default:
       return QualificationStatus.UNKNOWN;
   }
-}
-
-async function getDefaultStage(organisationId: string, slug: string) {
-  const pipeline = await prisma.pipeline.findFirst({
-    where: { organisationId, isDefault: true },
-    include: { stages: true },
-  });
-  if (!pipeline) return null;
-  return (
-    pipeline.stages.find((s) => s.slug === slug) ??
-    pipeline.stages.sort((a, b) => a.position - b.position)[0] ??
-    null
-  );
 }
 
 export type InboundProcessResult = {
@@ -207,7 +234,14 @@ export async function processInboundMessage(
     // COMMIT, so nothing slow (module loading) should run while it is held.
     const { appendDomainEvent } = await import("@/services/domain-events/append");
 
-    const result = await prisma.$transaction(async (tx) => {
+    // Read-only lookup kept outside the transaction: every statement inside it is a
+    // round trip to the pooler while row locks are held.
+    const defaultPipeline = await prisma.pipeline.findFirst({
+      where: { organisationId: input.organisationId, isDefault: true },
+      include: { stages: true },
+    });
+
+    const result = await retryOnUniqueConflict(() => prisma.$transaction(async (tx) => {
       let channel = await tx.messagingChannel.findFirst({
         where: {
           organisationId: input.organisationId,
@@ -316,41 +350,24 @@ export async function processInboundMessage(
             email: input.contact.email || contact.email,
             phone: input.contact.phone || contact.phone,
             campaignSource: input.campaignSource || contact.campaignSource,
+            // The identifier lookup also finds soft-deleted contacts; a person writing in
+            // again restores them (otherwise every reply fails CONTACT_NOT_FOUND).
+            ...(contact.deletedAt ? { deletedAt: null } : {}),
           },
         });
         contactUpdated = true;
 
         if (!contactIdentifier) {
-          try {
-            await tx.contactIdentifier.create({
-              data: {
-                organisationId: input.organisationId,
-                contactId: contact.id,
-                channel: messagingProvider,
-                identifier: identifierValue,
-              },
-            });
-          } catch (error) {
-            if (
-              !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-              error.code !== "P2002"
-            ) {
-              throw error;
-            }
-            const raced = await tx.contactIdentifier.findUnique({
-              where: {
-                organisationId_channel_identifier: {
-                  organisationId: input.organisationId,
-                  channel: messagingProvider,
-                  identifier: identifierValue,
-                },
-              },
-              include: { contact: true },
-            });
-            if (raced?.contact) {
-              contact = raced.contact;
-            }
-          }
+          // A concurrent insert raises P2002 here; retryOnUniqueConflict re-runs the
+          // transaction, which then finds the other request's identifier.
+          await tx.contactIdentifier.create({
+            data: {
+              organisationId: input.organisationId,
+              contactId: contact.id,
+              channel: messagingProvider,
+              identifier: identifierValue,
+            },
+          });
         }
       }
 
@@ -366,41 +383,24 @@ export async function processInboundMessage(
       let conversationCreated = false;
       if (!conversation) {
         const windows = openMessagingWindows();
-        try {
-          conversation = await tx.conversation.create({
-            data: {
-              organisationId: input.organisationId,
-              contactId: contact.id,
-              messagingChannelId: channel.id,
-              externalThreadId: threadKey,
-              handlingMode: HandlingMode.AI,
-              unreadCount: 1,
-              lastMessageAt: windows.lastInboundAt,
-              lastMessagePreview: input.message.text.slice(0, 140),
-              lastInboundAt: windows.lastInboundAt,
-              messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
-              humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
-              metadata: (input.metadata || {}) as Prisma.InputJsonValue,
-            },
-          });
-          conversationCreated = true;
-        } catch (error) {
-          if (
-            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-            error.code !== "P2002"
-          ) {
-            throw error;
-          }
-          conversation = await tx.conversation.findUnique({
-            where: {
-              organisationId_externalThreadId: {
-                organisationId: input.organisationId,
-                externalThreadId: threadKey,
-              },
-            },
-          });
-          if (!conversation) throw error;
-        }
+        // A concurrent create raises P2002; the transaction retry then finds that thread.
+        conversation = await tx.conversation.create({
+          data: {
+            organisationId: input.organisationId,
+            contactId: contact.id,
+            messagingChannelId: channel.id,
+            externalThreadId: threadKey,
+            handlingMode: HandlingMode.AI,
+            unreadCount: 1,
+            lastMessageAt: windows.lastInboundAt,
+            lastMessagePreview: input.message.text.slice(0, 140),
+            lastInboundAt: windows.lastInboundAt,
+            messagingWindowExpiresAt: windows.messagingWindowExpiresAt,
+            humanMessagingWindowExpiresAt: windows.humanMessagingWindowExpiresAt,
+            metadata: (input.metadata || {}) as Prisma.InputJsonValue,
+          },
+        });
+        conversationCreated = true;
       }
       if (!conversationCreated && conversation) {
         const windows = openMessagingWindows();
@@ -437,67 +437,30 @@ export async function processInboundMessage(
 
       const externalId =
         input.message.externalId || `in_${idempotencyKey.slice(0, 24)}`;
-      let inboundMessage;
-      if (input.message.externalId) {
-        inboundMessage = await tx.message.upsert({
-          where: {
-            conversationId_externalId: {
-              conversationId: conversation.id,
-              externalId,
-            },
-          },
-          create: {
+      // Upsert (not create + catch P2002): a redelivered message returns the stored row, and a
+      // concurrent insert surfaces as P2002 for the whole-transaction retry.
+      const inboundMessage = await tx.message.upsert({
+        where: {
+          conversationId_externalId: {
             conversationId: conversation.id,
-            organisationId: input.organisationId,
             externalId,
-            direction: MessageDirection.INBOUND,
-            senderType: MessageSenderType.CONTACT,
-            body: input.message.text,
-            origin: provider,
-            rawPayload: (options?.rawPayload as object) ?? undefined,
-            sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
           },
-          update: {},
-        });
-      } else {
-        try {
-          inboundMessage = await tx.message.create({
-            data: {
-              conversationId: conversation.id,
-              organisationId: input.organisationId,
-              externalId,
-              direction: MessageDirection.INBOUND,
-              senderType: MessageSenderType.CONTACT,
-              body: input.message.text,
-              origin: provider,
-              rawPayload: (options?.rawPayload as object) ?? undefined,
-              sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
-            },
-          });
-        } catch (error) {
-          if (
-            !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-            error.code !== "P2002"
-          ) {
-            throw error;
-          }
-          const existingMessage = await tx.message.findUnique({
-            where: {
-              conversationId_externalId: {
-                conversationId: conversation.id,
-                externalId,
-              },
-            },
-          });
-          if (!existingMessage) throw error;
-          inboundMessage = existingMessage;
-        }
-      }
-
-      const pipeline = await tx.pipeline.findFirst({
-        where: { organisationId: input.organisationId, isDefault: true },
-        include: { stages: true },
+        },
+        create: {
+          conversationId: conversation.id,
+          organisationId: input.organisationId,
+          externalId,
+          direction: MessageDirection.INBOUND,
+          senderType: MessageSenderType.CONTACT,
+          body: input.message.text,
+          origin: provider,
+          rawPayload: (options?.rawPayload as object) ?? undefined,
+          sentAt: input.message.sentAt ? new Date(input.message.sentAt) : new Date(),
+        },
+        update: {},
       });
+
+      const pipeline = defaultPipeline;
       const newStage =
         pipeline?.stages.find((s) => s.slug === "new") ??
         pipeline?.stages.sort((a, b) => a.position - b.position)[0];
@@ -578,7 +541,7 @@ export async function processInboundMessage(
       }
 
       return { contact, conversation, inboundMessage, lead, channel };
-    });
+    }, INBOUND_TRANSACTION_OPTIONS));
 
     const agentConfig = await prisma.agentConfiguration.findFirst({
       where: { organisationId: input.organisationId, isActive: true, isDraft: false },
@@ -694,6 +657,7 @@ export async function processInboundMessage(
       conversationId: result.conversation.id,
       leadId: result.lead.id,
       triggerType: "lead_replied",
+      payload: { text: input.message.text },
     });
 
     await runAutomations({
@@ -836,6 +800,12 @@ export async function processInboundMessage(
       rules: (agentConfig?.scoringRules as { weights?: Record<string, number> }) ?? undefined,
       messageCount: recentMessages.length,
     });
+    // What automation conditions (score / sentiment / topic) are evaluated against.
+    const analysisPayload = {
+      text: input.message.text,
+      score: score.totalScore,
+      sentiment: analysis.sentiment,
+    };
 
     const allowPipeline = capabilityAllowsAuto(autopilotConfig, "pipelineManagement");
     const allowScoring = capabilityAllowsAuto(autopilotConfig, "leadScoring");
@@ -853,9 +823,19 @@ export async function processInboundMessage(
     }
     if (forceHandover) stageSlug = "qualifying";
 
-    const stage = allowPipeline
-      ? await getDefaultStage(input.organisationId, stageSlug)
+    const targetStage = allowPipeline
+      ? defaultPipeline?.stages.find((s) => s.slug === stageSlug) ?? null
       : null;
+    const currentStage = defaultPipeline?.stages.find((s) => s.id === result.lead.stageId) ?? null;
+    // Never undo a person's stage move or drag a lead backwards / out of Booked or Won.
+    const stage =
+      targetStage &&
+      aiMayMoveStage({ current: currentStage, target: targetStage, metadata: result.lead.metadata })
+        ? targetStage
+        : null;
+    const allowQualificationWrite =
+      capabilityAllowsAuto(autopilotConfig, "qualification") &&
+      aiMaySetQualification(result.lead.metadata);
 
     await prisma.$transaction(async (tx) => {
       await tx.conversation.update({
@@ -900,7 +880,7 @@ export async function processInboundMessage(
         where: { id: result.lead.id },
         data: {
           summary: analysis.conversation_summary,
-          qualificationStatus: capabilityAllowsAuto(autopilotConfig, "qualification")
+          qualificationStatus: allowQualificationWrite
             ? mapQualificationStatus(analysis.qualification_status)
             : undefined,
           score: allowScoring ? score.totalScore : undefined,
@@ -912,7 +892,7 @@ export async function processInboundMessage(
             aiProvider: routed.provider,
             aiModel: routed.model,
             aiTaskType: routed.taskType,
-            stageChangedBy: allowPipeline
+            stageChangedBy: stage
               ? "AI"
               : typeof existingMeta.stageChangedBy === "string"
                 ? existingMeta.stageChangedBy
@@ -1058,7 +1038,7 @@ export async function processInboundMessage(
         conversationId: result.conversation.id,
         leadId: result.lead.id,
         triggerType: "human_requested",
-        payload: { reason: analysis.handover_reason },
+        payload: { ...analysisPayload, reason: analysis.handover_reason },
       });
     }
 
@@ -1073,6 +1053,7 @@ export async function processInboundMessage(
         conversationId: result.conversation.id,
         leadId: result.lead.id,
         triggerType: "negative_sentiment",
+        payload: analysisPayload,
       });
     }
 
@@ -1082,32 +1063,48 @@ export async function processInboundMessage(
       score: score.totalScore,
     });
 
-    await runAutomations({
-      organisationId: input.organisationId,
-      contactId: result.contact.id,
-      conversationId: result.conversation.id,
-      leadId: result.lead.id,
-      triggerType: "lead_score_changed",
-      payload: { score: score.totalScore },
-    });
+    // "Score changed" means changed — it used to fire on every message.
+    if ((result.lead.score ?? 0) !== score.totalScore) {
+      await runAutomations({
+        organisationId: input.organisationId,
+        contactId: result.contact.id,
+        conversationId: result.conversation.id,
+        leadId: result.lead.id,
+        triggerType: "lead_score_changed",
+        payload: { ...analysisPayload, previousScore: result.lead.score ?? 0 },
+      });
+    }
 
-    if (analysis.qualification_status === "qualified") {
+    // Fire on the transition only. These used to run on every message from an already
+    // qualified lead, creating a new approval / follow-up each time.
+    const previousQualification = result.lead.qualificationStatus;
+    if (
+      analysis.qualification_status === "qualified" &&
+      allowQualificationWrite &&
+      previousQualification !== QualificationStatus.QUALIFIED
+    ) {
       await runAutomations({
         organisationId: input.organisationId,
         contactId: result.contact.id,
         conversationId: result.conversation.id,
         leadId: result.lead.id,
         triggerType: "lead_qualified",
+        payload: analysisPayload,
       });
     }
 
-    if (analysis.qualification_status === "disqualified") {
+    if (
+      analysis.qualification_status === "disqualified" &&
+      allowQualificationWrite &&
+      previousQualification !== QualificationStatus.DISQUALIFIED
+    ) {
       await runAutomations({
         organisationId: input.organisationId,
         contactId: result.contact.id,
         conversationId: result.conversation.id,
         leadId: result.lead.id,
         triggerType: "lead_disqualified",
+        payload: analysisPayload,
       });
     }
 
@@ -1145,6 +1142,9 @@ export async function processInboundMessage(
         });
       } else {
       let reply = analysis.reply;
+      // Recorded only once the reply carrying it is actually sent (below) — a draft awaiting
+      // approval, or a failed send, has not offered anything.
+      let offeredBookingUrl: string | null = null;
       if (analysis.recommended_next_action === "send_booking_link" && allowBooking) {
         const booking = await getBookingProvider().createBookingLink({
           organisationId: input.organisationId,
@@ -1157,31 +1157,13 @@ export async function processInboundMessage(
           if (!reply.includes(booking.url)) {
             reply = `${reply}\n\nBook here: ${booking.url}`;
           }
-          await prisma.booking.create({
-            data: {
-              organisationId: input.organisationId,
-              contactId: result.contact.id,
-              conversationId: result.conversation.id,
-              leadId: result.lead.id,
-              provider: process.env.BOOKING_PROVIDER || "link",
-              status: BookingStatus.OFFERED,
-              bookingUrl: booking.url,
-              attribution: {
-                source: input.leadSource || "instagram_manychat",
-                campaign: input.campaignSource || null,
-              },
-            },
-          });
-          await runAutomations({
-            organisationId: input.organisationId,
-            contactId: result.contact.id,
-            conversationId: result.conversation.id,
-            leadId: result.lead.id,
-            triggerType: "booking_link_sent",
-            payload: { bookingUrl: booking.url },
-          });
+          offeredBookingUrl = booking.url;
         }
       }
+
+      // One lease holder per inbound message: overlapping replies on this conversation must
+      // not share a lease (and release each other's).
+      const replyHolder = `ai:${result.conversation.id}:${result.inboundMessage.id}`;
 
       const mustRequireApproval =
         !isAiAutoSocialSendEnabled() ||
@@ -1202,7 +1184,7 @@ export async function processInboundMessage(
             channel: messagingProvider,
             threadId: result.conversation.externalThreadId ?? undefined,
             source: "AI",
-            holder: `ai:${result.conversation.id}`,
+            holder: replyHolder,
             idempotencyKey: `ai-reply:${result.inboundMessage.id}`,
             agentVersion: routed.model,
             inboundMessageId: result.inboundMessage.id,
@@ -1231,12 +1213,15 @@ export async function processInboundMessage(
         contactExternalId: input.contact.externalId,
         text: reply,
         source: "AI",
-        holder: `ai:${result.conversation.id}`,
+        holder: replyHolder,
         idempotencyKey: `ai-reply:${result.inboundMessage.id}`,
         threadId: result.conversation.externalThreadId ?? undefined,
         agentVersion: routed.model,
         provider: messagingProvider,
         channel: messagingProvider,
+        // The version this reply was drafted against. Outbound used to snapshot it after the
+        // multi-second AI call, so a newer DM arriving meanwhile never made this reply stale.
+        expectedActivityVersion: result.conversation.activityVersion,
       });
 
       if (sendResult.ok && sendResult.dispatch?.messageId) {
@@ -1292,28 +1277,69 @@ export async function processInboundMessage(
       }
       }
 
-      const delays = Array.isArray(agentConfig?.followUpDelaysMinutes)
-        ? (agentConfig?.followUpDelaysMinutes as number[])
-        : [60, 1440, 4320];
+      if (aiReplySent && offeredBookingUrl) {
+        // Retries / repeat offers reuse the open offer instead of stacking OFFERED rows.
+        const openOffer = await prisma.booking.findFirst({
+          where: {
+            organisationId: input.organisationId,
+            leadId: result.lead.id,
+            status: BookingStatus.OFFERED,
+          },
+          select: { id: true },
+        });
+        if (!openOffer) {
+          await prisma.booking.create({
+            data: {
+              organisationId: input.organisationId,
+              contactId: result.contact.id,
+              conversationId: result.conversation.id,
+              leadId: result.lead.id,
+              provider: process.env.BOOKING_PROVIDER || "link",
+              status: BookingStatus.OFFERED,
+              bookingUrl: offeredBookingUrl,
+              attribution: {
+                source: input.leadSource || "instagram_manychat",
+                campaign: input.campaignSource || null,
+              },
+            },
+          });
+        }
+        await runAutomations({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+          conversationId: result.conversation.id,
+          leadId: result.lead.id,
+          triggerType: "booking_link_sent",
+          payload: { bookingUrl: offeredBookingUrl },
+        });
+      }
 
-      await scheduleFollowUps({
-        organisationId: input.organisationId,
-        contactId: result.contact.id,
-        conversationId: result.conversation.id,
-        leadId: result.lead.id,
-        delaysMinutes: delays,
-        maxFollowUps: agentConfig?.maxFollowUps ?? 3,
-        skipIfAutopilotDisabled: true,
-        policyInputs: {
-          intent: analysis.intent || l0.intent,
-          qualificationStatus: analysis.qualification_status || result.lead.qualificationStatus,
-          attemptNumber: 0,
-          maxAttempts: agentConfig?.maxFollowUps ?? 3,
-          meetingBooked: analysis.recommended_next_action === "send_booking_link",
-          optedOut: false,
-          lastInboundAt: result.conversation.lastInboundAt,
-        },
-      });
+      // Follow-ups chase a reply the lead actually received — not a draft awaiting approval
+      // or a send that failed.
+      if (aiReplySent) {
+        const delays = Array.isArray(agentConfig?.followUpDelaysMinutes)
+          ? (agentConfig?.followUpDelaysMinutes as number[])
+          : [60, 1440, 4320];
+
+        await scheduleFollowUps({
+          organisationId: input.organisationId,
+          contactId: result.contact.id,
+          conversationId: result.conversation.id,
+          leadId: result.lead.id,
+          delaysMinutes: delays,
+          maxFollowUps: agentConfig?.maxFollowUps ?? 3,
+          skipIfAutopilotDisabled: true,
+          policyInputs: {
+            intent: analysis.intent || l0.intent,
+            qualificationStatus: analysis.qualification_status || result.lead.qualificationStatus,
+            attemptNumber: 0,
+            maxAttempts: agentConfig?.maxFollowUps ?? 3,
+            meetingBooked: analysis.recommended_next_action === "send_booking_link",
+            optedOut: false,
+            lastInboundAt: result.conversation.lastInboundAt,
+          },
+        });
+      }
       }
     } else {
       await writeAuditLog({

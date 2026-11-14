@@ -92,6 +92,7 @@ vi.mock("@/lib/env", () => ({
 
 vi.mock("bcryptjs", () => ({
   hash: vi.fn(async (pw: string) => `hashed:${pw}`),
+  compare: vi.fn(async (pw: string, stored: string) => stored === `hashed:${pw}`),
 }));
 
 import { prisma } from "@/lib/db";
@@ -393,6 +394,129 @@ describe("workspace onboarding", () => {
     expect(prisma.$transaction).toHaveBeenCalled();
   });
 
+  describe("account takeover guards", () => {
+    const raw = "c".repeat(40);
+    const pendingInvite = {
+      id: "inv_victim",
+      organisationId: "org_corp",
+      email: "victim@corp.test",
+      role: MemberRole.OWNER,
+      tokenHash: hashToken(raw),
+      status: InvitationStatus.PENDING,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      acceptedAt: null,
+      invitedById: "owner_1",
+      organisation: { id: "org_corp", name: "Corp", deletedAt: null },
+    };
+    // An account someone else pre-registered for the invitee's email.
+    const preRegistered = {
+      id: "user_attacker",
+      email: "victim@corp.test",
+      name: null,
+      passwordHash: "hashed:attacker-password",
+      isActive: true,
+      isSuspended: false,
+    };
+
+    it("acceptInvite refuses an existing account unless its password is proven", async () => {
+      mocks.organisationInvitation.findUnique.mockResolvedValue(pendingInvite);
+      mocks.user.findFirst.mockResolvedValue(preRegistered);
+
+      await expect(
+        acceptInvite({ token: raw, email: "victim@corp.test", password: "victims-own-password" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        acceptInvite({ token: raw, email: "victim@corp.test" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(mocks.organisationMember.create).not.toHaveBeenCalled();
+      expect(mocks.user.update).not.toHaveBeenCalled();
+    });
+
+    it("acceptInvite joins an existing account when its password is correct", async () => {
+      mocks.organisationInvitation.findUnique.mockResolvedValue(pendingInvite);
+      mocks.user.findFirst.mockResolvedValue(preRegistered);
+      mocks.user.update.mockResolvedValue(preRegistered);
+      mocks.organisationMember.findUnique.mockResolvedValue(null);
+      mocks.organisationMember.create.mockResolvedValue({ id: "mem_ok" });
+      mocks.organisationInvitation.update.mockResolvedValue({});
+
+      const result = await acceptInvite({
+        token: raw,
+        email: "victim@corp.test",
+        password: "attacker-password",
+      });
+      expect(result.userId).toBe("user_attacker");
+    });
+
+    it("acceptInvite never reactivates a disabled account", async () => {
+      mocks.organisationInvitation.findUnique.mockResolvedValue(pendingInvite);
+      mocks.user.findFirst.mockResolvedValue({ ...preRegistered, isActive: false });
+      await expect(
+        acceptInvite({ token: raw, email: "victim@corp.test", password: "attacker-password" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(mocks.user.update).not.toHaveBeenCalled();
+    });
+
+    it("unauthenticated createWorkspaceWithOwner cannot attach an existing account", async () => {
+      mocks.organisation.findUnique.mockResolvedValue(null);
+      mocks.user.findFirst.mockResolvedValue(preRegistered);
+
+      await expect(
+        createWorkspaceWithOwner({
+          name: "Junk",
+          ownerEmail: "victim@corp.test",
+          password: "whatever-password",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(mocks.organisation.create).not.toHaveBeenCalled();
+      expect(mocks.user.update).not.toHaveBeenCalled();
+    });
+
+    it("an ADMINISTRATOR cannot promote anyone (or themselves) to OWNER", async () => {
+      mocks.organisationMember.findUnique.mockImplementation(
+        async (args: { where: { organisationId_userId: { userId: string } } }) =>
+          args.where.organisationId_userId.userId === "admin_1"
+            ? { id: "mem_admin", role: MemberRole.ADMINISTRATOR, userId: "admin_1", user: {} }
+            : null,
+      );
+
+      await expect(
+        changeMemberRole({
+          organisationId: "org_1",
+          userId: "admin_1",
+          role: MemberRole.OWNER,
+          actorUserId: "admin_1",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(mocks.organisationMember.update).not.toHaveBeenCalled();
+    });
+
+    it("an ADMINISTRATOR cannot demote or remove an OWNER", async () => {
+      mocks.organisationMember.findUnique.mockImplementation(
+        async (args: { where: { organisationId_userId: { userId: string } } }) =>
+          args.where.organisationId_userId.userId === "admin_1"
+            ? { id: "mem_admin", role: MemberRole.ADMINISTRATOR, userId: "admin_1", user: {} }
+            : { id: "mem_owner", role: MemberRole.OWNER, userId: "owner_1", user: {} },
+      );
+      mocks.organisationMember.count.mockResolvedValue(2);
+
+      await expect(
+        changeMemberRole({
+          organisationId: "org_1",
+          userId: "owner_1",
+          role: MemberRole.READ_ONLY,
+          actorUserId: "admin_1",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        removeMember({ organisationId: "org_1", userId: "owner_1", actorUserId: "admin_1" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(mocks.organisationMember.update).not.toHaveBeenCalled();
+      expect(mocks.organisationMember.delete).not.toHaveBeenCalled();
+    });
+  });
+
   it("resend/revoke are organisation-scoped (cross-org not found)", async () => {
     mocks.organisationInvitation.findFirst.mockResolvedValue(null);
 
@@ -443,13 +567,18 @@ describe("workspace onboarding", () => {
   });
 
   it("changeMemberRole can transfer ownership when another OWNER exists", async () => {
-    mocks.organisationMember.findUnique.mockResolvedValue({
-      id: "mem_mgr",
-      organisationId: "org_1",
-      userId: "mgr_1",
-      role: MemberRole.MANAGER,
-      user: { isPlatformAdmin: false, email: "m@acme.test" },
-    });
+    mocks.organisationMember.findUnique.mockImplementation(
+      async (args: { where: { organisationId_userId: { userId: string } } }) =>
+        args.where.organisationId_userId.userId === "owner_1"
+          ? { id: "mem_owner", organisationId: "org_1", userId: "owner_1", role: MemberRole.OWNER }
+          : {
+              id: "mem_mgr",
+              organisationId: "org_1",
+              userId: "mgr_1",
+              role: MemberRole.MANAGER,
+              user: { isPlatformAdmin: false, email: "m@acme.test" },
+            },
+    );
     mocks.organisationMember.update.mockResolvedValue({
       id: "mem_mgr",
       userId: "mgr_1",

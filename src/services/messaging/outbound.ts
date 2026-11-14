@@ -21,6 +21,8 @@ import {
 import { resolveMessagingSendCredential } from "@/services/messaging/credentials";
 
 const LEASE_MS = 30_000;
+const LEASE_WAIT_ATTEMPTS = 5;
+const LEASE_WAIT_MS = 300;
 
 export type OutboundSource =
   | "HUMAN"
@@ -411,14 +413,25 @@ export async function dispatchOutboundMessage(
     });
   }
 
-  const leased = await acquireLease({
+  const leaseInput = {
     organisationId: input.organisationId,
     conversationId: input.conversationId,
     holder,
     preempt: source === "HUMAN",
     expectedLastMessageId,
     expectedActivityVersion,
-  });
+  };
+  let leased = await acquireLease(leaseInput);
+  // Automated holders are per dispatch, so another send may hold the lease for a moment
+  // (often an older reply about to fail STALE_CONTEXT). Wait briefly rather than drop this one.
+  for (
+    let attempt = 1;
+    !leased && source !== "HUMAN" && attempt <= LEASE_WAIT_ATTEMPTS;
+    attempt += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, LEASE_WAIT_MS));
+    leased = await acquireLease(leaseInput);
+  }
   if (!leased) {
     return { ok: false as const, code: "LEASE_UNAVAILABLE" as const, dispatch };
   }
@@ -654,6 +667,8 @@ export async function prepareAndSendOutbound(input: {
   source?: OutboundSource;
   actorId?: string;
   metadata?: Record<string, unknown>;
+  /** Activity version the content was drafted against (see DispatchOutboundInput). */
+  expectedActivityVersion?: number;
 }) {
   const source: OutboundSource =
     input.source ??
@@ -682,5 +697,6 @@ export async function prepareAndSendOutbound(input: {
     agentVersion: input.agentVersion,
     actorId: input.actorId,
     metadata: input.metadata,
+    expectedActivityVersion: input.expectedActivityVersion,
   });
 }

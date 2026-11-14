@@ -6,6 +6,13 @@
 import { ApprovalRequestStatus, FollowUpStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ensureBuiltinToolsRegistered, evaluateToolPolicy } from "@/kernel";
+import {
+  AUTOMATION_TRIGGERS,
+  EXECUTABLE_AUTOMATION_ACTIONS,
+  isExecutableAutomationAction,
+  isFiringAutomationTrigger,
+  type AutomationTrigger,
+} from "@/lib/customer-labels";
 
 export type WorkflowStep = {
   id: string;
@@ -40,19 +47,63 @@ export function isOutboundAction(type: string): boolean {
 }
 
 /**
- * Compile natural language into a visible workflow. Only known triggers/actions.
+ * Validate a rule's trigger and actions against what actually runs:
+ * the trigger must be one that is emitted, and every action must have an executor.
+ * Returns a customer-readable error, or null when valid. Omitted fields are not checked.
+ */
+export function validateAutomationRule(input: {
+  triggerType?: string | null;
+  actions?: Array<Record<string, unknown>> | null;
+}): string | null {
+  if (input.triggerType !== undefined && input.triggerType !== null) {
+    if (!isFiringAutomationTrigger(input.triggerType)) {
+      return `Unknown trigger "${input.triggerType}" — it never fires. Use one of: ${AUTOMATION_TRIGGERS.join(", ")}.`;
+    }
+  }
+  if (input.actions) {
+    if (input.actions.length === 0) return "Add at least one action.";
+    for (const action of input.actions) {
+      const type = typeof action?.type === "string" ? action.type : "";
+      if (!isExecutableAutomationAction(type)) {
+        return `Action "${type || "(missing)"}" is not supported by automations. Use one of: ${EXECUTABLE_AUTOMATION_ACTIONS.join(", ")}.`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Compile natural language into a visible workflow. Only triggers that fire and actions
+ * with an executor are emitted.
  */
 export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
   const text = nl.trim();
   if (!text) throw new Error("Natural language is required");
 
   const lower = text.toLowerCase();
-  let triggerType = "lead_created";
-  if (lower.includes("qualified") || lower.includes("qualification")) {
+  const unsupported: string[] = [];
+  const mentionsInactivity =
+    lower.includes("inactive") ||
+    lower.includes("no reply") ||
+    lower.includes("no response") ||
+    /\b(?:doesn't|does not|hasn't|has not|don't|didn't) (?:reply|respond)/.test(lower);
+  let triggerType: AutomationTrigger = "lead_created";
+  // "disqualified" contains "qualified" — check it first.
+  if (lower.includes("disqualified")) {
+    triggerType = "lead_disqualified";
+  } else if (lower.includes("qualified") || lower.includes("qualification")) {
     triggerType = "lead_qualified";
-  } else if (lower.includes("inactive") || lower.includes("no reply") || lower.includes("follow")) {
-    triggerType = "conversation_inactive";
-  } else if (lower.includes("booking") || lower.includes("booked")) {
+  } else if (mentionsInactivity) {
+    // There is no inactivity trigger. Scheduling the follow-up on each inbound message gives the
+    // same effect: pending follow-ups are cancelled automatically when the lead replies.
+    triggerType = "new_inbound_message";
+    unsupported.push(
+      "There is no inactivity trigger — this runs when a customer message arrives and schedules the follow-up after the delay. Pending follow-ups are cancelled automatically when the lead replies.",
+    );
+  } else if (
+    (lower.includes("booking") && !lower.includes("booking link")) ||
+    lower.includes("booked")
+  ) {
     triggerType = "booking_created";
   } else if (
     lower.includes("message") ||
@@ -60,22 +111,19 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
     lower.includes("asks about") ||
     lower.includes("dm")
   ) {
-    triggerType = "message_received";
-  } else if (lower.includes("disqualified")) {
-    triggerType = "lead_disqualified";
+    triggerType = "new_inbound_message";
   }
 
   const conditions: Record<string, unknown> = {};
-  const unsupported: string[] = [];
   const scoreMatch = lower.match(/scores?\s*(?:>=|>|above)\s*(\d+)/);
   if (scoreMatch) conditions.minScore = Number(scoreMatch[1]);
   if (/\bpricing\b|\bprice\b/.test(lower)) {
     conditions.topicIncludes = ["pricing", "price"];
+    unsupported.push(
+      "Topic filters (e.g. pricing) are recorded but not checked yet — the rule runs on every matching trigger.",
+    );
   }
   const minutesMatch = lower.match(/(\d+)\s*min/);
-  if (minutesMatch && triggerType === "conversation_inactive") {
-    conditions.minutes = Number(minutesMatch[1]);
-  }
 
   const actions: Array<Record<string, unknown>> = [];
   if (lower.includes("pause ai") || lower.includes("handover") || lower.includes("hand over")) {
@@ -88,7 +136,11 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
     lower.includes("draft") &&
     (lower.includes("reply") || lower.includes("response") || lower.includes("suggested"))
   ) {
-    actions.push({ type: "draft_reply_for_review", neverSendAutomatically: true });
+    // Automations cannot draft replies — create a task for the team instead (never sends).
+    actions.push({ type: "create_task", message: "Draft a reply for this lead and review it before sending." });
+    unsupported.push(
+      "Automations can't draft replies yet — a task is created for your team to draft one. Nothing is sent automatically.",
+    );
   }
   if (lower.includes("never send") || lower.includes("for my review") || lower.includes("for review")) {
     conditions.requireHumanReview = true;
@@ -118,7 +170,6 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
 
   const requiresApproval =
     actions.some((a) => isOutboundAction(String(a.type))) ||
-    actions.some((a) => a.type === "draft_reply_for_review") ||
     Boolean(conditions.requireHumanReview);
   const steps = buildWorkflowSteps({
     triggerType,
@@ -226,6 +277,8 @@ export async function createRuleFromWorkflow(input: {
   isActive?: boolean;
 }): Promise<string> {
   const wf = input.workflow;
+  const invalid = validateAutomationRule({ triggerType: wf.triggerType, actions: wf.actions });
+  if (invalid) throw new Error(invalid);
   const row = await prisma.automationRule.create({
     data: {
       organisationId: input.organisationId,

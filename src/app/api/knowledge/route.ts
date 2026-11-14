@@ -23,6 +23,35 @@ export async function GET() {
   }
 }
 
+/**
+ * Ask/research drafts are all titled "Research draft — <date>" by the client, and
+ * upsertKnowledgeDocument matches on title — so a second draft the same day overwrote the first.
+ * Give each distinct draft its own title ("… (2)", "… (3)"); re-saving identical content returns
+ * the existing draft untouched instead of duplicating it.
+ */
+async function distinctDraftTitle(
+  organisationId: string,
+  title: string,
+  content: string,
+): Promise<{ title: string; existingId?: string }> {
+  const siblings = await prisma.knowledgeDocument.findMany({
+    where: { organisationId, title: { startsWith: title } },
+    select: { id: true, title: true, content: true },
+  });
+  if (!siblings.length) return { title };
+  const isSameTitle = (candidate: string) =>
+    candidate === title ||
+    (candidate.startsWith(`${title} (`) && /^\d+\)$/.test(candidate.slice(title.length + 2)));
+  const sameTitle = siblings.filter((d) => isSameTitle(d.title));
+  const identical = sameTitle.find((d) => d.content === content);
+  if (identical) return { title: identical.title, existingId: identical.id };
+  const taken = new Set(sameTitle.map((d) => d.title));
+  if (!taken.has(title)) return { title };
+  let n = 2;
+  while (taken.has(`${title} (${n})`)) n += 1;
+  return { title: `${title} (${n})` };
+}
+
 const createSchema = z.object({
   title: z.string().min(1),
   category: z.string().min(1),
@@ -90,9 +119,18 @@ export async function POST(req: NextRequest) {
     });
     if (!promotion.ok) return jsonError(promotion.error, 400);
 
+    let title = body.title;
+    if ((body.tags ?? []).includes("from-ask")) {
+      const draft = await distinctDraftTitle(session.organisationId, body.title, body.content);
+      if (draft.existingId) {
+        return Response.json({ id: draft.existingId, chunks: chunkText(body.content).length });
+      }
+      title = draft.title;
+    }
+
     const id = await upsertKnowledgeDocument({
       organisationId: session.organisationId,
-      title: body.title,
+      title,
       category: body.category,
       content: body.content,
       tags: body.tags,

@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   requirePermission,
@@ -8,54 +9,84 @@ import {
 } from "@/lib/session";
 import { z } from "zod";
 
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+
+function parseNonNegativeInt(raw: string | null): number | null {
+  if (raw == null || raw.trim() === "") return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export async function GET(req: Request) {
   try {
     const session = await requirePermission("leads:read");
     const { searchParams } = new URL(req.url);
     const q = searchParams.get("q")?.trim();
 
-    const contacts = await prisma.contact.findMany({
-      where: {
-        organisationId: session.organisationId,
-        deletedAt: null,
-        ...(q
-          ? {
-              OR: [
-                { fullName: { contains: q, mode: "insensitive" } },
-                { instagramUsername: { contains: q, mode: "insensitive" } },
-                { email: { contains: q, mode: "insensitive" } },
-                { phone: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-      },
-      include: {
-        leads: {
-          where: { deletedAt: null },
-          take: 1,
-          include: { stage: true },
-          orderBy: { updatedAt: "desc" },
+    const where: Prisma.ContactWhereInput = {
+      organisationId: session.organisationId,
+      deletedAt: null,
+      ...(q
+        ? {
+            OR: [
+              { fullName: { contains: q, mode: "insensitive" } },
+              { instagramUsername: { contains: q, mode: "insensitive" } },
+              { email: { contains: q, mode: "insensitive" } },
+              { phone: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    // `total` counts the same rows the list is drawn from (it used to ignore `q`).
+    if (searchParams.get("countOnly") === "1") {
+      const total = await prisma.contact.count({ where });
+      return Response.json({ organisationId: session.organisationId, total });
+    }
+
+    // Simple offset paging: ?limit=&offset= (defaults keep the old first-100 behaviour).
+    const limit = Math.min(
+      Math.max(parseNonNegativeInt(searchParams.get("limit")) ?? DEFAULT_LIMIT, 1),
+      MAX_LIMIT,
+    );
+    const offset = parseNonNegativeInt(searchParams.get("offset")) ?? 0;
+
+    const [contacts, total] = await Promise.all([
+      prisma.contact.findMany({
+        where,
+        include: {
+          leads: {
+            where: { deletedAt: null },
+            take: 1,
+            include: { stage: true },
+            orderBy: { updatedAt: "desc" },
+          },
+          tags: { include: { tag: true } },
+          company: { select: { id: true, name: true } },
+          _count: { select: { conversations: true, bookings: true } },
         },
-        tags: { include: { tag: true } },
-        company: { select: { id: true, name: true } },
-        _count: { select: { conversations: true, bookings: true } },
-      },
-      orderBy: [{ lastContactAt: "desc" }, { createdAt: "desc" }],
-      take: 100,
-    });
+        // `id` breaks ties so pages never overlap or skip rows.
+        orderBy: [{ lastContactAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        skip: offset,
+        take: limit,
+      }),
+      prisma.contact.count({ where }),
+    ]);
 
-    const total = await prisma.contact.count({
-      where: { organisationId: session.organisationId, deletedAt: null },
-    });
-
+    const nextOffset = offset + contacts.length;
     return Response.json({
       organisationId: session.organisationId,
       contacts,
       total,
+      limit,
+      offset,
+      nextOffset: nextOffset < total ? nextOffset : null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
 }

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "crypto";
-import { hash } from "bcryptjs";
+import { compare, hash } from "bcryptjs";
 import {
   InvitationStatus,
   MemberRole,
@@ -172,6 +172,16 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
   // Session path: bind to the authenticated user even if body email differs.
   const effectiveEmail = user?.email ?? ownerEmail;
 
+  // Unauthenticated sign-up may only create a brand-new account. It used to attach any
+  // existing user (by email alone) as OWNER of a new workspace, flip their active
+  // workspace and reactivate disabled accounts — without proving who the caller was.
+  if (user && !input.existingUserId) {
+    throw new OnboardingError(
+      "An account already exists for this email. Sign in first, then create the workspace.",
+      "CONFLICT",
+    );
+  }
+
   if (!user) {
     if (!input.password || input.password.length < 10) {
       throw new OnboardingError("Password must be at least 10 characters for new accounts");
@@ -182,7 +192,7 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
         email: effectiveEmail,
         name: input.ownerName?.trim() || null,
         passwordHash,
-        emailVerified: new Date(),
+        // Not verified: nobody has proven they control this inbox yet.
         isActive: true,
       },
     });
@@ -190,8 +200,6 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
     const updates: {
       name?: string | null;
       passwordHash?: string;
-      isActive?: boolean;
-      emailVerified?: Date;
     } = {};
     if (input.ownerName?.trim() && !user.name) {
       updates.name = input.ownerName.trim();
@@ -203,9 +211,10 @@ export async function createWorkspaceWithOwner(input: CreateWorkspaceInput) {
         );
       }
       updates.passwordHash = await hash(input.password, 12);
-      updates.emailVerified = new Date();
     }
-    if (!user.isActive) updates.isActive = true;
+    if (!user.isActive || user.isSuspended) {
+      throw new OnboardingError("This account is disabled.", "FORBIDDEN");
+    }
     if (Object.keys(updates).length > 0) {
       user = await prisma.user.update({ where: { id: user.id }, data: updates });
     }
@@ -567,11 +576,28 @@ export async function acceptInvite(input: AcceptInviteInput) {
       },
     });
   } else {
+    // The invite token proves control of the inbox, not ownership of the account.
+    // Without this check anyone could pre-register the invitee's email with their own
+    // password and receive the membership when the real invitee clicks the link.
+    if (!user.isActive || user.isSuspended) {
+      throw new OnboardingError(
+        "This account is disabled. Ask the workspace admin to contact support.",
+        "FORBIDDEN",
+      );
+    }
+    if (user.passwordHash) {
+      const ownsAccount = Boolean(input.password) && (await compare(input.password!, user.passwordHash));
+      if (!ownsAccount) {
+        throw new OnboardingError(
+          "This email already has an account. Enter that account's password to join, or reset it from the sign-in page first.",
+          "FORBIDDEN",
+        );
+      }
+    }
     const updates: {
       name?: string | null;
       passwordHash?: string;
       activeOrganisationId?: string;
-      isActive?: boolean;
     } = { activeOrganisationId: invite.organisationId };
     if (input.name?.trim() && !user.name) updates.name = input.name.trim();
     if (!user.passwordHash) {
@@ -582,7 +608,6 @@ export async function acceptInvite(input: AcceptInviteInput) {
       }
       updates.passwordHash = await hash(input.password, 12);
     }
-    if (!user.isActive) updates.isActive = true;
     user = await prisma.user.update({ where: { id: user.id }, data: updates });
   }
 
@@ -683,6 +708,24 @@ export async function listPendingInvites(organisationId: string) {
   return fresh;
 }
 
+/**
+ * Granting, demoting or removing an OWNER is reserved for owners. members:manage alone
+ * (which ADMINISTRATOR has) used to let an administrator promote themselves to OWNER,
+ * demote the real owners and then remove them.
+ */
+async function assertActorIsOwner(organisationId: string, actorUserId: string): Promise<void> {
+  const actor = await prisma.organisationMember.findUnique({
+    where: { organisationId_userId: { organisationId, userId: actorUserId } },
+    select: { role: true },
+  });
+  if (!actor || (actor.role !== MemberRole.OWNER && actor.role !== MemberRole.SUPER_ADMIN)) {
+    throw new OnboardingError(
+      "Only a workspace owner can grant, change or remove the owner role",
+      "FORBIDDEN",
+    );
+  }
+}
+
 export async function changeMemberRole(input: {
   organisationId: string;
   userId: string;
@@ -704,6 +747,10 @@ export async function changeMemberRole(input: {
 
   // isPlatformAdmin is a platform flag — never assignable via workspace role change.
   // We only change MemberRole; never touch user.isPlatformAdmin.
+
+  if (member.role === MemberRole.OWNER || input.role === MemberRole.OWNER) {
+    await assertActorIsOwner(input.organisationId, input.actorUserId);
+  }
 
   if (member.role === MemberRole.OWNER && input.role !== MemberRole.OWNER) {
     const owners = await countOwners(input.organisationId);
@@ -749,6 +796,7 @@ export async function removeMember(input: {
   if (!member) throw new OnboardingError("Member not found", "NOT_FOUND");
 
   if (member.role === MemberRole.OWNER) {
+    await assertActorIsOwner(input.organisationId, input.actorUserId);
     const owners = await countOwners(input.organisationId);
     if (owners <= 1) {
       throw new OnboardingError("Cannot remove the last OWNER", "FORBIDDEN");

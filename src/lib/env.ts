@@ -402,6 +402,13 @@ export function getAuthSecret(): string {
   const direct = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
   if (direct && direct.length >= 16) return direct;
   if (isProductionBuild()) return "build-only-auth-secret-not-for-runtime";
+  // The fallback below is public (it is in this repo): anyone could mint a session JWT
+  // with isPlatformAdmin. Refuse to sign or verify sessions with it in production.
+  if (isRuntimeProduction()) {
+    throw new Error(
+      "AUTH_SECRET / NEXTAUTH_SECRET must be set (16+ characters) in production",
+    );
+  }
   return getEnv().NEXTAUTH_SECRET || getEnv().AUTH_SECRET || "dev-only-auth-secret-change-me";
 }
 

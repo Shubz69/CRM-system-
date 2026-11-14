@@ -22,11 +22,12 @@ export async function requireSession() {
     throw new Error("UNAUTHORIZED");
   }
   // Membership must be live — JWT alone is not enough after Team Remove.
+  let liveRole: MemberRole;
   try {
-    await assertActiveWorkspaceAccess({
+    ({ role: liveRole } = await assertActiveWorkspaceAccess({
       userId: session.user.id,
       organisationId: session.user.organisationId,
-    });
+    }));
   } catch (error) {
     if (error instanceof WorkspaceAccessError) {
       throw new Error("UNAUTHORIZED");
@@ -36,7 +37,8 @@ export async function requireSession() {
   return {
     userId: session.user.id,
     organisationId: session.user.organisationId,
-    role: session.user.role as MemberRole,
+    // Permissions follow the live membership role, not the role cached in the JWT.
+    role: liveRole,
     email: session.user.email,
     name: session.user.name,
     mustChangePassword: Boolean(session.user.mustChangePassword),

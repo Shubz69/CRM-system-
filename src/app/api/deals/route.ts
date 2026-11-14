@@ -9,20 +9,58 @@ import {
   workspaceChangedJsonResponse,
 } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { createDeal } from "@/services/crm-v2";
+import { createDeal, DealLinkError } from "@/services/crm-v2";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await requirePermission("leads:read");
-    const deals = await prisma.deal.findMany({
+    const { searchParams } = new URL(req.url);
+
+    // Overview numbers: real counts (not a capped list) and open value per currency.
+    if (searchParams.get("summary") === "1") {
+      const openWhere = {
+        organisationId: session.organisationId,
+        deletedAt: null,
+        status: DealStatus.OPEN,
+      };
+      const [openDeals, byCurrency] = await Promise.all([
+        prisma.deal.count({ where: openWhere }),
+        prisma.deal.groupBy({
+          by: ["currency"],
+          where: openWhere,
+          _sum: { amountCents: true },
+        }),
+      ]);
+      return Response.json({
+        openDeals,
+        openValueByCurrency: byCurrency
+          .map((row) => ({ currency: row.currency, amountCents: row._sum.amountCents ?? 0 }))
+          .filter((row) => row.amountCents > 0)
+          .sort((a, b) => b.amountCents - a.amountCents),
+      });
+    }
+
+    const rows = await prisma.deal.findMany({
       where: { organisationId: session.organisationId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
       take: 100,
       include: {
-        company: { select: { id: true, name: true } },
-        contact: { select: { id: true, fullName: true, email: true } },
+        company: { select: { id: true, name: true, organisationId: true } },
+        contact: { select: { id: true, fullName: true, email: true, organisationId: true } },
       },
     });
+    // Never echo another workspace's company/contact through a mis-linked deal.
+    const deals = rows.map(({ company, contact, ...deal }) => ({
+      ...deal,
+      company:
+        company && company.organisationId === session.organisationId
+          ? { id: company.id, name: company.name }
+          : null,
+      contact:
+        contact && contact.organisationId === session.organisationId
+          ? { id: contact.id, fullName: contact.fullName, email: contact.email }
+          : null,
+    }));
     return Response.json({ deals });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
@@ -49,6 +87,7 @@ export async function POST(req: NextRequest) {
     const raw = await req.json();
     const session = await requirePermissionForMutation("leads:write", req, raw);
     const body = createSchema.parse(raw);
+    // createDeal rejects company/contact/lead ids from another workspace (DealLinkError → 400).
     const id = await createDeal({
       organisationId: session.organisationId,
       ...body,
@@ -56,6 +95,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ id, organisationId: session.organisationId });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof DealLinkError) return jsonError(error.message, 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);

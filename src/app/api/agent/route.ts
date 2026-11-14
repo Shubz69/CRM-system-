@@ -37,14 +37,22 @@ const updateSchema = z.object({
   responseLength: z.string().optional(),
   emojiUsage: z.string().optional(),
   confidenceThreshold: z.number().min(0).max(1).optional(),
-  bookingUrl: z.string().optional(),
+  // Nullable columns: new workspaces have no booking URL / prompt extra yet, and the page sends null.
+  bookingUrl: z.string().trim().max(2000).nullable().optional(),
   maxFollowUps: z.number().int().min(0).max(10).optional(),
   followUpDelaysMinutes: z.array(z.number()).optional(),
   qualificationQuestions: z.array(z.string()).optional(),
   scoringRules: z.record(z.unknown()).optional(),
   restrictedTopics: z.array(z.string()).optional(),
-  systemPromptExtra: z.string().optional(),
+  systemPromptExtra: z.string().nullable().optional(),
 });
+
+function readableValidationError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Check the agent settings and try again.";
+  const field = issue.path.join(".");
+  return field ? `Invalid ${field}: ${issue.message}` : issue.message;
+}
 
 export async function PATCH(req: NextRequest) {
   try {
@@ -82,6 +90,8 @@ export async function PATCH(req: NextRequest) {
       config: customerFacingAgentConfig(config as unknown as Record<string, unknown>),
     });
   } catch (error) {
+    if (error instanceof z.ZodError) return jsonError(readableValidationError(error), 400);
+    if (error instanceof SyntaxError) return jsonError("Invalid JSON body", 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 500);

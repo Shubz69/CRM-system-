@@ -107,6 +107,6 @@ export async function GET() {
     adminExists,
     bootstrapConfigured: Boolean(process.env.ADMIN_BOOTSTRAP_SECRET),
     adminPasswordConfigured: Boolean(process.env.ADMIN_INITIAL_PASSWORD),
-    adminEmail: process.env.ADMIN_EMAIL || "1230shobhit@gmail.com",
+    // This endpoint is public: never disclose which email holds platform admin.
   });
 }

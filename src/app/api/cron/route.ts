@@ -1,4 +1,6 @@
+import { createHash, timingSafeEqual } from "crypto";
 import { NextRequest } from "next/server";
+import { isProductionRuntime } from "@/lib/runtime";
 import { processDueFollowUps } from "@/workers/followups";
 import { aggregateDailyInsights } from "@/services/insights-aggregation";
 import { prisma } from "@/lib/db";
@@ -10,13 +12,14 @@ import { cronFallbackEnabled } from "@/jobs/redis";
  * Set CRON_FALLBACK_ENABLED=true only if the worker process is unavailable.
  * Protect with CRON_SECRET (Authorization: Bearer …).
  */
-export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization") || "";
-  if (secret && auth !== `Bearer ${secret}`) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
+function bearerMatches(header: string, secret: string): boolean {
+  const a = createHash("sha256").update(header).digest();
+  const b = createHash("sha256").update(`Bearer ${secret}`).digest();
+  return timingSafeEqual(a, b);
+}
 
+export async function GET(req: NextRequest) {
+  // Nothing runs while the fallback is off, so there is nothing to protect yet.
   if (!cronFallbackEnabled()) {
     return Response.json({
       ok: true,
@@ -26,12 +29,23 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const secret = process.env.CRON_SECRET;
+  const auth = req.headers.get("authorization") || "";
+  // Fail closed in production: an unset CRON_SECRET used to leave this endpoint open.
+  if (!secret && isProductionRuntime()) {
+    return Response.json({ error: "CRON_SECRET is not configured" }, { status: 503 });
+  }
+  if (secret && !bearerMatches(auth, secret)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const sent = await processDueFollowUps();
+    // Every active workspace, not an arbitrary first 100.
     const orgs = await prisma.organisation.findMany({
-      where: { deletedAt: null },
+      where: { deletedAt: null, status: "ACTIVE" },
       select: { id: true },
-      take: 100,
+      orderBy: { createdAt: "asc" },
     });
     const today = new Date();
     for (const org of orgs) {

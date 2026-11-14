@@ -423,6 +423,32 @@ export async function runEvalSuite(input: {
   return finished;
 }
 
+export const AGENT_CONFIGURATION_NOT_FOUND = "Agent configuration not found";
+
+/**
+ * Workspace users may change behaviour only — provider/model routing is platform-managed
+ * (same rule as PATCH /api/agent), so those keys are dropped from candidate snapshots.
+ */
+function stripProviderRouting(snapshot: Record<string, unknown>): Record<string, unknown> {
+  const { aiProvider: _aiProvider, model: _model, ...behaviour } = snapshot;
+  void _aiProvider;
+  void _model;
+  return behaviour;
+}
+
+/** Resolve an AgentConfiguration only if it belongs to the organisation. */
+async function findOrgAgentConfigurationId(
+  organisationId: string,
+  agentConfigurationId: string,
+): Promise<string> {
+  const config = await prisma.agentConfiguration.findFirst({
+    where: { id: agentConfigurationId, organisationId },
+    select: { id: true },
+  });
+  if (!config) throw new Error(AGENT_CONFIGURATION_NOT_FOUND);
+  return config.id;
+}
+
 export async function createAgentVersionCandidate(input: {
   organisationId: string;
   label: string;
@@ -431,11 +457,14 @@ export async function createAgentVersionCandidate(input: {
   createdByUserId?: string | null;
   evalSuiteKey?: string;
 }) {
+  if (input.agentConfigurationId) {
+    await findOrgAgentConfigurationId(input.organisationId, input.agentConfigurationId);
+  }
   return prisma.agentVersionCandidate.create({
     data: {
       organisationId: input.organisationId,
       label: input.label,
-      configSnapshot: input.configSnapshot as Prisma.InputJsonValue,
+      configSnapshot: stripProviderRouting(input.configSnapshot) as Prisma.InputJsonValue,
       agentConfigurationId: input.agentConfigurationId ?? null,
       createdByUserId: input.createdByUserId ?? null,
       evalSuiteKey: input.evalSuiteKey ?? DEFAULT_EVAL_SUITE_KEY,
@@ -462,9 +491,16 @@ export async function promoteAgentVersionCandidate(input: {
     throw new Error("Promotion blocked: candidate must PASS eval suite first");
   }
 
-  const snap = (candidate.configSnapshot ?? {}) as Record<string, unknown>;
-  let configId = candidate.agentConfigurationId;
-  if (!configId) {
+  // Provider/model are never promoted from a candidate (older snapshots may still carry them).
+  const snap = stripProviderRouting((candidate.configSnapshot ?? {}) as Record<string, unknown>);
+  let configId: string | null;
+  if (candidate.agentConfigurationId) {
+    // Tenant guard: the stored id came from a request body — only promote into this org's config.
+    configId = await findOrgAgentConfigurationId(
+      input.organisationId,
+      candidate.agentConfigurationId,
+    );
+  } else {
     const active = await prisma.agentConfiguration.findFirst({
       where: { organisationId: input.organisationId, isActive: true },
       orderBy: { updatedAt: "desc" },
@@ -479,8 +515,6 @@ export async function promoteAgentVersionCandidate(input: {
   };
   if (typeof snap.systemPromptExtra === "string") data.systemPromptExtra = snap.systemPromptExtra;
   if (typeof snap.brandTone === "string") data.brandTone = snap.brandTone;
-  if (typeof snap.model === "string") data.model = snap.model;
-  if (typeof snap.aiProvider === "string") data.aiProvider = snap.aiProvider;
   if (typeof snap.formality === "string") data.formality = snap.formality;
 
   await prisma.agentConfiguration.update({

@@ -48,6 +48,20 @@ export function NotificationsMenu() {
     await load();
   }
 
+  function markRead(n: Notification) {
+    if (n.readAt) return;
+    const readAt = new Date().toISOString();
+    setItems((prev) => prev.map((item) => (item.id === n.id ? { ...item, readAt } : item)));
+    setUnread((count) => Math.max(0, count - 1));
+    // keepalive: the click also navigates, which must not cancel this request.
+    void fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: n.id }),
+      keepalive: true,
+    }).catch(() => undefined);
+  }
+
   function hrefFor(n: Notification) {
     if (typeof n.href === "string" && n.href.startsWith("/")) return n.href;
     const conversationId = n.metadata?.conversationId;
@@ -104,7 +118,10 @@ export function NotificationsMenu() {
                   <Link
                     href={hrefFor(n)}
                     className="block px-3 py-2.5 text-sm hover:bg-[var(--surface-2)]"
-                    onClick={() => setOpen(false)}
+                    onClick={() => {
+                      markRead(n);
+                      setOpen(false);
+                    }}
                   >
                     <p className={n.readAt ? "text-[var(--muted)]" : "font-medium"}>
                       {n.title || n.body || "Update"}

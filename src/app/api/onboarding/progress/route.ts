@@ -6,7 +6,11 @@ import {
   setOnboardingProgress,
   type OnboardingProgress,
 } from "@/services/beta-workspace";
-import { upsertBusinessClaim, createAudienceSegment, createProductOffering } from "@/services/digital-twin";
+import {
+  upsertBusinessClaim,
+  upsertAudienceSegmentByName,
+  upsertProductOfferingByName,
+} from "@/services/digital-twin";
 import { writeAuditLog } from "@/services/audit";
 import { prisma } from "@/lib/db";
 
@@ -52,65 +56,64 @@ export async function POST(req: NextRequest) {
     const session = await requirePermission("agent:manage");
     const body = saveSchema.parse(await req.json());
     const existing = await getOnboardingProgress(session.organisationId);
+    // Skipping connections is the last step — the UI tells the user they're done, so it completes too.
+    const finishing = body.action === "complete" || body.action === "skip_connections";
 
     const next: OnboardingProgress = {
       ...existing,
       ...(body.progress || {}),
-      completed: body.action === "complete" ? true : existing.completed,
+      completed: finishing ? true : existing.completed,
       skippedConnections:
         body.action === "skip_connections"
           ? true
           : body.progress?.skippedConnections ?? existing.skippedConnections,
-      completedAt:
-        body.action === "complete" ? new Date().toISOString() : existing.completedAt,
+      completedAt: finishing ? new Date().toISOString() : existing.completedAt,
     };
 
-    if (body.action === "complete" || body.action === "save_progress") {
-      // Feed existing org/business context architecture (org-scoped only).
-      if (next.businessName?.trim()) {
-        await prisma.organisation.update({
-          where: { id: session.organisationId },
-          data: { name: next.businessName.trim() },
-        }).catch(() => undefined);
-        await upsertBusinessClaim({
-          organisationId: session.organisationId,
-          subjectType: "Organisation",
-          subjectId: session.organisationId,
-          predicate: "business_name",
-          valueText: next.businessName.trim(),
-          source: "onboarding",
-          confidence: 0.9,
-        }).catch(() => undefined);
-      }
-      if (next.whatYouDo?.trim()) {
-        await createProductOffering({
-          organisationId: session.organisationId,
-          name: "Primary offering",
-          description: next.whatYouDo.trim(),
-        }).catch(() => undefined);
-        await upsertBusinessClaim({
-          organisationId: session.organisationId,
-          subjectType: "Organisation",
-          subjectId: session.organisationId,
-          predicate: "what_we_do",
-          valueText: next.whatYouDo.trim(),
-          source: "onboarding",
-          confidence: 0.85,
-        }).catch(() => undefined);
-      }
-      if (next.whoToReach?.trim()) {
-        await createAudienceSegment({
-          organisationId: session.organisationId,
-          name: "Primary audience",
-          description: next.whoToReach.trim(),
-        }).catch(() => undefined);
-      }
-      if (next.agentBehaviour?.trim()) {
-        await prisma.agentConfiguration.updateMany({
-          where: { organisationId: session.organisationId, isActive: true },
-          data: { brandTone: next.agentBehaviour.trim().slice(0, 500) },
-        }).catch(() => undefined);
-      }
+    // Feed existing org/business context architecture (org-scoped only).
+    if (next.businessName?.trim()) {
+      await prisma.organisation.update({
+        where: { id: session.organisationId },
+        data: { name: next.businessName.trim() },
+      }).catch(() => undefined);
+      await upsertBusinessClaim({
+        organisationId: session.organisationId,
+        subjectType: "Organisation",
+        subjectId: session.organisationId,
+        predicate: "business_name",
+        valueText: next.businessName.trim(),
+        source: "onboarding",
+        confidence: 0.9,
+      }).catch(() => undefined);
+    }
+    if (next.whatYouDo?.trim()) {
+      await upsertProductOfferingByName({
+        organisationId: session.organisationId,
+        name: "Primary offering",
+        description: next.whatYouDo.trim(),
+      }).catch(() => undefined);
+      await upsertBusinessClaim({
+        organisationId: session.organisationId,
+        subjectType: "Organisation",
+        subjectId: session.organisationId,
+        predicate: "what_we_do",
+        valueText: next.whatYouDo.trim(),
+        source: "onboarding",
+        confidence: 0.85,
+      }).catch(() => undefined);
+    }
+    if (next.whoToReach?.trim()) {
+      await upsertAudienceSegmentByName({
+        organisationId: session.organisationId,
+        name: "Primary audience",
+        description: next.whoToReach.trim(),
+      }).catch(() => undefined);
+    }
+    if (next.agentBehaviour?.trim()) {
+      await prisma.agentConfiguration.updateMany({
+        where: { organisationId: session.organisationId, isActive: true },
+        data: { brandTone: next.agentBehaviour.trim().slice(0, 500) },
+      }).catch(() => undefined);
     }
 
     await setOnboardingProgress({

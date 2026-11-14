@@ -188,41 +188,118 @@ export const KPI_OPTIONS = Object.entries(KPI_LABELS).map(([value, label]) => ({
   label,
 }));
 
-const TRIGGER_LABELS: Record<string, string> = {
+/**
+ * Automation triggers that are actually emitted to `runAutomations` today — the single source
+ * of truth for the trigger picker, NL compile and API validation. A rule on any other trigger
+ * never runs. Emitters:
+ * - inbound pipeline: new_inbound_message, lead_replied, contact_opted_out, human_requested,
+ *   negative_sentiment, lead_score_changed, lead_qualified, lead_disqualified, booking_link_sent
+ * - booking webhook: booking_created, booking_rescheduled, booking_cancelled, booking_updated
+ * - domain-event consumer (worker, `domainEventToAutomationTrigger`): lead_created, message_received
+ * Keep in sync when adding/removing an emitter.
+ */
+const TRIGGER_LABELS = {
   lead_created: "A new lead arrives",
+  new_inbound_message: "A customer message arrives",
+  lead_replied: "A lead replies",
   lead_qualified: "A lead becomes qualified",
-  conversation_updated: "A conversation is updated",
+  lead_disqualified: "A lead is disqualified",
+  lead_score_changed: "A lead's score is updated",
+  human_requested: "A lead asks for a person",
+  negative_sentiment: "A lead sounds unhappy",
+  contact_opted_out: "A contact opts out",
+  booking_link_sent: "A booking link is sent",
   booking_created: "A meeting is booked",
+  booking_rescheduled: "A meeting is rescheduled",
+  booking_cancelled: "A meeting is cancelled",
+  booking_updated: "A booking is updated",
+  message_received: "A customer message is recorded",
+} as const;
+
+export type AutomationTrigger = keyof typeof TRIGGER_LABELS;
+
+/** Every trigger that fires. Options, NL compile and the automations API all derive from this. */
+export const AUTOMATION_TRIGGERS = Object.keys(TRIGGER_LABELS) as AutomationTrigger[];
+
+/** Labels for triggers older rules may still store but that are never emitted. */
+const LEGACY_TRIGGER_LABELS: Record<string, string> = {
+  conversation_updated: "A conversation is updated",
+  conversation_inactive: "A conversation goes quiet",
   deal_won: "A deal is won",
   deal_lost: "A deal is lost",
-  message_inbound: "A customer message arrives",
+  message_inbound: "A customer message arrives (old trigger)",
 };
 
+export function isFiringAutomationTrigger(key: string | null | undefined): boolean {
+  return Boolean(key) && Object.prototype.hasOwnProperty.call(TRIGGER_LABELS, key as string);
+}
+
+/**
+ * Action types with an executor in `executeAction` (src/services/automations.ts switch).
+ * Anything else falls through to the default branch and does nothing.
+ */
+export const EXECUTABLE_AUTOMATION_ACTIONS = [
+  "notify",
+  "notify_team",
+  "pause_ai",
+  "handover",
+  "cancel_follow_ups",
+  "send_follow_up",
+  "schedule_follow_up",
+  "change_stage",
+  "mark_qualified",
+  "mark_disqualified",
+  "add_tag",
+  "assign_owner",
+  "send_booking_link",
+  "send_message",
+  "create_task",
+] as const;
+
+export function isExecutableAutomationAction(type: string | null | undefined): boolean {
+  return Boolean(type) && (EXECUTABLE_AUTOMATION_ACTIONS as readonly string[]).includes(type as string);
+}
+
+/** Actions offered in the simple rule builder (all have executors and need no extra params). */
 const ACTION_LABELS: Record<string, string> = {
   send_follow_up: "Send a follow-up message",
   schedule_follow_up: "Schedule a follow-up",
   send_booking_link: "Send a booking link",
   send_message: "Send a message",
   notify_team: "Notify the team",
-  publish_content: "Publish content",
   pause_ai: "Pause AI replies",
+};
+
+const OTHER_ACTION_LABELS: Record<string, string> = {
+  notify: "Notify the team",
+  handover: "Hand over to a person",
+  cancel_follow_ups: "Cancel pending follow-ups",
+  change_stage: "Move to a pipeline stage",
+  mark_qualified: "Mark as qualified",
+  mark_disqualified: "Mark as disqualified",
+  add_tag: "Add a tag",
+  assign_owner: "Assign an owner",
+  create_task: "Create a task",
+  publish_content: "Publish content",
+  draft_reply_for_review: "Draft a reply for review",
 };
 
 /** Customer-facing automation trigger labels — never show raw enum keys. */
 export function automationTriggerLabel(key: string | null | undefined): string {
   if (!key) return "Unknown trigger";
-  return TRIGGER_LABELS[key] ?? humanizeKey(key);
+  if (isFiringAutomationTrigger(key)) return TRIGGER_LABELS[key as AutomationTrigger];
+  return LEGACY_TRIGGER_LABELS[key] ?? humanizeKey(key);
 }
 
 /** Customer-facing automation action labels. */
 export function automationActionLabel(key: string | null | undefined): string {
   if (!key) return "Unknown action";
-  return ACTION_LABELS[key] ?? humanizeKey(key);
+  return ACTION_LABELS[key] ?? OTHER_ACTION_LABELS[key] ?? humanizeKey(key);
 }
 
-export const AUTOMATION_TRIGGER_OPTIONS = Object.entries(TRIGGER_LABELS).map(([value, label]) => ({
+export const AUTOMATION_TRIGGER_OPTIONS = AUTOMATION_TRIGGERS.map((value) => ({
   value,
-  label,
+  label: TRIGGER_LABELS[value],
 }));
 
 export const AUTOMATION_ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({

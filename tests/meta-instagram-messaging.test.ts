@@ -98,6 +98,11 @@ vi.mock("@/lib/db", () => ({
     },
     messagingChannel: {
       findFirst: mocks.messagingChannelFindFirst,
+      // Org resolution reads up to two rows to refuse ambiguous (multi-workspace) bindings.
+      findMany: async (args: unknown) => {
+        const one = await mocks.messagingChannelFindFirst(args);
+        return one ? [one] : [];
+      },
       upsert: mocks.messagingChannelUpsert,
       updateMany: mocks.messagingChannelUpdateMany,
     },

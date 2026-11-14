@@ -1,9 +1,11 @@
 import { createHash } from "crypto";
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { HandlingMode } from "@prisma/client";
+import { HandlingMode, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { roleHasPermission } from "@/lib/permissions";
 import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
+import { markHumanLeadChange } from "@/services/lead-stage-guard";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { writeAuditLog } from "@/services/audit";
 import { logger } from "@/lib/logger";
@@ -54,17 +56,43 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
-    await prisma.conversation.updateMany({
-      where: { id, organisationId: session.organisationId },
-      data: { unreadCount: 0 },
-    });
+    // The open thread is polled — only write when there is something to clear.
+    if (conversation.unreadCount > 0) {
+      await prisma.conversation.updateMany({
+        where: { id, organisationId: session.organisationId },
+        data: { unreadCount: 0 },
+      });
+    }
 
     return Response.json({ conversation });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
+}
+
+/**
+ * Idempotency key for a manual inbox reply.
+ * - Client keys (one per composed message) are scoped to this conversation + user so a
+ *   reused/foreign key can never match another conversation's dispatch.
+ * - Without a client key, fall back to a per-minute bucket: a double-submit still
+ *   collapses, but sending the same text again later is a new message, not a silent no-op.
+ */
+function humanReplyIdempotencyKey(input: {
+  conversationId: string;
+  userId: string;
+  reply: string;
+  clientKey?: string;
+  now?: number;
+}): string {
+  if (input.clientKey) {
+    return `human-reply:${input.conversationId}:${input.userId}:client:${input.clientKey}`;
+  }
+  const bodyHash = createHash("sha256").update(input.reply).digest("hex").slice(0, 16);
+  const minuteBucket = Math.floor((input.now ?? Date.now()) / 60_000);
+  return `human-reply:${input.conversationId}:${input.userId}:${bodyHash}:${minuteBucket}`;
 }
 
 const patchSchema = z.object({
@@ -92,6 +120,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const { id } = await params;
     const body = patchSchema.parse(raw);
 
+    // Reassigning a conversation is its own permission (inbox:write alone may not reassign).
+    if (body.assignUserId !== undefined && !roleHasPermission(session.role, "inbox:assign")) {
+      return jsonError("You don't have permission to reassign conversations.", 403);
+    }
+
     const conversation = await prisma.conversation.findFirst({
       where: { id, organisationId: session.organisationId, deletedAt: null },
       include: {
@@ -102,19 +135,60 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     });
     if (!conversation) return jsonError("Conversation not found", 404);
 
+    // Validate everything before writing anything, so a rejected request changes nothing.
+    const lead = conversation.leads[0];
+    const wantsLeadChange = Boolean(body.qualificationStatus || body.stageId);
+    if (wantsLeadChange && !lead) {
+      return jsonError(
+        "This conversation has no lead yet, so its stage or qualification can't be set.",
+        409,
+      );
+    }
+
+    let stageId: string | undefined;
+    if (body.stageId) {
+      const stage = await prisma.pipelineStage.findFirst({
+        where: {
+          id: body.stageId,
+          pipeline: { organisationId: session.organisationId },
+        },
+        select: { id: true },
+      });
+      if (!stage) return jsonError("Stage not found", 404);
+      stageId = stage.id;
+    }
+
+    if (body.assignUserId) {
+      const member = await prisma.organisationMember.findFirst({
+        where: {
+          organisationId: session.organisationId,
+          userId: body.assignUserId,
+          user: { deletedAt: null, isActive: true, isSuspended: false },
+        },
+        select: { id: true },
+      });
+      if (!member) {
+        return jsonError("Assignee is not a member of this organisation", 400);
+      }
+    }
+
     if (body.aiPaused !== undefined || body.handlingMode) {
+      const nextHandlingMode =
+        body.handlingMode ??
+        (body.aiPaused === true
+          ? HandlingMode.PAUSED
+          : body.aiPaused === false
+            ? HandlingMode.AI
+            : undefined);
+      // Handing back to the AI ends the handoff — otherwise the thread stays in
+      // "Human required" / Attention after the person resumed AI.
+      const resumingAi = body.aiPaused === false && nextHandlingMode === HandlingMode.AI;
       await prisma.conversation.updateMany({
         where: { id, organisationId: session.organisationId },
         data: {
           aiPaused: body.aiPaused,
-          handlingMode:
-            body.handlingMode ??
-            (body.aiPaused === true
-              ? HandlingMode.PAUSED
-              : body.aiPaused === false
-                ? HandlingMode.AI
-                : undefined),
-          needsHumanReview: body.aiPaused === true ? true : undefined,
+          handlingMode: nextHandlingMode,
+          needsHumanReview: body.aiPaused === true ? true : resumingAi ? false : undefined,
         },
       });
       await writeAuditLog({
@@ -127,20 +201,6 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
 
     if (body.assignUserId !== undefined) {
-      if (body.assignUserId) {
-        const member = await prisma.organisationMember.findFirst({
-          where: {
-            organisationId: session.organisationId,
-            userId: body.assignUserId,
-            user: { deletedAt: null, isActive: true, isSuspended: false },
-          },
-          select: { id: true },
-        });
-        if (!member) {
-          return jsonError("Assignee is not a member of this organisation", 400);
-        }
-      }
-
       await prisma.conversationAssignment.updateMany({
         where: { conversationId: id, active: true },
         data: { active: false },
@@ -168,26 +228,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       });
     }
 
-    const lead = conversation.leads[0];
-    if (lead && (body.qualificationStatus || body.stageId)) {
-      let stageId = body.stageId;
-      if (stageId) {
-        const stage = await prisma.pipelineStage.findFirst({
-          where: {
-            id: stageId,
-            pipeline: { organisationId: session.organisationId },
-          },
-          select: { id: true },
-        });
-        if (!stage) return jsonError("Stage not found", 404);
-        stageId = stage.id;
-      }
-
+    if (lead && wantsLeadChange) {
       await prisma.lead.updateMany({
         where: { id: lead.id, organisationId: session.organisationId },
         data: {
           qualificationStatus: body.qualificationStatus,
           stageId,
+          // A person's decision wins: inbound AI analysis stops overwriting it.
+          metadata: markHumanLeadChange(lead.metadata, {
+            stage: Boolean(stageId),
+            qualification: Boolean(body.qualificationStatus),
+            userId: session.userId,
+          }) as Prisma.InputJsonValue,
         },
       });
     }
@@ -213,10 +265,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         conversation.contact.identifiers.find((i) => i.channel === channelProvider) ||
         conversation.contact.identifiers.find((i) => i.channel === "manychat") ||
         conversation.contact.identifiers[0];
-      const bodyHash = createHash("sha256").update(body.reply).digest("hex").slice(0, 16);
-      const idempotencyKey =
-        body.replyIdempotencyKey ??
-        `human-reply:${id}:${session.userId}:${bodyHash}`;
+      const idempotencyKey = humanReplyIdempotencyKey({
+        conversationId: id,
+        userId: session.userId,
+        reply: body.reply,
+        clientKey: body.replyIdempotencyKey,
+      });
 
       const sendResult = await dispatchOutboundMessage({
         organisationId: session.organisationId,
@@ -269,7 +323,23 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           );
         }
         if (sendResult.code === "STALE_CONTEXT") {
-          return jsonError("Stale conversation context — refresh and retry", 409);
+          return jsonError(
+            "New activity in this conversation — check the latest messages, then send again.",
+            409,
+          );
+        }
+        if (sendResult.code === "FAILED" || sendResult.code === "CONNECTION_REVOKED") {
+          // Definitely not delivered: the client may retry with a fresh idempotency key.
+          return Response.json(
+            {
+              error:
+                sendResult.code === "CONNECTION_REVOKED"
+                  ? "Not sent — the messaging connection was disconnected. Reconnect it and try again."
+                  : "Not sent — the messaging provider rejected the message. Try again.",
+              notDelivered: true,
+            },
+            { status: 502 },
+          );
         }
         return jsonError(sendResult.code || "Outbound send failed", 502);
       }
@@ -294,8 +364,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Failed";
+    if (error instanceof z.ZodError) {
+      return jsonError(error.issues[0]?.message || "Invalid request", 400);
+    }
     logger.error("Conversation patch failed", { message });
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
 }

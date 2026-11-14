@@ -168,6 +168,41 @@ export async function upsertCompany(input: {
   return row.id;
 }
 
+/** A deal may only link to records in its own workspace (never another tenant's ids). */
+export class DealLinkError extends Error {}
+
+export async function assertDealLinksInOrganisation(input: {
+  organisationId: string;
+  companyId?: string | null;
+  contactId?: string | null;
+  leadId?: string | null;
+}): Promise<void> {
+  const { organisationId } = input;
+  const [company, contact, lead] = await Promise.all([
+    input.companyId
+      ? prisma.company.findFirst({
+          where: { id: input.companyId, organisationId, deletedAt: null },
+          select: { id: true },
+        })
+      : null,
+    input.contactId
+      ? prisma.contact.findFirst({
+          where: { id: input.contactId, organisationId, deletedAt: null },
+          select: { id: true },
+        })
+      : null,
+    input.leadId
+      ? prisma.lead.findFirst({
+          where: { id: input.leadId, organisationId, deletedAt: null },
+          select: { id: true },
+        })
+      : null,
+  ]);
+  if (input.companyId && !company) throw new DealLinkError("Company not found in this workspace.");
+  if (input.contactId && !contact) throw new DealLinkError("Contact not found in this workspace.");
+  if (input.leadId && !lead) throw new DealLinkError("Lead not found in this workspace.");
+}
+
 export async function createDeal(input: {
   organisationId: string;
   name: string;
@@ -184,14 +219,15 @@ export async function createDeal(input: {
   if (input.probability != null && (input.probability < 0 || input.probability > 1)) {
     throw new Error("Deal probability must be between 0 and 1 (or null if unknown)");
   }
+  await assertDealLinksInOrganisation(input);
   const row = await prisma.$transaction(async (tx) => {
     const deal = await tx.deal.create({
       data: {
         organisationId: input.organisationId,
         name: input.name.trim(),
-        companyId: input.companyId ?? null,
-        contactId: input.contactId ?? null,
-        leadId: input.leadId ?? null,
+        companyId: input.companyId || null,
+        contactId: input.contactId || null,
+        leadId: input.leadId || null,
         amountCents: input.amountCents ?? null,
         currency: input.currency ?? "USD",
         probability: input.probability ?? null,

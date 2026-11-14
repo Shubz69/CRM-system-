@@ -42,22 +42,21 @@ export default function AnalyticsHubPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/contacts").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/deals").then((r) => (r.ok ? r.json() : null)),
+      // Server-side counts — counting capped lists stopped at 100.
+      fetch("/api/contacts?countOnly=1").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/deals?summary=1").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/opportunities").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/conversations").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/conversations?summary=1").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/goals").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/content").then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([contacts, deals, opp, conv, goals, content]) => {
-        const dealList = (deals?.deals ?? []) as Array<{ status: string }>;
+        const count = (v: unknown) => (typeof v === "number" ? v : null);
         setSnap({
-          contacts: contacts ? (contacts.contacts ?? []).length : null,
-          openDeals: deals ? dealList.filter((d) => d.status === "OPEN").length : null,
+          contacts: count(contacts?.total),
+          openDeals: count(deals?.openDeals),
           opportunities: opp ? (opp.opportunities ?? []).length : null,
-          conversations: conv
-            ? (conv.conversations ?? conv.items ?? []).length
-            : null,
+          conversations: count(conv?.total),
           goals: goals ? (goals.goals ?? []).length : null,
           contentPieces: content ? (content.pieces ?? []).length : null,
         });

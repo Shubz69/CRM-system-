@@ -10,6 +10,8 @@ import {
   AUTOMATION_TRIGGER_OPTIONS,
   automationActionLabel,
   automationTriggerLabel,
+  isExecutableAutomationAction,
+  isFiringAutomationTrigger,
 } from "@/lib/customer-labels";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
@@ -48,7 +50,10 @@ function summarizeActions(actions: unknown): string {
   return actions
     .map((action) => {
       if (action && typeof action === "object" && "type" in action) {
-        return automationActionLabel(String((action as { type: unknown }).type));
+        const type = String((action as { type: unknown }).type);
+        return isExecutableAutomationAction(type)
+          ? automationActionLabel(type)
+          : `${automationActionLabel(type)} (not supported — does nothing)`;
       }
       return "unknown action";
     })
@@ -308,6 +313,14 @@ export default function AutomationsPage() {
               <span className={rule.isActive ? "badge badge-success" : "badge"}>
                 {rule.isActive ? "Active" : "Inactive"}
               </span>
+              {!isFiringAutomationTrigger(rule.triggerType) ? (
+                <span
+                  className="badge badge-warn"
+                  title="Nothing in Agent Desk emits this trigger, so this rule never runs. Recreate it with a supported trigger."
+                >
+                  Never fires
+                </span>
+              ) : null}
               {rule.requiresApproval ? <span className="badge">Needs approval</span> : null}
               <button className="btn btn-secondary ml-auto" type="button" onClick={() => toggle(rule)}>
                 {rule.isActive ? "Disable" : "Enable"}

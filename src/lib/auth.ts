@@ -1,4 +1,6 @@
+import { createHash } from "crypto";
 import type { NextAuthOptions } from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/db";
@@ -38,6 +40,7 @@ declare module "next-auth" {
     memberships?: SessionMembership[];
     mustChangePassword?: boolean;
     isPlatformAdmin?: boolean;
+    pwFp?: string;
   }
 }
 
@@ -52,17 +55,81 @@ declare module "next-auth/jwt" {
     isPlatformAdmin?: boolean;
     /** Last time we re-checked the active workspace against the DB. */
     workspaceCheckedAt?: number;
+    /** Fingerprint of the password hash at sign-in; a password change/reset revokes the token. */
+    pwFp?: string;
   }
 }
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
+
+/** Short, non-reversible fingerprint of the stored bcrypt hash (never the hash itself). */
+export function passwordFingerprint(passwordHash: string | null | undefined): string {
+  if (!passwordHash) return "none";
+  return createHash("sha256").update(`pwfp:${passwordHash}`).digest("base64url").slice(0, 16);
+}
+
+/**
+ * Atomically count a sign-in attempt before checking the password, so parallel guesses
+ * cannot slip past the lockout (the old read → bcrypt → write let N concurrent guesses
+ * raise the counter by one). Returns false while the account is locked.
+ *
+ * Raw SQL on purpose: Prisma's @updatedAt would bump User.updatedAt, which is the
+ * workspace revision the UI sends with every write — every failed login elsewhere used
+ * to turn the user's open tabs into "Workspace changed in another tab" 409s.
+ */
+async function reserveLoginAttempt(userId: string): Promise<boolean> {
+  // Columns are TIMESTAMP(3) holding UTC (Prisma's convention), so compare and write in
+  // UTC explicitly rather than relying on the database session's TimeZone setting.
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    UPDATE "User"
+    SET
+      "failedLoginAttempts" = CASE
+        WHEN "lockedUntil" IS NOT NULL AND "lockedUntil" <= timezone('UTC', now()) THEN 1
+        ELSE "failedLoginAttempts" + 1
+      END,
+      "lockedUntil" = CASE
+        WHEN "lockedUntil" IS NOT NULL AND "lockedUntil" <= timezone('UTC', now()) THEN NULL
+        WHEN "failedLoginAttempts" + 1 >= ${MAX_FAILED_ATTEMPTS}::integer
+          THEN timezone('UTC', now()) + (${LOCK_DURATION_MS}::double precision * INTERVAL '1 millisecond')
+        ELSE "lockedUntil"
+      END
+    WHERE "id" = ${userId}
+      AND ("lockedUntil" IS NULL OR "lockedUntil" <= timezone('UTC', now()))
+    RETURNING "id"
+  `;
+  return rows.length > 0;
+}
+
+/** Strip identity claims so requireSession rejects the token and the user signs in again. */
+function revokeToken(token: JWT): JWT {
+  token.id = "";
+  token.organisationId = undefined;
+  token.organisationName = undefined;
+  token.role = undefined;
+  token.memberships = [];
+  token.isPlatformAdmin = false;
+  token.pwFp = undefined;
+  return token;
+}
+
+async function recordSuccessfulLogin(userId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "User"
+    SET "failedLoginAttempts" = 0, "lockedUntil" = NULL, "lastLoginAt" = timezone('UTC', now())
+    WHERE "id" = ${userId}
+  `;
+}
 /** Re-validate JWT org against DB at most every 5 minutes (Ask polls often; avoid pool storms). */
 const WORKSPACE_RECHECK_MS = 5 * 60_000;
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
-  secret: getAuthSecret(),
+  // Read lazily: processes that only import this module transitively (e.g. the worker)
+  // must not crash at start-up because they have no auth secret.
+  get secret() {
+    return getAuthSecret();
+  },
   pages: {
     signIn: "/login",
   },
@@ -100,31 +167,17 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        const valid = await compare(credentials.password, user.passwordHash);
-        if (!valid) {
-          const attempts = user.failedLoginAttempts + 1;
-          const lock =
-            attempts >= MAX_FAILED_ATTEMPTS
-              ? new Date(Date.now() + LOCK_DURATION_MS)
-              : null;
-          await prisma.user.update({
-            where: { id: user.id },
-            data: {
-              failedLoginAttempts: attempts,
-              lockedUntil: lock,
-            },
-          });
+        // Count the attempt first (atomic); a locked account never reaches bcrypt.
+        if (!(await reserveLoginAttempt(user.id))) {
           return null;
         }
 
-        await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            failedLoginAttempts: 0,
-            lockedUntil: null,
-            lastLoginAt: new Date(),
-          },
-        });
+        const valid = await compare(credentials.password, user.passwordHash);
+        if (!valid) {
+          return null;
+        }
+
+        await recordSuccessfulLogin(user.id);
 
         // Explicit workspace selection — never "first SUPER_ADMIN" (ambiguous when
         // a user has multiple memberships including the platform org).
@@ -144,6 +197,7 @@ export const authOptions: NextAuthOptions = {
           memberships: resolved?.memberships ?? [],
           mustChangePassword: user.mustChangePassword,
           isPlatformAdmin: user.isPlatformAdmin,
+          pwFp: passwordFingerprint(user.passwordHash),
         };
       },
     }),
@@ -159,6 +213,7 @@ export const authOptions: NextAuthOptions = {
         token.mustChangePassword = user.mustChangePassword ?? false;
         token.isPlatformAdmin = user.isPlatformAdmin ?? false;
         token.workspaceCheckedAt = Date.now();
+        token.pwFp = user.pwFp;
       }
 
       if (trigger === "update" && session && typeof session === "object") {
@@ -189,11 +244,13 @@ export const authOptions: NextAuthOptions = {
         if (token.id) {
           const fresh = await prisma.user.findUnique({
             where: { id: token.id },
-            select: { mustChangePassword: true, isPlatformAdmin: true },
+            select: { mustChangePassword: true, isPlatformAdmin: true, passwordHash: true },
           });
           if (fresh) {
             token.mustChangePassword = fresh.mustChangePassword;
             token.isPlatformAdmin = fresh.isPlatformAdmin;
+            // The session that just changed its own password stays signed in.
+            token.pwFp = passwordFingerprint(fresh.passwordHash);
           }
         }
       }
@@ -206,8 +263,28 @@ export const authOptions: NextAuthOptions = {
         try {
           const userRow = await prisma.user.findUnique({
             where: { id: token.id },
-            select: { activeOrganisationId: true },
+            select: {
+              activeOrganisationId: true,
+              passwordHash: true,
+              isActive: true,
+              isSuspended: true,
+              deletedAt: true,
+            },
           });
+          // Suspension, deactivation, deletion and password changes/resets end every
+          // other session on its next request (JWTs used to stay valid for 30 days).
+          const fingerprint = passwordFingerprint(userRow?.passwordHash);
+          if (
+            !userRow ||
+            !userRow.isActive ||
+            userRow.isSuspended ||
+            userRow.deletedAt ||
+            (token.pwFp && token.pwFp !== fingerprint)
+          ) {
+            return revokeToken(token);
+          }
+          // Tokens issued before fingerprints existed adopt the current one.
+          if (!token.pwFp) token.pwFp = fingerprint;
           const preferred =
             userRow?.activeOrganisationId || token.organisationId || null;
           const orgChanged =

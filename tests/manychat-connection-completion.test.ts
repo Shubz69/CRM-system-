@@ -507,6 +507,7 @@ describe("ManyChat connection completion", () => {
       (prisma.messagingChannel.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: "ch-1",
         organisationId: "org-a",
+        provider: "manychat",
         isActive: true,
       });
       (prisma.messagingChannel.update as ReturnType<typeof vi.fn>).mockResolvedValue({

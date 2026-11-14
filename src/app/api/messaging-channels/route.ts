@@ -22,12 +22,28 @@ export async function GET() {
 
 const upsertSchema = z.object({
   id: z.string().optional(),
-  provider: z.string().default("manychat"),
-  externalId: z.string().min(1),
+  // Only ManyChat channels are registered by hand. Meta Instagram / Zernio channels are
+  // created by their own verified connect flows; accepting any provider here let one
+  // workspace register another workspace's Instagram account id and divert its DMs.
+  provider: z.literal("manychat").default("manychat"),
+  externalId: z.string().trim().min(1),
   displayName: z.string().min(1),
   instagramUsername: z.string().optional(),
   isActive: z.boolean().optional(),
 });
+
+/** Another workspace already receives webhooks for this provider + external id. */
+async function claimedByAnotherWorkspace(
+  organisationId: string,
+  provider: string,
+  externalId: string,
+): Promise<boolean> {
+  const other = await prisma.messagingChannel.findFirst({
+    where: { provider, externalId, isActive: true, organisationId: { not: organisationId } },
+    select: { id: true, organisationId: true },
+  });
+  return Boolean(other && other.organisationId !== organisationId);
+}
 
 export async function POST(req: Request) {
   try {
@@ -38,11 +54,21 @@ export async function POST(req: Request) {
         ? persistableChannelInstagramUsername(body.instagramUsername)
         : undefined;
 
+    if (await claimedByAnotherWorkspace(session.organisationId, body.provider, body.externalId)) {
+      return jsonError(
+        "This channel ID is already connected to another workspace. Check the ID in ManyChat, or contact support if you own it.",
+        409,
+      );
+    }
+
     if (body.id) {
       const existing = await prisma.messagingChannel.findFirst({
         where: { id: body.id, organisationId: session.organisationId },
       });
       if (!existing) return jsonError("Channel not found", 404);
+      if (existing.provider !== body.provider) {
+        return jsonError("Only ManyChat channels can be edited here.", 400);
+      }
       const channel = await prisma.messagingChannel.update({
         where: { id: existing.id },
         data: {

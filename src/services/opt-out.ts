@@ -1,4 +1,4 @@
-import { MessagingExternalOutcome, SuppressionReason } from "@prisma/client";
+import { MessagingExternalOutcome, Prisma, SuppressionReason } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { writeAuditLog } from "@/services/audit";
@@ -12,13 +12,62 @@ const DEFAULT_OPT_OUT_KEYWORDS = [
   "opt-out",
   "don't message",
   "do not message",
+  "don't contact",
+  "do not contact",
   "remove me",
   "stop messaging",
+  "leave me alone",
 ];
 
+/** Lowercase, straighten apostrophes, collapse spaces, drop punctuation/emoji at the edges. */
+function normaliseOptOutText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/\s+/g, " ")
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+
+/** Polite lead-ins that still leave a direct command: "please stop", "I'd like to unsubscribe". */
+const OPT_OUT_LEAD_IN =
+  /^(?:(?:please|pls|plz|kindly|just|ok|okay|no|can you|could you|would you|will you|i want to|i'd like to|i would like to|i wish to|i want you to|i need you to)(?![\p{L}\p{N}'])[\s,.!]*)+/u;
+
+/** "stop by", "stop in" invite a visit — not a request to end the conversation. */
+const VISIT_CONTINUATION = /^\s+(?:by|in|over|round|around)\b/;
+
+/**
+ * Return the opt-out keyword the message is a command for, or null.
+ *
+ * A keyword counts only when it is the whole message or the message starts with it
+ * (after a polite lead-in) — "STOP", "stop messaging me", "please unsubscribe me".
+ * An occurrence inside a sentence ("can't stop thinking about it", "non-stop",
+ * "one-stop shop") is not an opt-out: it would hard-suppress the contact.
+ */
+export function matchOptOutKeyword(
+  text: string,
+  keywords: string[] = DEFAULT_OPT_OUT_KEYWORDS,
+): string | null {
+  const full = normaliseOptOutText(text);
+  if (!full) return null;
+  // Keep the un-stripped form too, so configured phrases like "no more messages" still match.
+  const candidates = [...new Set([full, full.replace(OPT_OUT_LEAD_IN, "")])];
+  for (const keyword of keywords) {
+    const phrase = normaliseOptOutText(String(keyword ?? ""));
+    if (!phrase) continue;
+    for (const message of candidates) {
+      if (!message.startsWith(phrase)) continue;
+      const rest = message.slice(phrase.length);
+      // Whole-word only: "stopping", "stop-loss", "unsubscribed" are not the command.
+      if (/^[\p{L}\p{N}'-]/u.test(rest)) continue;
+      if (VISIT_CONTINUATION.test(rest)) continue;
+      return phrase;
+    }
+  }
+  return null;
+}
+
 export function detectOptOut(text: string, keywords: string[] = DEFAULT_OPT_OUT_KEYWORDS): boolean {
-  const lower = text.toLowerCase();
-  return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
+  return matchOptOutKeyword(text, keywords) !== null;
 }
 
 export async function applyOptOut(input: {
@@ -30,6 +79,15 @@ export async function applyOptOut(input: {
   conversationId?: string;
 }): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    const current = await tx.contact.findFirst({
+      where: { id: input.contactId, organisationId: input.organisationId },
+      select: { metadata: true },
+    });
+    // Merge: replacing metadata wiped DO_NOT_CONTACT / origin flags set elsewhere.
+    const existingMetadata =
+      current?.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+        ? (current.metadata as Prisma.JsonObject)
+        : {};
     await tx.contact.updateMany({
       where: { id: input.contactId, organisationId: input.organisationId },
       data: {
@@ -37,6 +95,7 @@ export async function applyOptOut(input: {
         optedOutAt: new Date(),
         consentGiven: false,
         metadata: {
+          ...existingMetadata,
           optOutSource: input.source,
           optOutReason: input.reason ?? null,
         },
@@ -126,14 +185,28 @@ export async function clearOptOut(input: {
   contactId: string;
   userId: string;
 }): Promise<void> {
-  await prisma.contact.updateMany({
-    where: { id: input.contactId, organisationId: input.organisationId },
-    data: {
-      optedOut: false,
-      optedOutAt: null,
-      consentGiven: true,
-    },
-  });
+  const now = new Date();
+  const [, lifted] = await prisma.$transaction([
+    prisma.contact.updateMany({
+      where: { id: input.contactId, organisationId: input.organisationId },
+      data: {
+        optedOut: false,
+        optedOutAt: null,
+        consentGiven: true,
+      },
+    }),
+    // Expire the OPT_OUT suppression applyOptOut created — contactability checks
+    // suppressions before the human-reply bypass, so leaving it blocks every reply.
+    prisma.contactSuppression.updateMany({
+      where: {
+        organisationId: input.organisationId,
+        contactId: input.contactId,
+        reason: SuppressionReason.OPT_OUT,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      data: { expiresAt: now },
+    }),
+  ]);
 
   await writeAuditLog({
     organisationId: input.organisationId,
@@ -141,6 +214,7 @@ export async function clearOptOut(input: {
     action: "contact.opt_out_cleared",
     entityType: "Contact",
     entityId: input.contactId,
+    metadata: { liftedSuppressions: lifted.count },
   });
 }
 

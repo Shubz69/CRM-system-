@@ -13,7 +13,9 @@ const exportSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await requirePermission("reports:read");
+    // reports:export exists for exactly this; reports:read let READ_ONLY / SALES_AGENT
+    // users mail workspace data to any address through the platform mailer.
+    const session = await requirePermission("reports:export");
     const body = exportSchema.parse(await req.json());
 
     const report = await prisma.report.findFirst({
@@ -65,6 +67,20 @@ export async function POST(req: Request) {
         ? [session.email]
         : [];
     if (!recipients.length) return jsonError("emailTo is required for email export", 400);
+
+    // Reports may only be emailed to people in this workspace.
+    const memberEmails = new Set(
+      (
+        await prisma.organisationMember.findMany({
+          where: { organisationId: session.organisationId },
+          select: { user: { select: { email: true } } },
+        })
+      ).map((m) => m.user.email.toLowerCase()),
+    );
+    const outsiders = recipients.filter((r) => !memberEmails.has(r.toLowerCase()));
+    if (outsiders.length) {
+      return jsonError("Reports can only be emailed to members of this workspace.", 400);
+    }
 
     const result = await getEmailAdapter().send({
       organisationId: session.organisationId,

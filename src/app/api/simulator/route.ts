@@ -28,12 +28,18 @@ export async function POST(req: NextRequest) {
     }
 
     const data = parsed.data;
+    // Simulated leads live in their own "sim_" namespace. Typing a real ManyChat
+    // subscriber id here used to attach the test message to that real customer — and the
+    // AI reply could then be delivered to them through the live channel.
+    const contactExternalId = data.contactExternalId.startsWith("sim_")
+      ? data.contactExternalId
+      : `sim_${data.contactExternalId}`;
     const result = await processInboundMessage(
       {
         organisationId: session.organisationId,
         idempotencyKey: data.idempotencyKey,
         contact: {
-          externalId: data.contactExternalId,
+          externalId: contactExternalId,
           fullName: data.fullName ?? "Simulated Lead",
           instagramUsername: data.instagramUsername ?? "sim_lead",
           email: data.email || undefined,
@@ -42,7 +48,7 @@ export async function POST(req: NextRequest) {
           text: data.text,
           externalId: `sim_${Date.now()}`,
         },
-        threadId: `sim_thread_${data.contactExternalId}`,
+        threadId: `sim_thread_${contactExternalId}`,
         campaignSource: data.campaignSource ?? "simulator",
         leadSource: "simulator",
       },

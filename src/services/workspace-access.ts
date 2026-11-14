@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type MemberRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { looksLikeRawDatabaseError } from "@/lib/user-facing-errors";
 
@@ -25,7 +25,7 @@ export class WorkspaceAccessError extends Error {
 export async function assertActiveWorkspaceAccess(input: {
   userId: string;
   organisationId: string;
-}): Promise<void> {
+}): Promise<{ role: MemberRole }> {
   const org = await prisma.organisation.findFirst({
     where: { id: input.organisationId, deletedAt: null },
     select: { id: true },
@@ -45,10 +45,25 @@ export async function assertActiveWorkspaceAccess(input: {
         userId: input.userId,
       },
     },
-    select: { id: true },
+    select: {
+      id: true,
+      role: true,
+      user: { select: { isActive: true, isSuspended: true, deletedAt: true } },
+    },
   });
 
-  if (membership) return;
+  if (membership) {
+    // Suspended / deactivated / deleted users lose access on their next request,
+    // not when their 30-day JWT happens to expire.
+    if (!membership.user.isActive || membership.user.isSuspended || membership.user.deletedAt) {
+      throw new WorkspaceAccessError(
+        "SESSION_ORG_INVALID",
+        "This account is no longer active. Please contact your workspace admin.",
+      );
+    }
+    // Live role: a demotion takes effect immediately instead of after the JWT recheck.
+    return { role: membership.role };
+  }
 
   const anyMembership = await prisma.organisationMember.findFirst({
     where: { userId: input.userId },

@@ -67,8 +67,17 @@ export async function resolveActiveWorkspaceForUser(input: {
   if (!picked) return null;
 
   if (input.persist) {
-    await prisma.user.update({
-      where: { id: input.userId },
+    // Only write when the active workspace actually changes: User.updatedAt is the
+    // workspace revision open tabs send with every write, so a no-op write on each
+    // sign-in turned the user's other tabs into "Workspace changed" 409s.
+    await prisma.user.updateMany({
+      where: {
+        id: input.userId,
+        OR: [
+          { activeOrganisationId: null },
+          { activeOrganisationId: { not: picked.organisationId } },
+        ],
+      },
       data: { activeOrganisationId: picked.organisationId },
     });
   }

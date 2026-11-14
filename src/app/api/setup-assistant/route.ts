@@ -2,10 +2,12 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { getAiProvider } from "@/adapters/ai";
+import { completeStructuredSafe, type SafeStructuredResult } from "@/adapters/ai/structured";
 import { resolveModelForTier } from "@/lib/ai-models";
 import { jsonError, requirePermission } from "@/lib/session";
 import { recordAiExecution } from "@/services/ai-execution";
 import { writeAuditLog } from "@/services/audit";
+import { upsertKnowledgeDocument } from "@/services/knowledge";
 import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { toCustomerAiError, CUSTOMER_AI_UNAVAILABLE } from "@/lib/customer-ai-errors";
@@ -36,6 +38,30 @@ const proposalShape = z.object({
   pipelineStages: z.array(z.object({ name: z.string(), slug: z.string() })).optional(),
 });
 
+type SetupProposal = z.infer<typeof proposalShape>;
+
+/** Keys approve can actually save — a proposal with none of them is not a usable setup. */
+const AGENT_KEYS = [
+  "tone",
+  "qualificationQuestions",
+  "scoringRules",
+  "handoverRules",
+  "followUpDelaysMinutes",
+  "bookingThreshold",
+  "disqualificationRules",
+] as const satisfies ReadonlyArray<keyof SetupProposal>;
+
+function hasSavableContent(proposal: SetupProposal): boolean {
+  return (
+    AGENT_KEYS.some((key) => proposal[key] !== undefined) ||
+    Boolean(proposal.knowledgeStructure?.length) ||
+    Boolean(proposal.qualificationFields?.length)
+  );
+}
+
+const PROPOSAL_UNUSABLE =
+  "Agent Desk couldn't build a setup proposal from that description. Add a little more detail and try again.";
+
 function humanizeSetupAiError(message: string): string {
   return toCustomerAiError(message);
 }
@@ -56,10 +82,10 @@ export async function POST(req: NextRequest) {
       const started = Date.now();
       const systemPrompt = `You are the Agent Desk Setup Assistant.
 Given a business description, propose CRM configuration as JSON with keys:
-knowledgeStructure (array of {title,category,content}),
-qualificationFields (array of {key,label,description}),
+knowledgeStructure (array of {title,category,content}; category one of business|pricing|sop|faq|tone|scripts),
+qualificationFields (array of {key,label,description}; key in snake_case),
 qualificationQuestions (string array),
-scoringRules (object),
+scoringRules (object: {"weights": {businessFit, need, urgency, budget, authority, engagement, sentiment, buyingSignals}} with numbers 0-30),
 bookingThreshold (number 0-100),
 disqualificationRules (array),
 tone (string),
@@ -67,20 +93,10 @@ followUpDelaysMinutes (number array),
 handoverRules (object),
 pipelineStages (array of {name,slug}),
 reply (short summary for the user).
-Return ONLY JSON. Do not invent fake customer data.`;
+Return ONLY JSON. Do not invent fake customer data, prices or policies that are not in the description.`;
 
-      let raw: unknown;
-      try {
-        raw = await provider.analyseConversation({
-          model,
-          systemPrompt,
-          conversationTranscript: "",
-          knowledgeContext: "",
-          leadMessage: body.businessDescription,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "AI request failed";
-        await recordAiExecution({
+      const recordFailure = (message: string) =>
+        recordAiExecution({
           organisationId: session.organisationId,
           provider: provider.name,
           model,
@@ -90,20 +106,33 @@ Return ONLY JSON. Do not invent fake customer data.`;
           success: false,
           metadata: { mode: "propose", error: message.slice(0, 500) },
         });
+
+      // Plain structured completion with the setup proposal's own schema. (analyseConversation
+      // appends the inbound-message decision schema, so its output never matched this shape.)
+      let result: SafeStructuredResult<SetupProposal>;
+      try {
+        result = await completeStructuredSafe(proposalShape, {
+          organisationId: session.organisationId,
+          provider,
+          model,
+          system: systemPrompt,
+          prompt: `Business description:\n${body.businessDescription}`,
+          temperature: 0.2,
+          maxTokens: 4096,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "AI request failed";
+        await recordFailure(message);
         return jsonError(humanizeSetupAiError(message), 502);
       }
 
-      let proposal: Record<string, unknown>;
-      if (raw && typeof raw === "object" && "qualificationQuestions" in (raw as object)) {
-        proposal = raw as Record<string, unknown>;
-      } else if (raw && typeof raw === "object" && "reply" in (raw as object)) {
-        proposal = {
-          reply: (raw as { reply?: string }).reply,
-          ...(raw as object),
-        };
-      } else {
-        proposal = { reply: "Could not parse proposal", raw };
+      if (!result.ok || !hasSavableContent(result.data)) {
+        const reason = result.ok ? "Proposal contained no configurable fields" : result.reason;
+        await recordFailure(reason);
+        const providerFailed = !result.ok && result.failureClass === "PROVIDER_FAILED";
+        return jsonError(providerFailed ? humanizeSetupAiError(reason) : PROPOSAL_UNUSABLE, 502);
       }
+      const proposal: SetupProposal = result.data;
 
       await recordAiExecution({
         organisationId: session.organisationId,
@@ -113,7 +142,7 @@ Return ONLY JSON. Do not invent fake customer data.`;
         feature: "setup_assistant",
         latencyMs: Date.now() - started,
         success: true,
-        metadata: { mode: "propose" },
+        metadata: { mode: "propose", repaired: result.repaired },
       });
 
       return Response.json({
@@ -126,9 +155,19 @@ Return ONLY JSON. Do not invent fake customer data.`;
     }
 
     const parsed = proposalShape.safeParse(body.proposal);
-    const proposal = parsed.success ? parsed.data : (body.proposal as z.infer<typeof proposalShape>);
+    if (!parsed.success) {
+      return jsonError(
+        "This proposal isn't in the expected format — generate a new proposal and approve that.",
+        400,
+      );
+    }
+    const proposal = parsed.data;
+    if (!hasSavableContent(proposal)) {
+      return jsonError("Nothing to save in this proposal — generate a new one.", 400);
+    }
 
-    if (proposal.tone || proposal.qualificationQuestions || proposal.scoringRules || proposal.handoverRules) {
+    let agentUpdated = false;
+    if (AGENT_KEYS.some((key) => proposal[key] !== undefined)) {
       const agent = await prisma.agentConfiguration.findFirst({
         where: { organisationId: session.organisationId, isActive: true },
       });
@@ -152,23 +191,28 @@ Return ONLY JSON. Do not invent fake customer data.`;
               agent.disqualificationRules) as Prisma.InputJsonValue,
           },
         });
+        agentUpdated = true;
       }
     }
 
-    if (proposal.knowledgeStructure?.length) {
-      for (const doc of proposal.knowledgeStructure.slice(0, 12)) {
-        await prisma.knowledgeDocument.create({
-          data: {
-            organisationId: session.organisationId,
-            title: doc.title.slice(0, 180),
-            category: doc.category || "setup",
-            content: doc.content,
-            status: "ACTIVE",
-          },
-        });
-      }
+    // Through the knowledge service so documents are chunked/embedded (retrievable) and
+    // re-approving the same proposal updates the existing documents instead of duplicating them.
+    let knowledgeDocuments = 0;
+    for (const doc of proposal.knowledgeStructure?.slice(0, 12) ?? []) {
+      const title = doc.title.trim().slice(0, 180);
+      const content = doc.content.trim();
+      if (!title || !content) continue;
+      await upsertKnowledgeDocument({
+        organisationId: session.organisationId,
+        title,
+        category: doc.category.trim() || "setup",
+        content,
+        tags: ["setup-assistant"],
+      });
+      knowledgeDocuments += 1;
     }
 
+    let qualificationFields = 0;
     if (proposal.qualificationFields?.length) {
       for (const field of proposal.qualificationFields.slice(0, 20)) {
         await prisma.qualificationField.upsert({
@@ -189,6 +233,7 @@ Return ONLY JSON. Do not invent fake customer data.`;
             description: field.description,
           },
         });
+        qualificationFields += 1;
       }
     }
 
@@ -198,10 +243,14 @@ Return ONLY JSON. Do not invent fake customer data.`;
       action: "ai.setup_approved",
       entityType: "Organisation",
       entityId: session.organisationId,
-      metadata: { keys: Object.keys(proposal) },
+      metadata: { keys: Object.keys(proposal), agentUpdated, knowledgeDocuments, qualificationFields },
     });
 
-    return Response.json({ ok: true, message: "Setup approved and saved." });
+    return Response.json({
+      ok: true,
+      message: "Setup approved and saved.",
+      saved: { agentUpdated, knowledgeDocuments, qualificationFields },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

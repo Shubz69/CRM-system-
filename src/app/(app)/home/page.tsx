@@ -63,9 +63,10 @@ export default function HomePage() {
         const [briefRes, convRes, dealsRes, contactsRes, oppsRes, goalsRes] =
           await Promise.all([
             fetch("/api/chief-of-staff"),
-            fetch("/api/conversations"),
-            fetch("/api/deals"),
-            fetch("/api/contacts"),
+            // Counts come from the server — counting a capped list stopped at 100.
+            fetch("/api/conversations?summary=1"),
+            fetch("/api/deals?summary=1"),
+            fetch("/api/contacts?countOnly=1"),
             fetch("/api/opportunities"),
             fetch("/api/goals"),
           ]);
@@ -75,32 +76,26 @@ export default function HomePage() {
         let needsReply: number | null = null;
         let needingHuman: number | null = null;
         if (convRes.ok) {
-          const cJson = await convRes.json();
-          const items = (cJson.conversations ?? cJson.items ?? []) as Array<{
-            unreadCount?: number;
-            needsHumanReview?: boolean;
-            handlingMode?: string;
-          }>;
-          needingHuman = items.filter(
-            (c) => c.needsHumanReview || c.handlingMode === "HUMAN",
-          ).length;
+          const cJson = (await convRes.json()) as {
+            needingHuman?: number;
+            needsReply?: number;
+          };
+          // Handoff / HUMAN handling only.
+          needingHuman = typeof cJson.needingHuman === "number" ? cJson.needingHuman : null;
           // Broader: unread OR handoff — intentionally can exceed "needing human".
-          needsReply = items.filter(
-            (c) => (c.unreadCount ?? 0) > 0 || c.needsHumanReview,
-          ).length;
+          needsReply = typeof cJson.needsReply === "number" ? cJson.needsReply : null;
         }
 
         let openDeals: number | null = null;
         if (dealsRes.ok) {
-          const dJson = await dealsRes.json();
-          const deals = (dJson.deals ?? []) as Array<{ status: string }>;
-          openDeals = deals.filter((d) => d.status === "OPEN").length;
+          const dJson = (await dealsRes.json()) as { openDeals?: number };
+          openDeals = typeof dJson.openDeals === "number" ? dJson.openDeals : null;
         }
 
         let activeLeads: number | null = null;
         if (contactsRes.ok) {
-          const contactsJson = await contactsRes.json();
-          activeLeads = (contactsJson.contacts ?? []).length;
+          const contactsJson = (await contactsRes.json()) as { total?: number };
+          activeLeads = typeof contactsJson.total === "number" ? contactsJson.total : null;
         }
 
         let opportunities: number | null = null;

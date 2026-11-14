@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { planCompute } from "@/services/compute-governor";
+import { matchOptOutKeyword } from "@/services/opt-out";
 
 export type L0Understanding = {
   level: "L0";
@@ -12,14 +13,6 @@ export type L0Understanding = {
   matchedKeywords: string[];
 };
 
-const OPT_OUT_PATTERNS = [
-  /\bstop\b/i,
-  /\bunsubscribe\b/i,
-  /\bopt[\s-]?out\b/i,
-  /\bremove me\b/i,
-  /\bdo not (?:message|contact)\b/i,
-  /\bdon't (?:message|contact)\b/i,
-];
 const MEETING_PATTERNS = [
   /\b(?:book|schedule|arrange)\b.{0,24}\b(?:meeting|call|demo)\b/i,
   /\b(?:meeting|call|demo)\b.{0,24}\b(?:book|schedule|available)\b/i,
@@ -37,8 +30,10 @@ function matches(text: string, patterns: RegExp[]): string[] {
 }
 
 export function classifyInboundL0(text: string): L0Understanding {
-  const optOut = matches(text, OPT_OUT_PATTERNS);
-  if (optOut.length) {
+  // Same strict rule as the keyword gate: the message must be an opt-out command, not merely
+  // contain "stop" ("can't stop thinking about it", "one-stop shop").
+  const optOut = matchOptOutKeyword(text);
+  if (optOut) {
     return {
       level: "L0",
       intent: "OPT_OUT",
@@ -46,7 +41,7 @@ export function classifyInboundL0(text: string): L0Understanding {
       objectionCategory: null,
       optedOut: true,
       confidenceBand: "HIGH",
-      matchedKeywords: optOut,
+      matchedKeywords: [optOut],
     };
   }
   const meeting = matches(text, MEETING_PATTERNS);

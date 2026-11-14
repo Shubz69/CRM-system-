@@ -691,6 +691,16 @@ export function planAgentRunDeterministic(
     return planSummarise(trimmed);
   }
 
+  // "What should I do with these contacts?" points at records the user hasn't named.
+  // Neither a web research scan nor a whole-CRM digest answers it — ask which ones.
+  if (
+    trimmed.split(/\s+/).length <= 12 &&
+    /\b(these|those)\s+(contacts?|leads?|people|deals?|customers?|records?|ones|rows)\b/i.test(trimmed) &&
+    !/["“”'‘’:]/.test(trimmed)
+  ) {
+    return clarificationFor(trimmed);
+  }
+
   // When the user already picked Quick / Action / Executive, avoid vague stalls —
   // prefer workspace CRM/operator answers over clarification for short business asks.
   const mode = modeEarly;

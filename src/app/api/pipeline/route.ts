@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { markHumanLeadChange } from "@/services/lead-stage-guard";
 import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 
@@ -15,8 +17,13 @@ export async function GET() {
           include: {
             leads: {
               where: { deletedAt: null },
-              include: {
-                contact: true,
+              // Only what the board renders — not full contact rows (emails, phones, metadata).
+              select: {
+                id: true,
+                score: true,
+                qualificationStatus: true,
+                stageId: true,
+                contact: { select: { fullName: true, instagramUsername: true } },
               },
               orderBy: { updatedAt: "desc" },
             },
@@ -59,7 +66,14 @@ export async function PATCH(req: NextRequest) {
 
     await prisma.lead.updateMany({
       where: { id: lead.id, organisationId: session.organisationId },
-      data: { stageId: stage.id },
+      data: {
+        stageId: stage.id,
+        // A person's move wins: inbound AI analysis will not move this lead again.
+        metadata: markHumanLeadChange(lead.metadata, {
+          stage: true,
+          userId: session.userId,
+        }) as Prisma.InputJsonValue,
+      },
     });
 
     await writeAuditLog({

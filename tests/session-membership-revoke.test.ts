@@ -36,7 +36,7 @@ describe("requireSession membership gate after Team Remove", () => {
   });
 
   it("allows session when live membership exists", async () => {
-    assertActiveWorkspaceAccess.mockResolvedValue(undefined);
+    assertActiveWorkspaceAccess.mockResolvedValue({ role: MemberRole.READ_ONLY });
     const { requireSession } = await import("@/lib/session");
     const session = await requireSession();
     expect(session.organisationId).toBe("org_qa");
@@ -44,6 +44,22 @@ describe("requireSession membership gate after Team Remove", () => {
       userId: "user_1",
       organisationId: "org_qa",
     });
+  });
+
+  it("uses the live membership role, not the role cached in the JWT", async () => {
+    getServerSession.mockResolvedValue({
+      user: {
+        id: "user_1",
+        organisationId: "org_qa",
+        role: MemberRole.OWNER,
+        email: "demoted@example.com",
+        name: "Demoted",
+      },
+    });
+    assertActiveWorkspaceAccess.mockResolvedValue({ role: MemberRole.SALES_AGENT });
+    const { requireSession } = await import("@/lib/session");
+    const session = await requireSession();
+    expect(session.role).toBe(MemberRole.SALES_AGENT);
   });
 
   it("rejects JWT that still claims a revoked org (immediate access loss)", async () => {

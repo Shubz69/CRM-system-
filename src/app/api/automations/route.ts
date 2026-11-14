@@ -12,7 +12,16 @@ import {
   buildWorkflowSteps,
   compileNaturalLanguageToWorkflow,
   createRuleFromWorkflow,
+  isOutboundAction,
+  validateAutomationRule,
 } from "@/services/automation-os";
+
+function zodMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Invalid automation rule";
+  const path = issue.path.join(".");
+  return path ? `${path}: ${issue.message}` : issue.message;
+}
 
 const ruleSchema = z.object({
   id: z.string().optional(),
@@ -64,6 +73,8 @@ export async function POST(req: Request) {
       const nl = z.string().min(1).max(4000).parse(body.naturalLanguage);
       const name = z.string().min(1).max(200).parse(body.name ?? "NL automation");
       const workflow = compileNaturalLanguageToWorkflow(nl);
+      const invalid = validateAutomationRule(workflow);
+      if (invalid) return jsonError(invalid, 400);
       const id = await createRuleFromWorkflow({
         organisationId: session.organisationId,
         name,
@@ -87,13 +98,10 @@ export async function POST(req: Request) {
       .parse(body);
     const conditions = parsed.conditions ?? {};
     const actions = parsed.actions ?? [];
+    const invalid = validateAutomationRule({ triggerType: parsed.triggerType, actions });
+    if (invalid) return jsonError(invalid, 400);
     const requiresApproval =
-      parsed.requiresApproval ??
-      actions.some((a) =>
-        ["send_follow_up", "schedule_follow_up", "send_booking_link", "send_message", "publish_content"].includes(
-          String(a.type),
-        ),
-      );
+      parsed.requiresApproval ?? actions.some((a) => isOutboundAction(String(a.type)));
     const workflow = {
       version: 1 as const,
       triggerType: parsed.triggerType,
@@ -125,6 +133,7 @@ export async function POST(req: Request) {
     return Response.json({ rule, organisationId: session.organisationId }, { status: 201 });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof z.ZodError) return jsonError(zodMessage(error), 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 400);
@@ -140,6 +149,8 @@ export async function PATCH(req: Request) {
       raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null,
     );
     const body = ruleSchema.extend({ id: z.string() }).parse(raw);
+    const invalid = validateAutomationRule({ triggerType: body.triggerType, actions: body.actions });
+    if (invalid) return jsonError(invalid, 400);
     const { id, conditions, actions, naturalLanguage: _naturalLanguage, ...rest } = body;
     void _naturalLanguage;
     const data: Prisma.AutomationRuleUpdateManyMutationInput = { ...rest };
@@ -149,12 +160,7 @@ export async function PATCH(req: Request) {
       const triggerType = body.triggerType;
       if (triggerType) {
         const requiresApproval =
-          body.requiresApproval ??
-          actions.some((a) =>
-            ["send_follow_up", "schedule_follow_up", "send_booking_link", "send_message", "publish_content"].includes(
-              String(a.type),
-            ),
-          );
+          body.requiresApproval ?? actions.some((a) => isOutboundAction(String(a.type)));
         data.requiresApproval = requiresApproval;
         data.workflow = {
           version: 1,
@@ -179,6 +185,7 @@ export async function PATCH(req: Request) {
     return Response.json({ ok: true, organisationId: session.organisationId });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof z.ZodError) return jsonError(zodMessage(error), 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     return jsonError(message, 400);

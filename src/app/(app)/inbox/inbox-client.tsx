@@ -11,6 +11,26 @@ import { statusLabel } from "@/lib/customer-labels";
 import { useSession } from "next-auth/react";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 import { useVisibleInterval } from "@/hooks/use-visible-interval";
+import {
+  INBOX_QUEUES,
+  type InboxQueue,
+  matchesInboxQueue,
+  newReplyIdempotencyKey,
+  parseInboxQueue,
+} from "./inbox-queues";
+
+/** Conversations per "Load more" step (the list poll re-reads everything loaded so far). */
+const LIST_PAGE_SIZE = 100;
+
+const QUEUE_LABELS: Record<InboxQueue, string> = {
+  all: "All",
+  needs_reply: "Needs reply",
+  hot: "Hot leads",
+  human: "Human required",
+  waiting: "Waiting",
+};
+
+type PatchResult = { ok: true } | { ok: false; status: number; notDelivered: boolean };
 
 type ConversationListItem = {
   id: string;
@@ -25,6 +45,7 @@ type ConversationListItem = {
   messagingWindowExpiresAt?: string | null;
   humanMessagingWindowExpiresAt?: string | null;
   lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
   lead: {
     id: string;
     score: number;
@@ -42,6 +63,8 @@ type ConversationDetail = {
   handlingMode: string;
   aiPaused: boolean;
   needsHumanReview: boolean;
+  /** Bumped by every inbound/outbound/handoff — sent with replies so stale sends are refused. */
+  activityVersion?: number;
   lastInboundAt?: string | null;
   lastOutboundAt?: string | null;
   messagingWindowExpiresAt?: string | null;
@@ -105,16 +128,38 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<Member[]>([]);
   const [note, setNote] = useState("");
-  const [queue, setQueue] = useState<"all" | "needs_reply" | "hot" | "human" | "waiting">("all");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const queueParam = searchParams.get("queue");
+  const [queue, setQueue] = useState<InboxQueue>(() => parseInboxQueue(queueParam));
+  const [seenQueueParam, setSeenQueueParam] = useState(queueParam);
+  if (queueParam !== seenQueueParam) {
+    // Follow ?queue= when the URL changes while the inbox is already open.
+    setSeenQueueParam(queueParam);
+    if (queueParam) setQueue(parseInboxQueue(queueParam));
+  }
   const [mobilePanel, setMobilePanel] = useState<"list" | "thread">("list");
   const [showCustomerSheet, setShowCustomerSheet] = useState(false);
   /** Bumps on every deliberate selection so same-id re-clicks still reload. */
   const [selectionEpoch, setSelectionEpoch] = useState(0);
   const selectedIdRef = useRef<string | null>(selectedId);
+  const detailStateRef = useRef(detailState);
+  /** Latest detail refresh wins — an older in-flight response never overwrites newer data. */
+  const detailRefreshSeqRef = useRef(0);
+  const listLimitRef = useRef(LIST_PAGE_SIZE);
+  const listSeqRef = useRef(0);
+  const [canLoadMore, setCanLoadMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** One idempotency key per composed reply; kept across retries of that same text. */
+  const replyKeyRef = useRef<{ key: string; conversationId: string; text: string } | null>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    detailStateRef.current = detailState;
+  }, [detailState]);
 
   const selectConversation = useCallback((id: string) => {
     // Synchronous selection — never briefly clear to null while targeting an id.
@@ -128,21 +173,61 @@ export default function InboxPage() {
   }, []);
 
   const loadList = useCallback(async () => {
-    const res = await fetch("/api/conversations");
+    const limit = listLimitRef.current;
+    const seq = ++listSeqRef.current;
+    const res = await fetch(`/api/conversations?limit=${limit}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load inbox");
-    setItems(json.conversations);
-    if (!selectedIdRef.current && json.conversations[0]?.id) {
-      selectConversation(json.conversations[0].id);
+    // A poll that started before "Load more" must not shrink the list back.
+    if (seq !== listSeqRef.current) return;
+    const conversations = (json.conversations ?? []) as ConversationListItem[];
+    setItems(conversations);
+    const total = typeof json.total === "number" ? json.total : conversations.length;
+    // Server caps the page size; only offer more when this page came back full.
+    setCanLoadMore(conversations.length >= limit && conversations.length < total);
+    if (!selectedIdRef.current && conversations[0]?.id) {
+      selectConversation(conversations[0].id);
     }
   }, [selectConversation]);
+
+  async function loadMore() {
+    listLimitRef.current += LIST_PAGE_SIZE;
+    setLoadingMore(true);
+    try {
+      await loadList();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load more conversations");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  /** Re-read the open thread without flashing the loading state. */
+  const refreshDetail = useCallback(async () => {
+    const targetId = selectedIdRef.current;
+    if (!targetId) return;
+    const seq = ++detailRefreshSeqRef.current;
+    const res = await fetch(`/api/conversations/${targetId}`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.conversation) return; // keep what is on screen; next tick retries
+    if (seq !== detailRefreshSeqRef.current) return;
+    if (json.conversation.id !== targetId || selectedIdRef.current !== targetId) return;
+    setDetail(json.conversation);
+  }, []);
+
+  const pollDetail = useCallback(async () => {
+    const state = detailStateRef.current;
+    // Only once the selected thread has loaded — never alongside the initial load.
+    if (state.status !== "ready" || state.id !== selectedIdRef.current) return;
+    await refreshDetail();
+  }, [refreshDetail]);
 
   useEffect(() => {
     Promise.all([
       loadList(),
-      fetch("/api/pipeline")
+      fetch("/api/pipeline/stages")
         .then((r) => r.json())
-        .then((j) => setStages(j.pipeline?.stages ?? [])),
+        .then((j) => setStages(j.stages ?? [])),
       fetch("/api/members").then((r) => r.json()).then((j) => setMembers(j.members ?? [])),
     ])
       .catch((e) => toast.error(e.message))
@@ -151,6 +236,8 @@ export default function InboxPage() {
 
   // Refresh the list every 8s while the tab is visible (no overlap, paused when hidden).
   useVisibleInterval(loadList, 8000);
+  // Keep the open thread live too, so new customer messages appear without re-selecting.
+  useVisibleInterval(pollDetail, 10_000, Boolean(selectedId));
 
   useEffect(() => {
     const fromQuery = searchParams.get("c") || searchParams.get("conversationId");
@@ -230,39 +317,55 @@ export default function InboxPage() {
     });
   }, [detail]);
 
-  async function patch(body: Record<string, unknown>) {
-    if (!selectedId) return;
+  /** PATCH the open conversation. Resolves ok only when the server accepted the change. */
+  async function patch(body: Record<string, unknown>): Promise<PatchResult> {
+    const notSent: PatchResult = { ok: false, status: 0, notDelivered: true };
+    if (!selectedId) return notSent;
     if (!sendTargetMatches) {
       toast.error("Conversation view is still loading — wait before sending.");
-      return;
+      return notSent;
     }
     if (body.reply && optedOut) {
       toast.error("Do not contact — customer opted out.");
-      return;
+      return notSent;
     }
-    const res = await workspaceFetch(
-      workspaceContext.loadedOrganisationId,
-      workspaceContext.workspaceRevision,
-      `/api/conversations/${selectedId}`,
-      {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      },
-    );
-    const json = await res.json();
+    let res: Response;
+    let json: { error?: string; notDelivered?: boolean };
+    try {
+      res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        `/api/conversations/${selectedId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      json = await res.json().catch(() => ({}));
+    } catch {
+      // No response: a reply may or may not have gone out — keep the text (and its key).
+      toast.error("Couldn't reach the server — nothing was cleared. Try again.");
+      return { ok: false, status: 0, notDelivered: false };
+    }
     if (!res.ok) {
       toast.error(json.error || "Update failed");
-      return;
+      // 409: new activity / needs review — show the latest thread (and its version).
+      if (res.status === 409) void refreshDetail().catch(() => undefined);
+      return { ok: false, status: res.status, notDelivered: Boolean(json.notDelivered) };
     }
-    toast.success("Updated");
-    await loadList();
-    if (selectedId) selectConversation(selectedId);
+    toast.success(body.reply ? "Reply sent" : body.note ? "Note saved" : "Updated");
+    await Promise.all([
+      loadList().catch(() => undefined),
+      refreshDetail().catch(() => undefined),
+    ]);
+    return { ok: true };
   }
 
   async function onReply(e: FormEvent) {
     e.preventDefault();
-    if (!reply.trim()) return;
+    const text = reply;
+    if (!text.trim() || !selectedId || sendingReply) return;
     if (!sendTargetMatches) {
       toast.error("Selected conversation does not match the open thread — send blocked.");
       return;
@@ -271,8 +374,44 @@ export default function InboxPage() {
       toast.error("Do not contact — customer opted out.");
       return;
     }
-    await patch({ reply });
-    setReply("");
+    const pending = replyKeyRef.current;
+    const key =
+      pending && pending.conversationId === selectedId && pending.text === text
+        ? pending.key
+        : newReplyIdempotencyKey();
+    replyKeyRef.current = { key, conversationId: selectedId, text };
+    setSendingReply(true);
+    try {
+      const result = await patch({
+        reply: text,
+        replyIdempotencyKey: key,
+        ...(typeof detail?.activityVersion === "number"
+          ? { expectedActivityVersion: detail.activityVersion }
+          : {}),
+      });
+      if (result.ok) {
+        replyKeyRef.current = null;
+        // Only clear what was sent — keep anything typed while the send was in flight.
+        setReply((current) => (current === text ? "" : current));
+      } else if (result.notDelivered) {
+        // Definitely not delivered — the next attempt is a fresh send.
+        replyKeyRef.current = null;
+      }
+    } finally {
+      setSendingReply(false);
+    }
+  }
+
+  async function onSaveNote() {
+    const text = note;
+    if (!text.trim() || savingNote) return;
+    setSavingNote(true);
+    try {
+      const result = await patch({ note: text });
+      if (result.ok) setNote((current) => (current === text ? "" : current));
+    } finally {
+      setSavingNote(false);
+    }
   }
 
   const sorted = useMemo(
@@ -285,22 +424,10 @@ export default function InboxPage() {
     [items],
   );
 
-  const filtered = useMemo(() => {
-    return sorted.filter((c) => {
-      if (queue === "all") return true;
-      if (queue === "human") return c.needsHumanReview || c.aiPaused;
-      if (queue === "hot") return (c.lead?.score ?? 0) >= 70;
-      if (queue === "needs_reply") {
-        if (c.unreadCount > 0) return true;
-        if (!c.lastMessageAt) return false;
-        return c.unreadCount > 0 || Boolean(c.lastMessagePreview);
-      }
-      if (queue === "waiting") {
-        return !c.needsHumanReview && !c.aiPaused && c.unreadCount === 0;
-      }
-      return true;
-    });
-  }, [queue, sorted]);
+  const filtered = useMemo(
+    () => sorted.filter((c) => matchesInboxQueue(c, queue)),
+    [queue, sorted],
+  );
 
   if (loading) return <PageLoading label="Loading inbox" />;
 
@@ -410,11 +537,10 @@ export default function InboxPage() {
         <button
           className="btn btn-secondary mt-2"
           type="button"
-          onClick={() => {
-            if (note.trim()) patch({ note }).then(() => setNote(""));
-          }}
+          disabled={savingNote || !note.trim()}
+          onClick={() => void onSaveNote()}
         >
-          Save note
+          {savingNote ? "Saving…" : "Save note"}
         </button>
       </div>
       <div>
@@ -487,22 +613,14 @@ export default function InboxPage() {
           <div className="border-b border-[var(--border)] px-4 py-3">
             <p className="font-medium">Conversations</p>
             <div className="filter-bar mt-2">
-              {(
-                [
-                  ["all", "All"],
-                  ["needs_reply", "Needs reply"],
-                  ["hot", "Hot leads"],
-                  ["human", "Human required"],
-                  ["waiting", "Waiting"],
-                ] as const
-              ).map(([id, label]) => (
+              {INBOX_QUEUES.map((id) => (
                 <button
                   key={id}
                   type="button"
                   className={`badge ${queue === id ? "badge-success" : ""}`}
                   onClick={() => setQueue(id)}
                 >
-                  {label}
+                  {QUEUE_LABELS[id]}
                 </button>
               ))}
             </div>
@@ -569,6 +687,18 @@ export default function InboxPage() {
                 </div>
               </button>
             ))}
+            {canLoadMore ? (
+              <div className="p-3">
+                <button
+                  type="button"
+                  className="btn btn-secondary w-full"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -746,9 +876,9 @@ export default function InboxPage() {
                   <button
                     className="btn btn-primary"
                     type="submit"
-                    disabled={optedOut || !sendTargetMatches || !reply.trim()}
+                    disabled={optedOut || !sendTargetMatches || !reply.trim() || sendingReply}
                   >
-                    Send reply
+                    {sendingReply ? "Sending…" : "Send reply"}
                   </button>
                 </div>
               </form>

@@ -29,6 +29,9 @@ type Recommendation = {
   createdAt: string;
 };
 
+/** Gaps still waiting on the team — APPROVED / DISMISSED / USED are closed. */
+const OPEN_RECOMMENDATION_STATUSES = new Set(["NEW", "REVIEWED"]);
+
 const FILTERS = [
   { id: "all", label: "All" },
   { id: "current", label: "Current" },
@@ -59,6 +62,9 @@ export default function KnowledgePage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"write" | "upload">("write");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");
+  const [answeringId, setAnsweringId] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState("");
+  const [recBusyId, setRecBusyId] = useState<string | null>(null);
 
   async function load() {
     setListState("loading");
@@ -74,7 +80,11 @@ export default function KnowledgePage() {
     setDocs(docsJson.documents);
     if (recRes.ok) {
       const recJson = await recRes.json();
-      setRecommendations(recJson.recommendations || []);
+      setRecommendations(
+        ((recJson.recommendations || []) as Recommendation[]).filter((rec) =>
+          OPEN_RECOMMENDATION_STATUSES.has(rec.status),
+        ),
+      );
     }
     setListState("ready");
   }
@@ -137,6 +147,41 @@ export default function KnowledgePage() {
       return true;
     });
   }, [docs, filter]);
+
+  async function updateRecommendation(
+    rec: Recommendation,
+    status: "APPROVED" | "DISMISSED",
+    draftAnswer?: string,
+  ) {
+    setRecBusyId(rec.id);
+    try {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/knowledge/recommendations",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: rec.id, status, draftAnswer }),
+        },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Update failed");
+        return;
+      }
+      // Closed gaps leave the list straight away; load() refreshes the library too.
+      setRecommendations((current) => current.filter((r) => r.id !== rec.id));
+      if (answeringId === rec.id) {
+        setAnsweringId(null);
+        setAnswerText("");
+      }
+      toast.success(status === "APPROVED" ? "Answer saved to Knowledge" : "Dismissed");
+      await load();
+    } finally {
+      setRecBusyId(null);
+    }
+  }
 
   function openWrite(doc?: Doc) {
     if (doc) {
@@ -259,60 +304,72 @@ export default function KnowledgePage() {
           {recommendations.map((rec) => (
             <article key={rec.id} className="surface-attention p-4">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="badge badge-warn">Needs information</span>
+                <span className="badge badge-warn">
+                  {rec.draftAnswer ? "Draft answer ready" : "Needs information"}
+                </span>
                 <p className="font-medium">{rec.question}</p>
               </div>
               {rec.reason && <p className="mt-2 text-xs text-[var(--muted)]">{rec.reason}</p>}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={async () => {
-                    const res = await workspaceFetch(
-                      workspaceContext.loadedOrganisationId,
-                      workspaceContext.workspaceRevision,
-                      "/api/knowledge/recommendations",
-                      {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ id: rec.id, status: "APPROVED" }),
-                      },
-                    );
-                    if (!res.ok) {
-                      toast.error("Update failed");
-                      return;
-                    }
-                    toast.success("Approved");
-                    await load();
+              {answeringId === rec.id ? (
+                <form
+                  className="mt-3 space-y-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void updateRecommendation(rec, "APPROVED", answerText);
                   }}
                 >
-                  Review & approve
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    const res = await workspaceFetch(
-                      workspaceContext.loadedOrganisationId,
-                      workspaceContext.workspaceRevision,
-                      "/api/knowledge/recommendations",
-                      {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ id: rec.id, status: "DISMISSED" }),
-                      },
-                    );
-                    if (!res.ok) {
-                      toast.error("Update failed");
-                      return;
-                    }
-                    toast.success("Dismissed");
-                    await load();
-                  }}
-                >
-                  Dismiss
-                </button>
-              </div>
+                  <label className="block text-sm font-medium">
+                    Answer
+                    <textarea
+                      className="input mt-1 min-h-28 w-full"
+                      value={answerText}
+                      onChange={(e) => setAnswerText(e.target.value)}
+                      placeholder="Write the answer the AI should use for this question."
+                      required
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={recBusyId === rec.id || !answerText.trim()}
+                    >
+                      Approve & save to Knowledge
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setAnsweringId(null);
+                        setAnswerText("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setAnsweringId(rec.id);
+                      setAnswerText(rec.draftAnswer ?? "");
+                    }}
+                  >
+                    Review & approve
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={recBusyId === rec.id}
+                    onClick={() => void updateRecommendation(rec, "DISMISSED")}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
             </article>
           ))}
         </section>

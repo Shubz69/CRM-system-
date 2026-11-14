@@ -26,13 +26,17 @@ describe("NL → visible workflow", () => {
     const wf = compileNaturalLanguageToWorkflow(
       "When a lead scores above 60 and asks about pricing, notify me and draft a suggested reply for my review. Never send automatically.",
     );
-    expect(wf.triggerType).toBe("message_received");
+    // Only triggers that are emitted / actions with an executor (no message_received-only
+    // context, no draft_reply_for_review — it had no executor and silently did nothing).
+    expect(wf.triggerType).toBe("new_inbound_message");
     expect(wf.conditions.minScore).toBe(60);
     expect(wf.conditions.topicIncludes).toEqual(["pricing", "price"]);
     expect(wf.conditions.requireHumanReview).toBe(true);
     expect(wf.actions.some((a) => a.type === "notify_team")).toBe(true);
-    expect(wf.actions.some((a) => a.type === "draft_reply_for_review")).toBe(true);
+    expect(wf.actions.some((a) => a.type === "create_task")).toBe(true);
+    expect(wf.actions.some((a) => a.type === "draft_reply_for_review")).toBe(false);
     expect(wf.actions.some((a) => a.type === "send_message")).toBe(false);
     expect(wf.requiresApproval).toBe(true);
+    expect(wf.unsupportedNotes?.join(" ")).toMatch(/can't draft replies/i);
   });
 });

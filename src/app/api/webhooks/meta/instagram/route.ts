@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
     }
 
     const results: Array<Record<string, unknown>> = [];
+    let processingFailed = false;
 
     for (const msg of messages) {
       const recipientId =
@@ -147,7 +148,14 @@ export async function POST(req: NextRequest) {
           organisationId: resolved.organisationId,
         });
         results.push({ ok: false, error: "processing_failed" });
+        processingFailed = true;
       }
+    }
+
+    if (processingFailed) {
+      // 5xx so Meta redelivers. Safe: each message is keyed by its mid, so messages that
+      // already succeeded come back as duplicates and the failed one is reprocessed.
+      return Response.json({ ok: false, results }, { status: 500 });
     }
 
     return Response.json({ ok: true, results });

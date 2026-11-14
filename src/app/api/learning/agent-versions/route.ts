@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { jsonError, requirePermission } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
 import {
+  AGENT_CONFIGURATION_NOT_FOUND,
   createAgentVersionCandidate,
   promoteAgentVersionCandidate,
   runEvalSuite,
@@ -61,6 +62,9 @@ export async function POST(req: NextRequest) {
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
     if (error instanceof z.ZodError) return jsonError("Invalid request", 400);
+    if (message === AGENT_CONFIGURATION_NOT_FOUND || message === "Candidate not found") {
+      return jsonError(message, 404);
+    }
     return jsonError(message, 500);
   }
 }
@@ -96,6 +100,9 @@ export async function PATCH(req: NextRequest) {
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
     if (error instanceof z.ZodError) return jsonError("Invalid request", 400);
+    if (message === AGENT_CONFIGURATION_NOT_FOUND || message === "Candidate not found") {
+      return jsonError(message, 404);
+    }
     return jsonError(message, 500);
   }
 }

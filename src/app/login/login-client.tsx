@@ -6,6 +6,21 @@ import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthFrame } from "@/components/ui/auth-frame";
 
+/**
+ * Only same-site paths. "//evil.com" and "/\evil.com" start with "/" but browsers treat
+ * them as another host, which made the login page an open redirect.
+ */
+function safeCallbackPath(callbackUrl: string): string {
+  if (!callbackUrl.startsWith("/") || /^\/[\\/]/.test(callbackUrl)) return "/ask";
+  try {
+    const url = new URL(callbackUrl, window.location.origin);
+    if (url.origin !== window.location.origin) return "/ask";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/ask";
+  }
+}
+
 export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -30,7 +45,7 @@ export default function LoginClient() {
       setError("Invalid email or password.");
       return;
     }
-    router.push(callbackUrl.startsWith("/") ? callbackUrl : "/ask");
+    router.push(safeCallbackPath(callbackUrl));
     router.refresh();
   }
 

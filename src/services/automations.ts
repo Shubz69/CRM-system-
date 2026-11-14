@@ -151,18 +151,39 @@ export async function runAutomations(context: AutomationContext): Promise<number
   }
 }
 
+/**
+ * Conditions fail closed: a condition the event cannot answer (e.g. "score ≥ 70" on an
+ * event that carries no score) no longer counts as a match. Previously every condition
+ * was skipped when its field was missing, and topic conditions were never checked, so
+ * "when someone asks about pricing, notify me" fired on every message.
+ * `requireHumanReview` is an approval flag applied when the rule is compiled, not a filter.
+ */
 export function matchesConditions(
   conditions: Record<string, unknown>,
   context: AutomationContext,
 ): boolean {
-  if (conditions.minScore !== undefined && context.payload?.score !== undefined) {
-    if (Number(context.payload.score) < Number(conditions.minScore)) return false;
+  const payload = context.payload ?? {};
+  if (conditions.minScore !== undefined) {
+    if (payload.score === undefined || payload.score === null) return false;
+    if (Number(payload.score) < Number(conditions.minScore)) return false;
   }
-  if (conditions.sentiment !== undefined && context.payload?.sentiment !== undefined) {
-    if (String(context.payload.sentiment) !== String(conditions.sentiment)) return false;
+  if (conditions.sentiment !== undefined) {
+    if (payload.sentiment === undefined || payload.sentiment === null) return false;
+    if (String(payload.sentiment) !== String(conditions.sentiment)) return false;
   }
-  if (conditions.minutes !== undefined && context.payload?.inactiveMinutes !== undefined) {
-    if (Number(context.payload.inactiveMinutes) < Number(conditions.minutes)) return false;
+  if (conditions.minutes !== undefined) {
+    if (payload.inactiveMinutes === undefined || payload.inactiveMinutes === null) return false;
+    if (Number(payload.inactiveMinutes) < Number(conditions.minutes)) return false;
+  }
+  if (conditions.topicIncludes !== undefined) {
+    const topics = (Array.isArray(conditions.topicIncludes)
+      ? conditions.topicIncludes
+      : [conditions.topicIncludes]
+    )
+      .map((t) => String(t).toLowerCase().trim())
+      .filter(Boolean);
+    const text = typeof payload.text === "string" ? payload.text.toLowerCase() : "";
+    if (!text || !topics.some((topic) => text.includes(topic))) return false;
   }
   return true;
 }
@@ -301,6 +322,7 @@ export async function executeAction(
           id: context.conversationId,
           organisationId: context.organisationId,
         },
+        include: { messagingChannel: { select: { provider: true } } },
       });
       if (!conversation) break;
       const agent = await prisma.agentConfiguration.findFirst({
@@ -326,22 +348,38 @@ export async function executeAction(
         (action.type === "send_booking_link"
           ? `You can book a call here: ${bookingUrl}`
           : "Just checking in — happy to help when you are ready.");
-      const identifier = contact.identifiers.find((i) => i.channel === "manychat");
-      await prepareAndSendOutbound({
+      // Send on the conversation's own channel (as the inbox reply does) — defaulting to
+      // ManyChat with the internal contact id failed on Zernio / Meta conversations.
+      const channelProvider = conversation.messagingChannel?.provider || "manychat";
+      const identifier =
+        contact.identifiers.find((i) => i.channel === channelProvider) ||
+        contact.identifiers.find((i) => i.channel === "manychat") ||
+        contact.identifiers[0];
+      const identifierPrefix = identifier ? `${identifier.channel}:` : "";
+      const sendResult = await prepareAndSendOutbound({
         organisationId: context.organisationId,
         conversationId: conversation.id,
         contactId: contact.id,
-        contactExternalId:
-          identifier?.identifier.replace(/^manychat:/, "") || contact.id,
+        contactExternalId: identifier
+          ? identifier.identifier.startsWith(identifierPrefix)
+            ? identifier.identifier.slice(identifierPrefix.length)
+            : identifier.identifier
+          : contact.id,
         text,
         source: "AUTOMATION",
         holder: `automation:${context.triggerType}:${conversation.id}`,
         idempotencyKey: `automation:${context.triggerType}:${conversation.id}:${action.type}:${hashAutomationBody(text)}`,
         threadId: conversation.externalThreadId ?? undefined,
+        provider: channelProvider,
+        channel: channelProvider,
         metadata: context.approvalRequestId
           ? { approvalRequestId: context.approvalRequestId }
           : undefined,
       });
+      if (!sendResult.ok) {
+        // Surface to runAutomations so the execution is recorded as failed, not "success".
+        throw new Error(`Automation message not sent: ${sendResult.code}`);
+      }
       break;
     }
 

@@ -6,7 +6,9 @@ import { AppShell } from "@/components/app-shell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) {
+  // A revoked token (suspended user, password changed elsewhere) keeps a user object
+  // but loses its id — send it to sign-in instead of rendering a shell where every call 401s.
+  if (!session?.user?.id) {
     redirect("/login");
   }
 

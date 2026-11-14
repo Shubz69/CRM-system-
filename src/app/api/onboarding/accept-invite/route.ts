@@ -11,7 +11,9 @@ const acceptSchema = z.object({
   token: z.string().min(20),
   email: z.string().email(),
   name: z.string().min(1).max(120).optional(),
-  password: z.string().min(10).max(200).optional(),
+  // New accounts need 10+ characters (enforced in acceptInvite); an existing account's
+  // password is only verified here, so it must not be rejected for being shorter.
+  password: z.string().min(1).max(200).optional(),
 });
 
 const previewSchema = z.object({

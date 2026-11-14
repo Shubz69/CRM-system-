@@ -136,7 +136,11 @@ export async function getMessagingAdapterForOrganisation(
           apiToken: message.apiToken ?? credential.token!,
           metadata: {
             ...(message.metadata ?? {}),
-            ...(credential.igUserId ? { zernioAccountId: credential.igUserId } : {}),
+            // The conversation's own Zernio account wins; the org credential's account is only
+            // a fallback (overriding it replied from the wrong Instagram account).
+            ...(credential.igUserId && !message.metadata?.zernioAccountId
+              ? { zernioAccountId: credential.igUserId }
+              : {}),
           },
         });
       },

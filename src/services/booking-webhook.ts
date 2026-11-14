@@ -40,11 +40,32 @@ function stageSlugForStatus(status: string): string | null {
   }
 }
 
+type WebhookEventKey = { provider: string; idempotencyKey: string };
+
+/** Never leave an event PROCESSING: the next delivery and operators must see why it stopped. */
+async function settleWebhookEvent(
+  key: WebhookEventKey,
+  status: "FAILED" | "IGNORED",
+  error: string,
+): Promise<void> {
+  await prisma.webhookEvent
+    .update({
+      where: { provider_idempotencyKey: key },
+      data: { status, error: error.slice(0, 1000), processedAt: new Date() },
+    })
+    .catch((updateError: unknown) => {
+      logger.warn("Booking webhook event status update failed", {
+        message: updateError instanceof Error ? updateError.message : "unknown",
+      });
+    });
+}
+
 /** Shared booking webhook processor used by generic + provider-specific routes. */
 export async function handleBookingWebhook(
   req: NextRequest,
   options?: { providerLabel?: string; normalizePayload?: (raw: unknown) => unknown },
 ) {
+  let recordedEvent: WebhookEventKey | null = null;
   try {
     assertProductionSecretsConfigured();
     const ip = req.headers.get("x-forwarded-for") || "unknown";
@@ -128,6 +149,7 @@ export async function handleBookingWebhook(
       },
       update: { status: "PROCESSING", payload: rawIncoming as object },
     });
+    recordedEvent = { provider: providerLabel, idempotencyKey };
 
     const contactEmail =
       rawBody && typeof rawBody === "object" && typeof (rawBody as { contactEmail?: unknown }).contactEmail === "string"
@@ -153,6 +175,7 @@ export async function handleBookingWebhook(
     }
 
     if (!contact) {
+      await settleWebhookEvent(recordedEvent, "IGNORED", "Contact not found for booking");
       return Response.json({ error: "Contact not found for booking" }, { status: 404 });
     }
 
@@ -183,39 +206,61 @@ export async function handleBookingWebhook(
           ? "mock"
           : "link";
 
-    const booking = await prisma.booking.upsert({
-      where: {
-        organisationId_provider_externalId: {
-          organisationId: org.id,
-          provider: bookingProviderName,
-          externalId: parsed.externalId,
-        },
-      },
-      create: {
-        organisationId: org.id,
-        contactId: contact.id,
-        conversationId: lead?.conversationId ?? undefined,
-        leadId: lead?.id,
-        provider: bookingProviderName,
-        externalId: parsed.externalId,
-        status: parsed.status as BookingStatus,
-        scheduledAt: parsed.scheduledAt ?? null,
-        bookingUrl,
-      },
-      update: {
-        status: parsed.status as BookingStatus,
-        scheduledAt: parsed.scheduledAt,
-        bookingUrl,
-      },
+    const bookingKey = {
+      organisationId: org.id,
+      provider: bookingProviderName,
+      externalId: parsed.externalId,
+    };
+    const alreadyTracked = await prisma.booking.findUnique({
+      where: { organisationId_provider_externalId: bookingKey },
+      select: { id: true },
     });
+    // The AI records an OFFERED booking (no externalId) when it sends the link. Confirm that
+    // row in place — creating a second row and then stamping the same externalId onto the
+    // offer violated the (organisationId, provider, externalId) unique index on every retry.
+    const offered = alreadyTracked
+      ? null
+      : await prisma.booking.findFirst({
+          where: {
+            organisationId: org.id,
+            contactId: contact.id,
+            status: BookingStatus.OFFERED,
+            externalId: null,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true },
+        });
 
-    // Promote any OFFERED booking for this lead to CREATED when confirmed.
-    if (lead && parsed.status === "CREATED") {
-      await prisma.booking.updateMany({
-        where: { leadId: lead.id, organisationId: org.id, status: BookingStatus.OFFERED },
-        data: { status: BookingStatus.CREATED, externalId: parsed.externalId },
-      });
-    }
+    const booking = offered
+      ? await prisma.booking.update({
+          where: { id: offered.id },
+          data: {
+            provider: bookingProviderName,
+            externalId: parsed.externalId,
+            status: parsed.status as BookingStatus,
+            scheduledAt: parsed.scheduledAt ?? null,
+            ...(bookingUrl ? { bookingUrl } : {}),
+          },
+        })
+      : await prisma.booking.upsert({
+          where: { organisationId_provider_externalId: bookingKey },
+          create: {
+            organisationId: org.id,
+            contactId: contact.id,
+            conversationId: lead?.conversationId ?? undefined,
+            leadId: lead?.id,
+            provider: bookingProviderName,
+            externalId: parsed.externalId,
+            status: parsed.status as BookingStatus,
+            scheduledAt: parsed.scheduledAt ?? null,
+            bookingUrl,
+          },
+          update: {
+            status: parsed.status as BookingStatus,
+            scheduledAt: parsed.scheduledAt,
+            bookingUrl,
+          },
+        });
 
     if (lead?.conversationId && ["CREATED", "RESCHEDULED"].includes(parsed.status)) {
       await cancelPendingFollowUps({
@@ -277,9 +322,11 @@ export async function handleBookingWebhook(
 
     return Response.json({ ok: true, bookingId: booking.id });
   } catch (error) {
-    logger.error("Booking webhook failed", {
-      message: error instanceof Error ? error.message : "unknown",
-    });
+    const message = error instanceof Error ? error.message : "unknown";
+    logger.error("Booking webhook failed", { message });
+    if (recordedEvent) {
+      await settleWebhookEvent(recordedEvent, "FAILED", message);
+    }
     return Response.json({ error: "Booking webhook failed" }, { status: 500 });
   }
 }

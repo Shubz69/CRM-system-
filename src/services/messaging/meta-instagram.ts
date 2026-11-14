@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { IntegrationType, Prisma } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { assertMetaInstagramMessagingConfigured, getEnv, META_INSTAGRAM_DEV_VERIFY_TOKEN } from "@/lib/env";
 import { createOAuthState, verifyOAuthState } from "@/lib/social-oauth-state";
 import { writeAuditLog } from "@/services/audit";
@@ -783,14 +784,24 @@ export async function disconnectMetaInstagram(input: {
 export async function resolveOrganisationByMetaIgAccountId(
   igAccountId: string,
 ): Promise<{ organisationId: string; channelId: string } | null> {
-  const channel = await prisma.messagingChannel.findFirst({
+  const channels = await prisma.messagingChannel.findMany({
     where: {
       provider: MESSAGING_PROVIDER.META_INSTAGRAM,
       externalId: igAccountId,
       isActive: true,
     },
     select: { id: true, organisationId: true },
+    take: 2,
   });
+  // Two workspaces claiming one Instagram account is ambiguous: route to neither rather
+  // than to whichever row the database happens to return first.
+  if (channels.length > 1) {
+    logger.warn("Meta Instagram account is bound to more than one workspace — refusing to route", {
+      igAccountIdSuffix: igAccountId.slice(-4),
+    });
+    return null;
+  }
+  const channel = channels[0];
   if (!channel) return null;
   const integration = await prisma.integration.findFirst({
     where: {
