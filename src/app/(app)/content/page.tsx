@@ -128,12 +128,14 @@ export default function ContentPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [canApprove, setCanApprove] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/content");
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Failed to load content");
     setPieces(json.pieces ?? []);
+    setCanApprove(json.canApproveContent === true);
     const targets = (json.socialConnections ?? []) as Connection[];
     const eligible = targets.filter(
       (c) => c.status === "ACTIVE" && c.eligible !== false,
@@ -476,7 +478,24 @@ export default function ContentPage() {
                       </button>
                     </>
                   )}
-                  {p.status === "IN_REVIEW" && (
+                  {(p.status === "APPROVED" || p.status === "READY") && (
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      title="Editing sends the piece back to drafts so the change is approved again"
+                      onClick={() => {
+                        setEditId(p.id);
+                        setEditTitle(p.title);
+                        setEditBody(p.body);
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {p.status === "IN_REVIEW" && !canApprove && (
+                    <p className="meta self-center">Waiting for an owner, administrator or manager to approve.</p>
+                  )}
+                  {p.status === "IN_REVIEW" && canApprove && (
                     <>
                       <button
                         className="btn btn-primary"
@@ -554,13 +573,22 @@ export default function ContentPage() {
                         type="button"
                         onClick={async () => {
                           try {
-                            await postAction({
+                            const result = await postAction({
                               action: "update_piece",
                               pieceId: p.id,
                               title: editTitle,
                               body: editBody,
                             });
-                            toast.success("Piece updated");
+                            const backToDraft =
+                              result?.changed === true &&
+                              result?.status === "DRAFT" &&
+                              p.status !== "DRAFT";
+                            toast.success(
+                              backToDraft
+                                ? "Saved — moved back to drafts. Submit it for approval again."
+                                : "Piece updated",
+                            );
+                            if (backToDraft) setActiveBucket("drafts");
                             setEditId(null);
                             await load();
                           } catch (e) {

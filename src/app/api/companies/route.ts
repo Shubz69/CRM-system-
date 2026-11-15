@@ -8,6 +8,7 @@ import {
   workspaceChangedJsonResponse,
 } from "@/lib/session";
 import { prisma } from "@/lib/db";
+import { readableZodError } from "@/lib/readable-zod";
 import { upsertCompany } from "@/services/crm-v2";
 
 /** Live (not soft-deleted) related rows only. */
@@ -62,6 +63,26 @@ export async function POST(req: NextRequest) {
     const raw = await req.json();
     const session = await requirePermissionForMutation("leads:write", req, raw);
     const body = createSchema.parse(raw);
+    // Adding a company whose name is already taken used to merge into (and overwrite) the
+    // existing one while saying "Company saved". Point at it instead, like rename does.
+    const existing = await prisma.company.findFirst({
+      where: {
+        organisationId: session.organisationId,
+        name: { equals: body.name.trim(), mode: "insensitive" },
+        deletedAt: null,
+      },
+      select: { id: true, name: true },
+    });
+    if (existing) {
+      return Response.json(
+        {
+          error: `A company called "${existing.name}" already exists. Open it to edit it instead.`,
+          code: "DUPLICATE_COMPANY",
+          existingId: existing.id,
+        },
+        { status: 409 },
+      );
+    }
     const id = await upsertCompany({
       organisationId: session.organisationId,
       ...body,
@@ -69,9 +90,23 @@ export async function POST(req: NextRequest) {
     return Response.json({ id, organisationId: session.organisationId });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof z.ZodError) {
+      return jsonError(
+        readableZodError(error, {
+          name: "Company name",
+          domain: "Domain",
+          website: "Website",
+          industry: "Industry",
+          sizeBand: "Size",
+        }),
+        400,
+      );
+    }
+    if (error instanceof SyntaxError) return jsonError("Invalid request body.", 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    return jsonError(message, 400);
+    if (message === "Company name is required") return jsonError("Company name is required.", 400);
+    return jsonError("Couldn't save the company. Try again.", 500);
   }
 }

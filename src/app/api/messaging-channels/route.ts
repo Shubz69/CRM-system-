@@ -16,8 +16,33 @@ export async function GET() {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    return jsonError(message, 500);
+    return jsonError("Couldn't load messaging channels. Try again.", 500);
   }
+}
+
+const CHANNEL_FIELD_LABELS: Record<string, string> = {
+  externalId: "Channel ID",
+  displayName: "Display name",
+  instagramUsername: "Instagram username",
+  isActive: "Active",
+  provider: "Provider",
+  id: "Channel",
+};
+
+/** One readable sentence for the first problem — never zod's raw issue JSON. */
+function readableChannelError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Check the channel details and try again.";
+  const field = String(issue.path[0] ?? "");
+  if (field === "provider") return "Only ManyChat channels can be added here.";
+  const label = CHANNEL_FIELD_LABELS[field] ?? "Input";
+  if (
+    issue.code === "too_small" ||
+    (issue.code === "invalid_type" && (issue.received === "undefined" || issue.received === "null"))
+  ) {
+    return `${label} is required.`;
+  }
+  return `${label} is invalid.`;
 }
 
 const upsertSchema = z.object({
@@ -142,9 +167,12 @@ export async function POST(req: Request) {
 
     return Response.json({ channel });
   } catch (error) {
+    if (error instanceof z.ZodError) return jsonError(readableChannelError(error), 400);
+    if (error instanceof SyntaxError) return jsonError("Invalid request body.", 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    return jsonError(message, 400);
+    // Never surface Prisma/internal text (it can include server file paths).
+    return jsonError("Couldn't save the messaging channel. Try again.", 400);
   }
 }

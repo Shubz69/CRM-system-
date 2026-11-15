@@ -20,7 +20,7 @@ export default async function AdminFailedJobsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader description="Retry is idempotent — resolved jobs will not create duplicate side effects." />
+      <PageHeader description="Retry re-queues the job and resolves it only once it is back in the queue. Jobs that can't be retried say why and stay open." />
       <FailedJobsClient
         initial={jobs.map((j) => ({
           id: j.id,

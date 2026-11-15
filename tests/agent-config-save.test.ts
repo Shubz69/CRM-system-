@@ -77,7 +77,7 @@ describe("PATCH /api/agent", () => {
     const res = await patch({ ...newWorkspaceBody, confidenceThreshold: 5 });
     expect(res.status).toBe(400);
     const { error } = await res.json();
-    expect(error).toMatch(/^Invalid confidenceThreshold: /);
+    expect(error).toBe("Confidence threshold must be at most 1.");
     expect(error).not.toMatch(/"code"|\[\s*\{/);
     expect(mocks.update).not.toHaveBeenCalled();
   });

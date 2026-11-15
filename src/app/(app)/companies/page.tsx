@@ -2,11 +2,16 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SlideOver } from "@/components/ui/slide-over";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
+import { statusLabel } from "@/lib/customer-labels";
+import { canWriteContacts } from "@/components/contacts/contact-permissions";
+import { CompanyEditDrawer, confirmAndDeleteCompany, type EditableCompany } from "./company-actions";
 
 type Company = {
   id: string;
@@ -21,6 +26,12 @@ type Company = {
 
 export default function CompaniesPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const { data: session } = useSession();
+  const router = useRouter();
+  const role = session?.user?.role ?? null;
+  // Unknown role (session still loading): show the actions; the server enforces leads:write.
+  const canWrite = role ? canWriteContacts(role) : true;
+  const [editing, setEditing] = useState<EditableCompany | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
@@ -32,7 +43,9 @@ export default function CompaniesPage() {
     id: string;
     name: string;
     domain: string | null;
+    website: string | null;
     industry: string | null;
+    sizeBand: string | null;
     contacts: Array<{ id: string; fullName: string | null; email: string | null }>;
     deals: Array<{ id: string; name: string; status: string; amountCents: number | null }>;
     _count: { contacts: number; deals: number };
@@ -65,10 +78,17 @@ export default function CompaniesPage() {
     });
     const json = await res.json();
     if (!res.ok) {
+      if (res.status === 409 && typeof json.existingId === "string") {
+        const existingId = json.existingId as string;
+        toast.error(json.error || "That company already exists", {
+          action: { label: "Open it", onClick: () => router.push(`/companies/${existingId}`) },
+        });
+        return;
+      }
       toast.error(json.error || "Create failed");
       return;
     }
-    toast.success("Company saved");
+    toast.success("Company added");
     setName("");
     setDomain("");
     setIndustry("");
@@ -242,18 +262,59 @@ export default function CompaniesPage() {
                       <Link className="underline" href="/deals">
                         {d.name}
                       </Link>{" "}
-                      · {d.status}
+                      · {statusLabel(d.status)}
                     </li>
                   ))}
                 </ul>
               )}
             </div>
-            <Link className="btn btn-secondary" href="/contacts">
-              Add a contact
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link className="btn btn-secondary" href={`/companies/${detail.id}`}>
+                Open page
+              </Link>
+              <Link className="btn btn-secondary" href="/contacts">
+                Add a contact
+              </Link>
+              {canWrite ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setEditing(detail);
+                      setDetail(null);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary text-[var(--danger)]"
+                    onClick={async () => {
+                      if (await confirmAndDeleteCompany(detail)) {
+                        setDetail(null);
+                        await load().catch((e) => toast.error(e.message));
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </SlideOver>
+
+      <CompanyEditDrawer
+        company={editing}
+        onClose={() => setEditing(null)}
+        onSaved={async () => {
+          await load().catch((e) => {
+            toast.error(e instanceof Error ? e.message : "Failed");
+          });
+        }}
+      />
     </div>
   );
 }

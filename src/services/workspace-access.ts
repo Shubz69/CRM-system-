@@ -18,8 +18,11 @@ export class WorkspaceAccessError extends Error {
   }
 }
 
+export const WORKSPACE_SUSPENDED_MESSAGE =
+  "This workspace has been suspended. Please contact your workspace owner or Agent Desk support.";
+
 /**
- * Ensure the session org still exists and the user is a member.
+ * Ensure the session org still exists, is not suspended, and the user is a member.
  * Call before any AgentRun (or similar) write that FKs to Organisation.
  */
 export async function assertActiveWorkspaceAccess(input: {
@@ -28,7 +31,7 @@ export async function assertActiveWorkspaceAccess(input: {
 }): Promise<{ role: MemberRole }> {
   const org = await prisma.organisation.findFirst({
     where: { id: input.organisationId, deletedAt: null },
-    select: { id: true },
+    select: { id: true, status: true },
   });
 
   if (!org) {
@@ -48,7 +51,9 @@ export async function assertActiveWorkspaceAccess(input: {
     select: {
       id: true,
       role: true,
-      user: { select: { isActive: true, isSuspended: true, deletedAt: true } },
+      user: {
+        select: { isActive: true, isSuspended: true, deletedAt: true, isPlatformAdmin: true },
+      },
     },
   });
 
@@ -60,6 +65,11 @@ export async function assertActiveWorkspaceAccess(input: {
         "SESSION_ORG_INVALID",
         "This account is no longer active. Please contact your workspace admin.",
       );
+    }
+    // A suspended workspace locks its members out on their next request (the JWT recheck
+    // alone took up to 5 minutes). Platform admins keep access so they can manage it.
+    if (org.status === "SUSPENDED" && !membership.user.isPlatformAdmin) {
+      throw new WorkspaceAccessError("SESSION_ORG_INVALID", WORKSPACE_SUSPENDED_MESSAGE);
     }
     // Live role: a demotion takes effect immediately instead of after the JWT recheck.
     return { role: membership.role };
@@ -81,6 +91,29 @@ export async function assertActiveWorkspaceAccess(input: {
     "SESSION_ORG_INVALID",
     "Your session points to a workspace you can no longer access. Please sign in again.",
   );
+}
+
+/**
+ * Whether the signed-in user can use the workspace their session points at — the same
+ * check every API request makes. A missing workspace or a membership/suspension refusal is
+ * "no"; a database error is treated as "yes" so a blip never locks people out of the app
+ * shell (the API routes still enforce access on every call).
+ */
+export async function hasUsableWorkspace(input: {
+  userId: string;
+  organisationId?: string | null;
+}): Promise<boolean> {
+  if (!input.organisationId) return false;
+  try {
+    await assertActiveWorkspaceAccess({
+      userId: input.userId,
+      organisationId: input.organisationId,
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof WorkspaceAccessError) return false;
+    return true;
+  }
 }
 
 /**

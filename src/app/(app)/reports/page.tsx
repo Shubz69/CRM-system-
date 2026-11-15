@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+import { useCan } from "@/hooks/use-can";
 
 const METRICS: Array<{ key: string; label: string }> = [
   { key: "newConversations", label: "New conversations" },
@@ -23,6 +24,8 @@ function formatMetric(value: unknown) {
 }
 
 export default function ReportsPage() {
+  // Sheets export goes through /api/reports/export, which needs reports:export.
+  const canExport = useCan("reports:export");
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
   const [activeReportId, setActiveReportId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -89,13 +92,20 @@ export default function ReportsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reportId: activeReportId, destination: "sheets" }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Export failed");
-      toast.success(
-        json.result?.destination
-          ? `Exported via ${json.result.provider}`
-          : "Sheets export recorded",
-      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Google Sheets export failed");
+      const result = json.result as
+        | { mock?: boolean; message?: string; destination?: string }
+        | undefined;
+      if (result?.mock) {
+        // Development-only stand-in: nothing reached Google, so never present it as a success.
+        toast.warning(
+          result.message ||
+            "Test export only — Google Sheets isn't connected, so nothing was written to a spreadsheet.",
+        );
+        return;
+      }
+      toast.success("Exported to Google Sheets");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Export failed");
     }
@@ -116,9 +126,11 @@ export default function ReportsPage() {
             <button className="btn btn-secondary" disabled={!payload} type="button" onClick={exportCsv}>
               Export CSV
             </button>
-            <button className="btn btn-secondary" disabled={!activeReportId} type="button" onClick={exportSheets}>
-              Export to Google Sheets
-            </button>
+            {canExport ? (
+              <button className="btn btn-secondary" disabled={!activeReportId} type="button" onClick={exportSheets}>
+                Export to Google Sheets
+              </button>
+            ) : null}
           </>
         }
       />

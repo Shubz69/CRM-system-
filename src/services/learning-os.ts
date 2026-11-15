@@ -426,6 +426,20 @@ export async function runEvalSuite(input: {
 export const AGENT_CONFIGURATION_NOT_FOUND = "Agent configuration not found";
 
 /**
+ * Promotion refused for a reason the user can act on (not passed yet, already promoted,
+ * no agent set up) — routes answer 409 with the message instead of a 500.
+ */
+export class PromotionBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PromotionBlockedError";
+  }
+}
+
+export const NO_AGENT_CONFIGURATION_TO_PROMOTE =
+  "This workspace has no AI agent set up yet, so there is nothing to promote into. Set up the agent first, then promote.";
+
+/**
  * Workspace users may change behaviour only — provider/model routing is platform-managed
  * (same rule as PATCH /api/agent), so those keys are dropped from candidate snapshots.
  */
@@ -485,10 +499,10 @@ export async function promoteAgentVersionCandidate(input: {
   });
   if (!candidate) throw new Error("Candidate not found");
   if (candidate.status === AgentVersionCandidateStatus.PROMOTED) {
-    throw new Error("Candidate already promoted");
+    throw new PromotionBlockedError("Candidate already promoted");
   }
   if (candidate.status !== AgentVersionCandidateStatus.PASSED) {
-    throw new Error("Promotion blocked: candidate must PASS eval suite first");
+    throw new PromotionBlockedError("Promotion blocked: candidate must PASS eval suite first");
   }
 
   // Provider/model are never promoted from a candidate (older snapshots may still carry them).
@@ -507,7 +521,7 @@ export async function promoteAgentVersionCandidate(input: {
     });
     configId = active?.id ?? null;
   }
-  if (!configId) throw new Error("No AgentConfiguration to promote into");
+  if (!configId) throw new PromotionBlockedError(NO_AGENT_CONFIGURATION_TO_PROMOTE);
 
   const data: Prisma.AgentConfigurationUpdateInput = {
     version: { increment: 1 },

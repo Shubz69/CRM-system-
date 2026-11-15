@@ -130,6 +130,48 @@ export function assertPermission(role: MemberRole, permission: Permission): void
   }
 }
 
+/** What each permission lets someone do, phrased to finish "You don't have permission to …". */
+const PERMISSION_ACTIONS: Record<Permission, string> = {
+  "org:manage": "manage this workspace",
+  "members:manage": "manage team members",
+  "integrations:manage": "manage integrations and messaging channels",
+  "knowledge:manage": "manage the knowledge base",
+  "agent:manage": "manage the AI agent",
+  "ask:use": "use Ask",
+  "inbox:read": "view the inbox",
+  "inbox:write": "reply to conversations",
+  "inbox:assign": "assign conversations",
+  "leads:read": "view contacts and leads",
+  "leads:write": "edit contacts, leads and deals",
+  "pipeline:manage": "manage the pipeline",
+  "insights:read": "view insights",
+  "reports:read": "view reports",
+  "reports:export": "export reports",
+  "automations:manage": "manage automations and approvals",
+  "settings:read": "view workspace settings",
+  "audit:read": "view the audit log",
+  "platform:manage": "use the platform admin tools",
+  "users:manage": "manage platform users",
+  "workspaces:manage": "manage workspaces",
+  impersonate: "sign in as other users",
+  "system:health": "view system health",
+};
+
+const MISSING_PERMISSION = /^Forbidden: missing permission\s*(\S*)\s*$/;
+
+/**
+ * Turn the internal "Forbidden: missing permission x:y" error into a sentence a person can act
+ * on. Any other message is returned unchanged.
+ */
+export function readablePermissionError(message: string): string {
+  const match = MISSING_PERMISSION.exec(message);
+  if (!match) return message;
+  const action = PERMISSION_ACTIONS[match[1] as Permission];
+  return action
+    ? `You don't have permission to ${action}. Ask a workspace owner or admin if you need it.`
+    : "You don't have permission to do that. Ask a workspace owner or admin if you need it.";
+}
+
 export function getRolePermissions(role: MemberRole): Permission[] {
   return ROLE_PERMISSIONS[role] ?? [];
 }

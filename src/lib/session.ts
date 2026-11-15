@@ -1,6 +1,11 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { assertPermission, roleHasPermission, type Permission } from "@/lib/permissions";
+import {
+  assertPermission,
+  readablePermissionError,
+  roleHasPermission,
+  type Permission,
+} from "@/lib/permissions";
 import type { MemberRole } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
@@ -112,7 +117,13 @@ export async function requirePlatformAccess() {
 }
 
 export function jsonError(message: string, status = 400) {
-  return Response.json({ error: message }, { status });
+  // A permission failure is a 403 even when a route's catch-all would have called it a 400 or
+  // 500 (a sales agent opening Automations used to get a 500).
+  const httpStatus = message.startsWith("Forbidden") && status >= 400 && status !== 401 ? 403 : status;
+  // Routes pass the internal "Forbidden: missing permission x:y" text straight through; never
+  // show that to a person.
+  const readable = httpStatus === 403 ? readablePermissionError(message) : message;
+  return Response.json({ error: readable }, { status: httpStatus });
 }
 
 export {

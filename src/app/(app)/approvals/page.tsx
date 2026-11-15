@@ -1,5 +1,6 @@
 "use client";
 
+import { PermissionGate } from "@/components/permission-gate";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
@@ -61,7 +62,7 @@ function actionDescription(a: Approval): string {
   return a.summary || a.title;
 }
 
-export default function ApprovalsPage() {
+function ApprovalsPageContent() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [publishingJobs, setPublishingJobs] = useState<PubJob[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -354,5 +355,17 @@ export default function ApprovalsPage() {
         )}
       </section>
     </div>
+  );
+}
+
+export default function ApprovalsPage() {
+  return (
+    <PermissionGate
+      permission="automations:manage"
+      title="Approvals"
+      message="Only workspace owners, admins and managers review and approve AI replies."
+    >
+      <ApprovalsPageContent />
+    </PermissionGate>
   );
 }

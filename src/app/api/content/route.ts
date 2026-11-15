@@ -1,6 +1,7 @@
 import { listPublishTargets } from "@/services/publishing/publish-targets";
 import { cancelPublishingJob } from "@/services/publishing";
 import {
+  ContentStateError,
   createBriefAndPiece,
   createDraftPiece,
   createIdeaFromOpportunity,
@@ -16,6 +17,14 @@ import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceCh
 import { prisma } from "@/lib/db";
 import { assertOrgExpensiveRouteAllowed, OrgRateLimitError } from "@/lib/org-rate-limit";
 import { normalizeContentPlatform } from "@/lib/content-platform";
+import { roleHasPermission, type Permission } from "@/lib/permissions";
+
+/**
+ * Approving content is a manager decision: it uses the same permission as the Approvals queue
+ * (automations:manage — Owner, Administrator, Manager). Sales agents and analysts can draft,
+ * edit and submit content (ask:use) but cannot approve their own or anyone else's.
+ */
+const CONTENT_APPROVE_PERMISSION: Permission = "automations:manage";
 
 export async function GET() {
   try {
@@ -49,6 +58,7 @@ export async function GET() {
       }),
       listPublishTargets(session.organisationId),
     ]);
+    const canApproveContent = roleHasPermission(session.role, CONTENT_APPROVE_PERMISSION);
     // Customer-safe publish targets — no provider vendor / raw external ids
     const customerTargets = publishTargets.map((t) => ({
       id: t.id,
@@ -59,6 +69,7 @@ export async function GET() {
     }));
     return Response.json({
       organisationId: session.organisationId,
+      canApproveContent,
       opportunities,
       pieces,
       publishingJobs: jobs,
@@ -220,14 +231,14 @@ export async function POST(req: NextRequest) {
         return Response.json({ ...result, organisationId: session.organisationId });
       }
       case "update_piece": {
-        await updatePiece({
+        const result = await updatePiece({
           organisationId: session.organisationId,
           pieceId: body.pieceId,
           title: body.title,
           body: body.body,
           platform: body.platform,
         });
-        return Response.json({ ok: true });
+        return Response.json({ ok: true, ...result });
       }
       case "submit_approval": {
         const approvalId = await submitPieceForApproval({
@@ -237,6 +248,12 @@ export async function POST(req: NextRequest) {
         return Response.json({ approvalId });
       }
       case "decide_approval": {
+        if (!roleHasPermission(session.role, CONTENT_APPROVE_PERMISSION)) {
+          return jsonError(
+            "Only an owner, administrator or manager can approve or send back content.",
+            403,
+          );
+        }
         await decidePieceApproval({
           organisationId: session.organisationId,
           pieceId: body.pieceId,
@@ -278,6 +295,9 @@ export async function POST(req: NextRequest) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     if (error instanceof OrgRateLimitError) {
       return Response.json({ error: error.message, code: error.code }, { status: 429 });
+    }
+    if (error instanceof ContentStateError) {
+      return Response.json({ error: error.message, code: error.code }, { status: 409 });
     }
     if (error instanceof z.ZodError) {
       const first = error.issues[0];

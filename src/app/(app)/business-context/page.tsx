@@ -57,6 +57,8 @@ export default function BusinessContextPage() {
   const [productName, setProductName] = useState("");
   const [audienceName, setAudienceName] = useState("");
   const [marketRegion, setMarketRegion] = useState("");
+  // Which add-form is saving; blocks double submits (two clicks used to add the same product twice).
+  const [adding, setAdding] = useState<string | null>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -153,19 +155,26 @@ export default function BusinessContextPage() {
                         className="mt-3 flex flex-wrap gap-2"
                         onSubmit={async (e) => {
                           e.preventDefault();
-                          if (!productName.trim()) return;
-                          const res = await fetch("/api/business-context", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ action: "create_product", name: productName }),
-                          });
-                          if (!res.ok) {
-                            toast.error("Could not add product");
-                            return;
+                          if (!productName.trim() || adding) return;
+                          setAdding("products");
+                          try {
+                            const res = await fetch("/api/business-context", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "create_product", name: productName.trim() }),
+                            });
+                            const json = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                              toast.error(json.error || "Could not add product");
+                              return;
+                            }
+                            setProductName("");
+                            if (json.alreadyExisted) toast.message("That product is already in your profile");
+                            else toast.success("Product added");
+                            await load();
+                          } finally {
+                            setAdding(null);
                           }
-                          setProductName("");
-                          toast.success("Product added");
-                          await load();
                         }}
                       >
                         <input
@@ -174,8 +183,8 @@ export default function BusinessContextPage() {
                           value={productName}
                           onChange={(e) => setProductName(e.target.value)}
                         />
-                        <button className="btn btn-secondary" type="submit">
-                          Add
+                        <button className="btn btn-secondary" type="submit" disabled={adding !== null}>
+                          {adding === item.key ? "Adding…" : "Add"}
                         </button>
                       </form>
                     ) : item.key === "audience" ? (
@@ -183,22 +192,29 @@ export default function BusinessContextPage() {
                         className="mt-3 flex flex-wrap gap-2"
                         onSubmit={async (e) => {
                           e.preventDefault();
-                          if (!audienceName.trim()) return;
-                          const res = await fetch("/api/business-context", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              action: "create_audience",
-                              name: audienceName.trim(),
-                            }),
-                          });
-                          if (!res.ok) {
-                            toast.error("Could not add audience");
-                            return;
+                          if (!audienceName.trim() || adding) return;
+                          setAdding("audience");
+                          try {
+                            const res = await fetch("/api/business-context", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                action: "create_audience",
+                                name: audienceName.trim(),
+                              }),
+                            });
+                            const json = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                              toast.error(json.error || "Could not add audience");
+                              return;
+                            }
+                            setAudienceName("");
+                            if (json.alreadyExisted) toast.message("That audience is already in your profile");
+                            else toast.success("Audience added");
+                            await load();
+                          } finally {
+                            setAdding(null);
                           }
-                          setAudienceName("");
-                          toast.success("Audience added");
-                          await load();
                         }}
                       >
                         <input
@@ -207,8 +223,8 @@ export default function BusinessContextPage() {
                           value={audienceName}
                           onChange={(e) => setAudienceName(e.target.value)}
                         />
-                        <button className="btn btn-secondary" type="submit">
-                          Add
+                        <button className="btn btn-secondary" type="submit" disabled={adding !== null}>
+                          {adding === item.key ? "Adding…" : "Add"}
                         </button>
                       </form>
                     ) : item.key === "markets" ? (
@@ -216,31 +232,37 @@ export default function BusinessContextPage() {
                         className="mt-3 flex flex-wrap gap-2"
                         onSubmit={async (e) => {
                           e.preventDefault();
-                          if (!marketRegion.trim()) return;
+                          if (!marketRegion.trim() || adding) return;
                           const subjectId = profile?.organisation?.id;
                           if (!subjectId) {
                             toast.error("Workspace profile not loaded yet");
                             return;
                           }
-                          const res = await fetch("/api/business-context", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              action: "upsert_claim",
-                              subjectType: "Organisation",
-                              subjectId,
-                              predicate: "operates_in_market",
-                              valueText: marketRegion.trim(),
-                              source: "business_profile_checklist",
-                            }),
-                          });
-                          if (!res.ok) {
-                            toast.error("Could not add market / region");
-                            return;
+                          setAdding("markets");
+                          try {
+                            const res = await fetch("/api/business-context", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                action: "upsert_claim",
+                                subjectType: "Organisation",
+                                subjectId,
+                                predicate: "operates_in_market",
+                                valueText: marketRegion.trim(),
+                                source: "business_profile_checklist",
+                              }),
+                            });
+                            const json = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                              toast.error(json.error || "Could not add market / region");
+                              return;
+                            }
+                            setMarketRegion("");
+                            toast.success("Market / region added");
+                            await load();
+                          } finally {
+                            setAdding(null);
                           }
-                          setMarketRegion("");
-                          toast.success("Market / region added");
-                          await load();
                         }}
                       >
                         <input
@@ -249,8 +271,8 @@ export default function BusinessContextPage() {
                           value={marketRegion}
                           onChange={(e) => setMarketRegion(e.target.value)}
                         />
-                        <button className="btn btn-secondary" type="submit">
-                          Add
+                        <button className="btn btn-secondary" type="submit" disabled={adding !== null}>
+                          {adding === item.key ? "Adding…" : "Add"}
                         </button>
                       </form>
                     ) : (

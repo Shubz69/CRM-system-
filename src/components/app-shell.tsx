@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { WorkspaceChangedGate } from "@/components/workspace-changed-gate";
+import { SessionExpiryWatcher } from "@/components/session-expiry-watcher";
 import { broadcastOrgChanged, setImmutableWorkspaceContext } from "@/lib/workspace-client";
 
 type OrgOption = {
@@ -220,6 +221,7 @@ export function AppShell({
       className="relative min-h-screen lg:grid lg:grid-cols-[auto_1fr]"
       data-workspace-ready={workspaceReady ? "true" : "false"}
     >
+      <SessionExpiryWatcher />
       <WorkspaceChangedGate
         currentOrganisationId={session?.user?.organisationId}
         currentWorkspaceRevision={workspaceRevision}

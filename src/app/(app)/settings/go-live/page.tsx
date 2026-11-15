@@ -2,25 +2,52 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   bookingCheck,
   businessProfileCheck,
+  goLiveAccess,
+  instagramCheck,
   messagingRulesCheck,
+  NO_ACCESS,
   qualificationCheck,
   scoringCheck,
+  type GoLiveAccess,
   type GoLiveAgentConfig,
   type GoLiveCheck as Check,
+  type GoLiveManyChatStatus,
+  type GoLiveMessagingChannel,
+  type GoLiveZernioInstagram,
+  type NoAccess,
 } from "./checklist";
 
+/** Only call endpoints the role may use; a skipped call resolves to null without a request. */
+function fetchIf(allowed: boolean, url: string): Promise<Response | null> {
+  return allowed ? fetch(url) : Promise.resolve(null);
+}
+
+/**
+ * JSON body of a role-gated call: NO_ACCESS when it was skipped for the role (or the server
+ * still answered 403), null when it failed or the body could not be read.
+ */
+async function readAllowed<T>(res: Response | null): Promise<T | null | NoAccess> {
+  if (!res || res.status === 403) return NO_ACCESS;
+  if (!res.ok) return null;
+  return ((await res.json().catch(() => null)) as T | null) ?? null;
+}
+
 export default function GoLivePage() {
+  const { data: session, status: sessionStatus } = useSession();
+  const role = session?.user?.role ?? null;
+  const access = useMemo(() => goLiveAccess(role), [role]);
   const [checks, setChecks] = useState<Check[]>([]);
   const [mode, setMode] = useState<string>("OFF");
   const [loading, setLoading] = useState(true);
   const [goingLive, setGoingLive] = useState(false);
 
-  async function load() {
+  async function load(can: GoLiveAccess) {
     setLoading(true);
     try {
       const [
@@ -33,44 +60,70 @@ export default function GoLivePage() {
         agentRes,
         qualificationRes,
         businessRes,
+        socialRes,
+        manychatRes,
       ] = await Promise.all([
         fetch("/api/settings"),
         fetch("/api/health"),
         fetch("/api/health/providers"),
         fetch("/api/autopilot"),
-        fetch("/api/messaging-channels"),
+        fetchIf(can.channels, "/api/messaging-channels"),
         fetch("/api/health/database"),
-        fetch("/api/agent"),
-        fetch("/api/qualification-fields"),
-        fetch("/api/business-context"),
+        fetchIf(can.agent, "/api/agent"),
+        fetchIf(can.agent, "/api/qualification-fields"),
+        fetchIf(can.businessProfile, "/api/business-context"),
+        fetchIf(can.socialAccounts, "/api/integrations/zernio"),
+        fetchIf(can.manychat, "/api/integrations/manychat"),
       ]);
       const settings = settingsRes.ok ? await settingsRes.json() : {};
       // Health may return 503 when Redis is down — still read the body.
       const health = await healthRes.json().catch(() => ({}));
       const providers = providersRes.ok ? await providersRes.json() : {};
       const autopilot = autopilotRes.ok ? await autopilotRes.json() : {};
-      if (channelsRes.ok) await channelsRes.json();
+      const channelsBody = await readAllowed<{ channels?: GoLiveMessagingChannel[] }>(channelsRes);
+      const channels =
+        channelsBody === NO_ACCESS
+          ? NO_ACCESS
+          : Array.isArray(channelsBody?.channels)
+            ? channelsBody.channels
+            : null;
       const dbHealth = await dbRes.json().catch(() => ({}));
       // undefined = couldn't load; null = no active agent configuration.
-      const agent: GoLiveAgentConfig = agentRes.ok
-        ? ((await agentRes.json().catch(() => ({}))).config ?? null)
-        : undefined;
-      const qualificationFieldCount: number | null = qualificationRes.ok
-        ? ((await qualificationRes.json().catch(() => ({}))).fields?.length ?? 0)
-        : null;
-      const business = businessRes.ok ? await businessRes.json().catch(() => null) : null;
-      const productCount: number | null = Array.isArray(business?.profile?.products)
-        ? business.profile.products.length
-        : null;
-      const audienceCount: number | null = Array.isArray(business?.profile?.audiences)
-        ? business.profile.audiences.length
-        : null;
+      const agentBody = await readAllowed<{ config?: GoLiveAgentConfig }>(agentRes);
+      const agent: GoLiveAgentConfig =
+        agentBody === NO_ACCESS ? NO_ACCESS : agentBody ? (agentBody.config ?? null) : undefined;
+      // Deactivated fields are kept for history but are not collected — count active ones only.
+      const qualificationBody = await readAllowed<{ fields?: Array<{ active?: boolean }> }>(
+        qualificationRes,
+      );
+      const qualificationFieldCount =
+        qualificationBody === NO_ACCESS
+          ? NO_ACCESS
+          : qualificationBody
+            ? (qualificationBody.fields ?? []).filter((f) => f.active !== false).length
+            : null;
+      const business = await readAllowed<{
+        profile?: { products?: unknown; audiences?: unknown };
+      }>(businessRes);
+      const productCount =
+        business === NO_ACCESS
+          ? NO_ACCESS
+          : Array.isArray(business?.profile?.products)
+            ? business.profile.products.length
+            : null;
+      const audienceCount =
+        business === NO_ACCESS
+          ? NO_ACCESS
+          : Array.isArray(business?.profile?.audiences)
+            ? business.profile.audiences.length
+            : null;
 
       setMode(autopilot.mode || "OFF");
 
-      const socialRes = await fetch("/api/integrations/zernio");
-      const social = socialRes.ok ? await socialRes.json() : {};
-      const instagramConnected = Boolean(social.networks?.instagram?.connected);
+      const social = await readAllowed<{ networks?: { instagram?: GoLiveZernioInstagram } }>(
+        socialRes,
+      );
+      const manychat = await readAllowed<GoLiveManyChatStatus>(manychatRes);
       const aiReady =
         Boolean(providers.providers?.ai?.ready) ||
         providers.providers?.ai?.status === "AVAILABLE";
@@ -113,14 +166,16 @@ export default function GoLivePage() {
         },
         qualificationCheck({ agent, qualificationFieldCount }),
         scoringCheck(agent),
-        {
-          key: "instagram",
-          label: "Instagram",
-          status: instagramConnected ? "ready" : "needs_attention",
-          detail: instagramConnected
-            ? "Connected"
-            : "Connect Instagram in Social Accounts (Integrations)",
-        },
+        instagramCheck({
+          manychat: manychat as Parameters<typeof instagramCheck>[0]["manychat"],
+          channels,
+          zernioInstagram:
+            social === NO_ACCESS
+              ? NO_ACCESS
+              : social
+                ? ((social as { networks?: { instagram?: object } }).networks?.instagram ?? {})
+                : null,
+        }),
         bookingCheck({ agent, defaultBookingUrlConfigured }),
         messagingRulesCheck(agent),
         {
@@ -151,9 +206,11 @@ export default function GoLivePage() {
     }
   }
 
+  // Wait for the session so the role is known before any role-gated call goes out.
   useEffect(() => {
-    void load();
-  }, []);
+    if (sessionStatus === "loading") return;
+    void load(access);
+  }, [sessionStatus, access]);
 
   const criticalReady = useMemo(
     () =>
@@ -207,7 +264,9 @@ export default function GoLivePage() {
                   ? "Ready"
                   : c.status === "needs_attention"
                     ? "Needs attention"
-                    : "Optional"}
+                    : c.status === "restricted"
+                      ? "Not checked"
+                      : "Optional"}
               </span>
             </li>
           ))}
@@ -218,17 +277,25 @@ export default function GoLivePage() {
         <p className="text-sm text-[var(--muted)]">
           Current Autopilot mode: <strong>{mode}</strong>
         </p>
-        <button
-          type="button"
-          className="btn btn-primary mt-4"
-          disabled={!criticalReady || goingLive || mode === "LIVE"}
-          onClick={() => void goLive()}
-        >
-          {mode === "LIVE" ? "Autopilot already LIVE" : "Turn Autopilot ON"}
-        </button>
-        {!criticalReady && (
-          <p className="mt-2 text-xs text-[var(--muted)]">
-            Resolve critical items (database, business, AI, Instagram) before going live.
+        {sessionStatus === "loading" ? null : access.goLive ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary mt-4"
+              disabled={!criticalReady || goingLive || mode === "LIVE"}
+              onClick={() => void goLive()}
+            >
+              {mode === "LIVE" ? "Autopilot already LIVE" : "Turn Autopilot ON"}
+            </button>
+            {!criticalReady && (
+              <p className="mt-2 text-xs text-[var(--muted)]">
+                Resolve critical items (database, business, AI, Instagram) before going live.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Only workspace owners and admins can turn Autopilot on or off.
           </p>
         )}
         <div className="mt-4 flex gap-3 text-sm">

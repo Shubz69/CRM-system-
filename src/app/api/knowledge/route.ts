@@ -52,12 +52,45 @@ async function distinctDraftTitle(
   return { title: `${title} (${n})` };
 }
 
+/**
+ * upsertKnowledgeDocument matches on title and overwrites (and reactivates) whatever it finds,
+ * so a plain "Add" with a title that is already taken silently replaced someone's document.
+ * Adding now refuses with 409 unless the client explicitly asks to replace that document
+ * (`replaceExisting: true`); editing goes through PATCH by id.
+ */
+/** Titles are compared trimmed, with runs of spaces collapsed, and ignoring case. */
+function normaliseTitle(title: string): string {
+  return title.trim().replace(/\s+/g, " ");
+}
+
+async function findTitleClash(organisationId: string, title: string) {
+  return prisma.knowledgeDocument.findFirst({
+    where: { organisationId, title: { equals: normaliseTitle(title), mode: "insensitive" } },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, title: true, status: true },
+  });
+}
+
+function duplicateTitleResponse(existing: { id: string; title: string; status: string }) {
+  return Response.json(
+    {
+      error: `A document called "${existing.title}" already exists — open it to edit, or choose another title.`,
+      code: "DUPLICATE_TITLE",
+      existingId: existing.id,
+      existingStatus: existing.status,
+    },
+    { status: 409 },
+  );
+}
+
 const createSchema = z.object({
   title: z.string().min(1),
   category: z.string().min(1),
   content: z.string().min(1),
   tags: z.array(z.string()).optional(),
   status: z.nativeEnum(KnowledgeDocStatus).optional(),
+  /** Explicit opt-in to overwrite the document that already has this title. */
+  replaceExisting: z.boolean().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -67,7 +100,7 @@ export async function POST(req: NextRequest) {
 
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
-      const title = String(form.get("title") || "Uploaded document");
+      let title = normaliseTitle(String(form.get("title") || "")) || "Uploaded document";
       const category = String(form.get("category") || "upload");
       const file = form.get("file");
       if (!(file instanceof File)) return jsonError("file is required", 400);
@@ -101,6 +134,15 @@ export async function POST(req: NextRequest) {
         return jsonError("Unsupported file type. Use PDF, Markdown, or plain text.", 400);
       }
 
+      const uploadClash = await findTitleClash(session.organisationId, title);
+      if (uploadClash) {
+        if (String(form.get("replaceExisting") || "") !== "true") {
+          return duplicateTitleResponse(uploadClash);
+        }
+        // Replace that exact document (the save below matches on its stored title).
+        title = uploadClash.title;
+      }
+
       const id = await upsertKnowledgeDocument({
         organisationId: session.organisationId,
         title,
@@ -119,13 +161,19 @@ export async function POST(req: NextRequest) {
     });
     if (!promotion.ok) return jsonError(promotion.error, 400);
 
-    let title = body.title;
+    let title = normaliseTitle(body.title);
+    if (!title) return jsonError("Give the document a title.", 400);
     if ((body.tags ?? []).includes("from-ask")) {
       const draft = await distinctDraftTitle(session.organisationId, body.title, body.content);
       if (draft.existingId) {
         return Response.json({ id: draft.existingId, chunks: chunkText(body.content).length });
       }
       title = draft.title;
+    } else {
+      const clash = await findTitleClash(session.organisationId, title);
+      if (clash && !body.replaceExisting) return duplicateTitleResponse(clash);
+      // Replace that exact document (the save below matches on its stored title).
+      if (clash) title = clash.title;
     }
 
     const id = await upsertKnowledgeDocument({
@@ -173,6 +221,17 @@ export async function PATCH(req: NextRequest) {
       where: { id: body.id, organisationId: session.organisationId },
     });
     if (!existing) return jsonError("Document not found", 404);
+
+    // Renaming onto another document's title (in any case or spacing) would make the next
+    // title-matched save hit the wrong doc.
+    if (body.title !== undefined) {
+      body.title = normaliseTitle(body.title);
+      if (!body.title) return jsonError("Give the document a title.", 400);
+    }
+    if (body.title && body.title !== existing.title) {
+      const clash = await findTitleClash(session.organisationId, body.title);
+      if (clash && clash.id !== existing.id) return duplicateTitleResponse(clash);
+    }
 
     if (body.content && body.content !== existing.content) {
       await updateKnowledgeDocument({

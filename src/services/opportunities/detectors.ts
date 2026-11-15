@@ -4,6 +4,7 @@
 
 import { BusinessOpportunityType } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { formatKpiValue, kpiLabel } from "@/lib/customer-labels";
 import { logger } from "@/lib/logger";
 import {
   evaluateTargetProgress,
@@ -287,12 +288,17 @@ const kpiAtRiskDetector: OpportunityDetector = {
           kpiGapRatio: gapRatio,
         });
         const urgency = deriveUrgency({ daysToDeadline });
+        // People read these: "Won revenue is behind target (£1,200 of £5,000)", not
+        // "won_revenue_cents (current=120000 GBP_CENTS, target=500000)".
+        const kpiName = kpiLabel(target.kpiDefinition.name);
+        const current = formatKpiValue(latest.value, latest.unit);
+        const goalValue = formatKpiValue(target.targetValue, target.unit);
 
         const result = await upsertDetectedOpportunity({
           organisationId,
           type: "OPERATIONAL",
-          title: `KPI behind target: ${target.kpiDefinition.name}`,
-          summary: `Goal "${goal.name}" KPI "${target.kpiDefinition.name}" is behind target (current=${latest.value} ${latest.unit}, target=${target.targetValue}).`,
+          title: `${kpiName} is behind target`,
+          summary: `Goal "${goal.name}": ${kpiName} is at ${current} against a target of ${goalValue}.`,
           dedupeKey: `kpi_at_risk:v1:${goal.id}:${target.kpiDefinitionId}`,
           source: "detector:kpi_at_risk",
           impact,

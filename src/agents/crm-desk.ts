@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Agent } from "@/agents/types";
 import { prisma } from "@/lib/db";
+import { formatDealAmount } from "@/lib/customer-labels";
 import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import { getBusinessProfile } from "@/services/digital-twin";
@@ -79,6 +80,7 @@ export const crmDeskOutputSchema = z.object({
       status: z.string(),
       stageLabel: z.string().nullable(),
       amountCents: z.number().nullable(),
+      currency: z.string().nullable().optional(),
       updatedAt: z.string(),
       stalled: z.boolean(),
     }),
@@ -132,14 +134,21 @@ export type CrmDeskOutput = z.infer<typeof crmDeskOutputSchema>;
 
 const STALE_MS = 14 * 24 * 60 * 60 * 1000;
 
-function money(cents: number | null | undefined): string {
+/** A deal amount in its own currency (deals are no longer all £), to the penny when needed. */
+function money(cents: number | null | undefined, currency?: string | null): string {
   if (cents == null) return "no amount";
-  return `£${(cents / 100).toFixed(0)}`;
+  return formatDealAmount(cents, currency, "en-GB");
 }
 
 function buildOperatorBrief(input: {
-  stalledDeals: Array<{ name: string; stageLabel: string | null; amountCents: number | null }>;
-  dealRows: Array<{ name: string; stageLabel: string | null; amountCents: number | null; stalled: boolean }>;
+  stalledDeals: Array<{ name: string; stageLabel: string | null; amountCents: number | null; currency?: string | null }>;
+  dealRows: Array<{
+    name: string;
+    stageLabel: string | null;
+    amountCents: number | null;
+    currency?: string | null;
+    stalled: boolean;
+  }>;
   needingReply: Array<{ contactName: string | null; unreadCount: number }>;
   needingHuman: Array<{ contactName: string | null }>;
   goalsAtRisk: Array<{ name: string }>;
@@ -237,7 +246,7 @@ function buildOperatorBrief(input: {
     const rec = fmtRec({
       what: `Unblock deal “${d.name}”`,
       why: `Stalled ≥14 days at ${d.stageLabel || "unknown stage"}`,
-      evidence: `Quiet ≥14 days · ${money(d.amountCents)}`,
+      evidence: `Quiet ≥14 days · ${money(d.amountCents, d.currency)}`,
       urgency: "high",
       next: "Message the buyer or schedule a checkpoint this week",
     });
@@ -250,7 +259,7 @@ function buildOperatorBrief(input: {
     const advance = fmtRec({
       what: `Advance “${top.name}”`,
       why: "Highest-urgency open deal (no ≥14-day stalls detected)",
-      evidence: `${top.stageLabel || "no stage"} · ${money(top.amountCents)}`,
+      evidence: `${top.stageLabel || "no stage"} · ${money(top.amountCents, top.currency)}`,
       urgency: "medium",
       next: "Confirm next stage action with the buyer",
     });
@@ -905,6 +914,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       status: string;
       stageLabel: string | null;
       amountCents: number | null;
+      currency: string;
       updatedAt: Date;
     };
     type ConvRow = {
@@ -944,6 +954,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
                 status: true,
                 stageLabel: true,
                 amountCents: true,
+                currency: true,
                 updatedAt: true,
               },
             })
@@ -1146,6 +1157,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         status: d.status,
         stageLabel: d.stageLabel,
         amountCents: d.amountCents,
+        currency: d.currency,
         updatedAt: d.updatedAt.toISOString(),
         stalled,
       };
@@ -1335,7 +1347,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
           `• Open deals: ${counts.openDeals}; stalled (≥14 days quiet): ${counts.stalledDeals}`,
           ...stalledDeals
             .slice(0, 5)
-            .map((d) => `• Stuck: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) → message the buyer or book a checkpoint this week`),
+            .map((d) => `• Stuck: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents, d.currency)}) → message the buyer or book a checkpoint this week`),
         );
       } else if (dealRows.length) {
         blocks.push(
@@ -1393,7 +1405,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
           "Stalled deals: " +
             stalledDeals
               .slice(0, 5)
-              .map((d) => `${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)})`)
+              .map((d) => `${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents, d.currency)})`)
               .join("; ") +
             ".",
         );

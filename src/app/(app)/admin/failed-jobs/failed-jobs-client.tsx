@@ -47,7 +47,7 @@ export function FailedJobsClient({ initial }: { initial: FailedJobRow[] }) {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
-      toast.success(action === "retry" ? "Retry recorded (idempotent)" : "Cancelled");
+      toast.success(action === "retry" ? json.message || "Job re-queued" : "Cancelled");
       await refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");

@@ -94,6 +94,38 @@ async function setupAssistantDocumentTitle(organisationId: string, title: string
   return withTitleSuffix(title, ` (Setup Assistant ${Date.now().toString(36)})`);
 }
 
+/** Proposed stage names the workspace's default pipeline doesn't already have (by name or slug). */
+async function proposedStagesNotInPipeline(
+  organisationId: string,
+  proposed: Array<{ name: string; slug: string }>,
+): Promise<string[]> {
+  const wanted = proposed
+    .map((stage) => ({ name: stage.name.trim().slice(0, 60), slug: stage.slug.trim().toLowerCase() }))
+    .filter((stage) => stage.name)
+    .slice(0, 30);
+  if (wanted.length === 0) return [];
+  let existing: Array<{ name: string; slug: string }> = [];
+  try {
+    existing = await prisma.pipelineStage.findMany({
+      where: { pipeline: { organisationId, isDefault: true } },
+      select: { name: true, slug: true },
+    });
+  } catch {
+    // Listing every proposed stage is still a correct (if longer) report.
+  }
+  const names = new Set(existing.map((stage) => stage.name.trim().toLowerCase()));
+  const slugs = new Set(existing.map((stage) => stage.slug.toLowerCase()));
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  for (const stage of wanted) {
+    const key = stage.name.toLowerCase();
+    if (names.has(key) || (stage.slug && slugs.has(stage.slug)) || seen.has(key)) continue;
+    seen.add(key);
+    missing.push(stage.name);
+  }
+  return missing;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("agent:manage");
@@ -200,11 +232,11 @@ Return ONLY JSON. Do not invent fake customer data, prices or policies that are 
         where: { organisationId: session.organisationId, isActive: true },
       });
       if (agent) {
+        // Behaviour only — the workspace's AI provider/model routing is platform-managed and
+        // must not be switched by approving a proposal.
         await prisma.agentConfiguration.update({
           where: { id: agent.id },
           data: {
-            aiProvider: "anthropic",
-            model: resolveModelForTier("default"),
             brandTone: proposal.tone || agent.brandTone,
             qualificationQuestions: (proposal.qualificationQuestions ||
               agent.qualificationQuestions) as Prisma.InputJsonValue,
@@ -266,19 +298,40 @@ Return ONLY JSON. Do not invent fake customer data, prices or policies that are 
       }
     }
 
+    // Proposed pipeline stages are NOT applied automatically: inbound AI, bookings and goals
+    // move leads by fixed system stage slugs, so model-invented stages could clutter or
+    // confuse the board. Report the ones the pipeline doesn't already have instead.
+    const stagesNotApplied = await proposedStagesNotInPipeline(
+      session.organisationId,
+      proposal.pipelineStages ?? [],
+    );
+
     await writeAuditLog({
       organisationId: session.organisationId,
       userId: session.userId,
       action: "ai.setup_approved",
       entityType: "Organisation",
       entityId: session.organisationId,
-      metadata: { keys: Object.keys(proposal), agentUpdated, knowledgeDocuments, qualificationFields },
+      metadata: {
+        keys: Object.keys(proposal),
+        agentUpdated,
+        knowledgeDocuments,
+        qualificationFields,
+        pipelineStagesNotApplied: stagesNotApplied.length,
+      },
     });
 
     return Response.json({
       ok: true,
-      message: "Setup approved and saved.",
+      message:
+        stagesNotApplied.length > 0
+          ? `Setup approved and saved. Proposed pipeline stages were not applied — add them in Pipeline → Edit stages if you want them: ${stagesNotApplied.join(", ")}.`
+          : "Setup approved and saved.",
       saved: { agentUpdated, knowledgeDocuments, qualificationFields },
+      notApplied: {
+        pipelineStages: stagesNotApplied,
+        hint: stagesNotApplied.length > 0 ? "Add them in Pipeline → Edit stages." : null,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";

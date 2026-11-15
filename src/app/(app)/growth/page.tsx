@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { PageShell } from "@/components/ui/page-shell";
 import { PageLoading } from "@/components/ui/page-state";
 import { GROWTH_SUBNAV } from "@/lib/navigation";
+import { countOpenOpportunities } from "@/app/(app)/opportunities/opportunity-status";
 
 type GrowthSnap = {
   opportunities: number;
@@ -26,8 +27,12 @@ export default function GrowthHubPage() {
     ])
       .then(([opp, goals, research]) => {
         setSnap({
-          opportunities: (opp?.opportunities ?? []).length,
-          goals: (goals?.goals ?? []).length,
+          // Dismissed / expired / completed opportunities aren't "open recommendations".
+          opportunities: countOpenOpportunities(opp?.opportunities ?? []),
+          // Live goals only — cancelled and achieved ones are history, not "tracked".
+          goals: ((goals?.goals ?? []) as Array<{ status?: string }>).filter(
+            (g) => g.status !== "CANCELLED" && g.status !== "ACHIEVED",
+          ).length,
           research: (research?.jobs ?? []).length,
         });
       })

@@ -14,7 +14,8 @@ export type UserRow = {
   lastLoginAt: string | null;
   createdAt: string;
   lockedUntil: string | null;
-  activeSessions: number;
+  /** Last time an admin ended all of this user's sessions (sessions are JWTs). */
+  sessionsEndedAt: string | null;
   memberships: Array<{ organisationId: string; organisationName: string; role: string }>;
 };
 
@@ -25,6 +26,7 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
   const [role, setRole] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [resetLink, setResetLink] = useState<{ email: string; url: string } | null>(null);
 
   const filtered = useMemo(() => {
     return rows.filter((u) => {
@@ -65,13 +67,29 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Action failed");
       if (action === "send_password_reset") {
-        toast.success(
-          json.emailed
-            ? "Password reset email sent — user must also change password on next login"
-            : "Password reset issued — user must change password on next login (email not sent)",
-        );
+        if (json.emailed) {
+          setResetLink(null);
+          toast.success("Password reset email sent — user must also change password on next login");
+        } else if (typeof json.resetUrl === "string" && json.resetUrl) {
+          // Email isn't configured (or failed): hand the one-time link to the admin instead.
+          setResetLink({
+            email: rows.find((u) => u.id === userId)?.email ?? "",
+            url: json.resetUrl,
+          });
+          toast.success("Password reset issued — copy the one-time link below and send it to the user");
+        } else {
+          toast.success("Password reset issued — user must change password on next login");
+        }
       } else {
-        toast.success("Updated");
+        const who = rows.find((u) => u.id === userId)?.email ?? "the user";
+        const done: Record<string, string> = {
+          suspend: `Suspended ${who} — they're signed out everywhere`,
+          reactivate: `Reactivated ${who}`,
+          revoke_sessions: `Ended all sessions for ${who} — they'll need to sign in again`,
+          verify: `Marked ${who}'s email as verified`,
+          change_role: `Changed ${who}'s role`,
+        };
+        toast.success(done[action] ?? "Updated");
       }
       await refresh();
       router.refresh();
@@ -79,6 +97,15 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function copyResetLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Reset link copied");
+    } catch {
+      toast.error("Could not copy — select the link manually");
     }
   }
 
@@ -126,6 +153,35 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
         </button>
       </div>
 
+      {resetLink ? (
+        <div className="surface p-4 text-sm">
+          <p className="font-medium">
+            One-time password reset link{resetLink.email ? ` for ${resetLink.email}` : ""}
+          </p>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            No reset email was sent (email isn&apos;t set up or delivery failed), so send this
+            link to the user yourself. It works once and expires in 1 hour.
+          </p>
+          <p className="mt-2 break-all text-[var(--muted)]">{resetLink.url}</p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary text-xs"
+              onClick={() => void copyResetLink(resetLink.url)}
+            >
+              Copy reset link
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary text-xs"
+              onClick={() => setResetLink(null)}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="surface overflow-x-auto">
         <table className="w-full min-w-[960px] text-left text-sm">
           <thead className="border-b border-[var(--border)] text-xs uppercase text-[var(--muted)]">
@@ -136,7 +192,9 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
               <th className="px-3 py-3">Status</th>
               <th className="px-3 py-3">Last login</th>
               <th className="px-3 py-3">Created</th>
-              <th className="px-3 py-3">Sessions</th>
+              <th className="px-3 py-3" title="Last time all of this user's sessions were ended">
+                Sessions ended
+              </th>
               <th className="px-3 py-3">Actions</th>
             </tr>
           </thead>
@@ -162,7 +220,9 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
                 <td className="px-3 py-3 text-xs text-[var(--muted)]">
                   {new Date(user.createdAt).toLocaleDateString()}
                 </td>
-                <td className="px-3 py-3">{user.activeSessions}</td>
+                <td className="px-3 py-3 text-xs text-[var(--muted)]">
+                  {user.sessionsEndedAt ? new Date(user.sessionsEndedAt).toLocaleString() : "—"}
+                </td>
                 <td className="px-3 py-3">
                   <div className="flex min-w-[150px] flex-col gap-1 text-left">
                     {user.isSuspended ? (
@@ -190,7 +250,7 @@ export function UsersClient({ initial }: { initial: UserRow[] }) {
                       disabled={busy === `revoke_sessions-${user.id}`}
                       onClick={() => void act(user.id, "revoke_sessions")}
                     >
-                      Revoke sessions
+                      End all sessions
                     </button>
                     <button
                       type="button"

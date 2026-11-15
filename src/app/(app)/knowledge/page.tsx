@@ -1,5 +1,6 @@
 "use client";
 
+import { PermissionGate } from "@/components/permission-gate";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -50,7 +51,7 @@ function freshnessBadge(updatedAt?: string) {
   return <span className={className}>{label}</span>;
 }
 
-export default function KnowledgePage() {
+function KnowledgePageContent() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -93,6 +94,17 @@ export default function KnowledgePage() {
     load().catch((e) => toast.error(e.message));
   }, []);
 
+  /** A 409 means the title is taken — offer to open that document instead of overwriting it. */
+  function showSaveError(json: { error?: string; existingId?: string }, fallback: string) {
+    const existing = json.existingId ? docs.find((d) => d.id === json.existingId) : undefined;
+    toast.error(
+      json.error || fallback,
+      existing
+        ? { action: { label: "Open it", onClick: () => openWrite(existing) } }
+        : undefined,
+    );
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (replaceId) {
@@ -126,7 +138,7 @@ export default function KnowledgePage() {
       );
       const json = await res.json();
       if (!res.ok) {
-        toast.error(json.error || "Save failed");
+        showSaveError(json, "Save failed");
         return;
       }
       toast.success("Knowledge saved");
@@ -406,7 +418,9 @@ export default function KnowledgePage() {
         </div>
 
         {drawerMode === "write" ? (
-          <form onSubmit={onSubmit} className="space-y-3">
+          // Each form has its own key so React never reuses one form's inputs for the other
+          // (that logged "changing a controlled input to be uncontrolled").
+          <form key="write" onSubmit={onSubmit} className="space-y-3">
             <label className="block text-sm font-medium">
               Title
               <input
@@ -446,6 +460,7 @@ export default function KnowledgePage() {
           </form>
         ) : (
           <form
+            key="upload"
             className="space-y-3"
             onSubmit={async (e) => {
               e.preventDefault();
@@ -459,7 +474,7 @@ export default function KnowledgePage() {
               );
               const json = await res.json();
               if (!res.ok) {
-                toast.error(json.error || "Upload failed");
+                showSaveError(json, "Upload failed");
                 return;
               }
               toast.success(`Uploaded (${json.extractedChars ?? 0} characters extracted)`);
@@ -493,5 +508,17 @@ export default function KnowledgePage() {
         )}
       </SlideOver>
     </div>
+  );
+}
+
+export default function KnowledgePage() {
+  return (
+    <PermissionGate
+      permission="knowledge:manage"
+      title="Knowledge"
+      message="Only workspace owners, admins and managers manage the knowledge base."
+    >
+      <KnowledgePageContent />
+    </PermissionGate>
   );
 }

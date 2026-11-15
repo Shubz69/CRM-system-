@@ -1,16 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
+import { canWriteContacts } from "@/components/contacts/contact-permissions";
+import { CompanyEditDrawer, confirmAndDeleteCompany } from "../company-actions";
+import { statusLabel } from "@/lib/customer-labels";
 
 type Detail = {
   id: string;
   name: string;
   domain: string | null;
+  website: string | null;
   industry: string | null;
+  sizeBand: string | null;
   contacts: Array<{ id: string; fullName: string | null; email: string | null }>;
   deals: Array<{ id: string; name: string; status: string; amountCents: number | null }>;
   _count: { contacts: number; deals: number };
@@ -23,23 +29,30 @@ export default function CompanyDetailPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const { data: session } = useSession();
+  const role = session?.user?.role ?? null;
+  // Unknown role (session still loading): show the actions; the server enforces leads:write.
+  const canWrite = role ? canWriteContacts(role) : true;
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/companies/${id}`);
+    const json = await res.json();
+    if (res.status === 404) {
+      setNotFound(true);
+      return;
+    }
+    if (!res.ok) throw new Error(json.error || "Could not load company");
+    setDetail(json.company);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
-    fetch(`/api/companies/${id}`)
-      .then(async (res) => {
-        const json = await res.json();
-        if (res.status === 404) {
-          setNotFound(true);
-          return;
-        }
-        if (!res.ok) throw new Error(json.error || "Could not load company");
-        setDetail(json.company);
-      })
+    load()
       .catch((e) => toast.error(e instanceof Error ? e.message : "Failed"))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, load]);
 
   if (loading) {
     return (
@@ -65,10 +78,37 @@ export default function CompanyDetailPage() {
       <PageHeader
         description={[detail.domain, detail.industry].filter(Boolean).join(" · ") || "Company detail"}
         actions={
-          <Link className="btn btn-secondary" href="/companies">
-            All companies
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link className="btn btn-secondary" href="/companies">
+              All companies
+            </Link>
+            {canWrite ? (
+              <>
+                <button type="button" className="btn btn-secondary" onClick={() => setEditing(true)}>
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary text-[var(--danger)]"
+                  onClick={async () => {
+                    if (await confirmAndDeleteCompany(detail)) router.push("/companies");
+                  }}
+                >
+                  Delete
+                </button>
+              </>
+            ) : null}
+          </div>
         }
+      />
+      <CompanyEditDrawer
+        company={editing ? detail : null}
+        onClose={() => setEditing(false)}
+        onSaved={async () => {
+          await load().catch((e) => {
+            toast.error(e instanceof Error ? e.message : "Failed");
+          });
+        }}
       />
       <h1 className="font-[family-name:var(--font-fraunces)] text-3xl">{detail.name}</h1>
 
@@ -101,7 +141,7 @@ export default function CompanyDetailPage() {
                 <Link className="underline" href="/deals">
                   {d.name}
                 </Link>{" "}
-                · {d.status}
+                · {statusLabel(d.status)}
               </li>
             ))}
           </ul>

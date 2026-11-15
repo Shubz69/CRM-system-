@@ -12,6 +12,12 @@ export type ReportExportResult = {
   provider: string;
   destination?: string;
   error?: string;
+  /** Development/test only: recorded locally, nothing sent to Google. */
+  mock?: boolean;
+  /** Google Sheets isn't configured for this deployment. */
+  notConnected?: boolean;
+  /** Customer-facing note to show instead of a success message. */
+  message?: string;
   raw?: unknown;
 };
 

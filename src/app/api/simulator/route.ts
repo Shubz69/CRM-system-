@@ -5,7 +5,7 @@ import { processInboundMessage } from "@/services/inbound-pipeline";
 import { logger } from "@/lib/logger";
 
 const simulatorSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().trim().min(1, "Type a message to simulate."),
   contactExternalId: z.string().min(1).default("sim_lead_001"),
   fullName: z.string().optional(),
   instagramUsername: z.string().optional(),
@@ -14,17 +14,52 @@ const simulatorSchema = z.object({
   idempotencyKey: z.string().optional(),
 });
 
+const SIMULATOR_FIELD_LABELS: Record<string, string> = {
+  text: "Message",
+  contactExternalId: "Contact id",
+  fullName: "Name",
+  instagramUsername: "Instagram username",
+  email: "Email",
+  campaignSource: "Campaign source",
+  idempotencyKey: "Idempotency key",
+};
+
+/** One readable sentence for the first problem — never zod's raw issue JSON. */
+function readableSimulatorError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Check the simulator message and try again.";
+  const field = String(issue.path[0] ?? "");
+  if (field === "text" && (issue.code === "too_small" || issue.code === "too_big")) {
+    return issue.message;
+  }
+  if (field === "email") return "Enter a valid email address or leave it empty.";
+  const label = SIMULATOR_FIELD_LABELS[field] ?? "Input";
+  if (issue.code === "invalid_type" && issue.received === "undefined") {
+    return field === "text" ? "Type a message to simulate." : `${label} is required.`;
+  }
+  return `${label} is invalid.`;
+}
+
 /**
  * Org-scoped conversation simulator — available to any signed-in member with
  * inbox:write. Creates real CRM rows marked origin/leadSource = "simulator".
  */
 export async function POST(req: NextRequest) {
   try {
-    const raw = await req.json();
-    const session = await requirePermissionForMutation("inbox:write", req, raw);
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      return jsonError("Invalid request body.", 400);
+    }
+    const session = await requirePermissionForMutation(
+      "inbox:write",
+      req,
+      raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null,
+    );
     const parsed = simulatorSchema.safeParse(raw);
     if (!parsed.success) {
-      return jsonError(parsed.error.message, 400);
+      return jsonError(readableSimulatorError(parsed.error), 400);
     }
 
     const data = parsed.data;
@@ -61,7 +96,9 @@ export async function POST(req: NextRequest) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
     const message = error instanceof Error ? error.message : "Simulator failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
-    if (message.startsWith("Forbidden")) return jsonError(message, 403);
+    if (message.startsWith("Forbidden")) {
+      return jsonError("You don't have permission to use the simulator.", 403);
+    }
     logger.error("Simulator error", { message });
     return jsonError(
       "The simulator could not process that message. Try again or check agent settings.",

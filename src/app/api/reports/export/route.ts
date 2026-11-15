@@ -57,6 +57,10 @@ export async function POST(req: Request) {
         entityId: report.id,
         metadata: { ok: result.ok, provider: result.provider },
       });
+      // Not connected is a setup state, not a server fault — answer it plainly.
+      if (!result.ok && result.notConnected) {
+        return jsonError(result.error || "Google Sheets isn't connected, so nothing was exported.", 409);
+      }
       if (!result.ok) return jsonError(result.error || "Sheets export failed", 502);
       return Response.json({ ok: true, result });
     }
@@ -100,9 +104,19 @@ export async function POST(req: Request) {
     if (!result.ok) return jsonError(result.error || "Email export failed", 502);
     return Response.json({ ok: true, result });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      const field = String(error.issues[0]?.path[0] ?? "");
+      return jsonError(
+        field === "emailTo"
+          ? "Enter valid email addresses to send the report to."
+          : "Choose a report and where to export it (Sheets, email or CSV).",
+        400,
+      );
+    }
+    if (error instanceof SyntaxError) return jsonError("Invalid request body.", 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    return jsonError(message, 400);
+    return jsonError("Couldn't export the report. Try again.", 500);
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { PermissionGate } from "@/components/permission-gate";
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
@@ -18,8 +19,27 @@ type AgentConfig = {
   restrictedTopics: string[];
 };
 
-export default function AgentPage() {
+/** Stored questions → textarea text, one question per line. */
+function questionsToText(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((q): q is string => typeof q === "string" && q.trim().length > 0).join("\n")
+    : "";
+}
+
+/** Textarea text → one question per non-empty line. */
+function textToQuestions(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((q) => q.trim())
+    .filter(Boolean);
+}
+
+function AgentPageContent() {
   const [config, setConfig] = useState<AgentConfig | null>(null);
+  // Raw textarea text: splitting on every keystroke dropped the trailing newline, so Enter
+  // never created a new line and "Q1⏎Q2" saved as "Q1Q2". Split only when saving.
+  const [questionsText, setQuestionsText] = useState("");
+  const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [playgroundInput, setPlaygroundInput] = useState(
     "How much does it cost for a coaching business?",
@@ -33,6 +53,7 @@ export default function AgentPage() {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || "Failed");
         setConfig(j.config);
+        setQuestionsText(questionsToText(j.config?.qualificationQuestions));
       })
       .catch((e) => setLoadError(e instanceof Error ? e.message : "Failed to load agent"));
   }
@@ -44,28 +65,36 @@ export default function AgentPage() {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!config) return;
-    const res = await fetch("/api/agent", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        brandTone: config.brandTone,
-        formality: config.formality,
-        responseLength: config.responseLength,
-        emojiUsage: config.emojiUsage,
-        confidenceThreshold: config.confidenceThreshold,
-        bookingUrl: config.bookingUrl,
-        maxFollowUps: config.maxFollowUps,
-        qualificationQuestions: config.qualificationQuestions,
-        restrictedTopics: config.restrictedTopics,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      toast.error(json.error || "Save failed");
-      return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/agent", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brandTone: config.brandTone,
+          formality: config.formality,
+          responseLength: config.responseLength,
+          emojiUsage: config.emojiUsage,
+          confidenceThreshold: config.confidenceThreshold,
+          bookingUrl: config.bookingUrl?.trim() || null,
+          maxFollowUps: config.maxFollowUps,
+          qualificationQuestions: textToQuestions(questionsText),
+          restrictedTopics: config.restrictedTopics,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Save failed");
+        return;
+      }
+      setConfig(json.config);
+      setQuestionsText(questionsToText(json.config?.qualificationQuestions));
+      toast.success("Agent configuration saved");
+    } catch {
+      toast.error("Save failed — check your connection and try again");
+    } finally {
+      setSaving(false);
     }
-    setConfig(json.config);
-    toast.success("Agent configuration saved");
   }
 
   async function runPlayground(e: FormEvent) {
@@ -156,25 +185,31 @@ export default function AgentPage() {
           Booking URL
           <input
             className="input mt-2"
+            type="url"
+            inputMode="url"
+            placeholder="https://calendly.com/your-name/intro-call"
             value={config.bookingUrl || ""}
             onChange={(e) => setConfig({ ...config, bookingUrl: e.target.value })}
           />
+          <span className="mt-1 block text-xs font-normal text-[var(--muted)]">
+            Full link starting with https:// — leave empty to use the default booking link.
+          </span>
         </label>
         <label className="text-sm font-medium md:col-span-2">
           Qualification questions (one per line)
           <textarea
             className="input mt-2 min-h-28"
-            value={(config.qualificationQuestions || []).join("\n")}
-            onChange={(e) =>
-              setConfig({
-                ...config,
-                qualificationQuestions: e.target.value.split("\n").filter(Boolean),
-              })
-            }
+            rows={5}
+            placeholder={"What's your budget?\nWhen are you looking to start?"}
+            value={questionsText}
+            onChange={(e) => setQuestionsText(e.target.value)}
           />
+          <span className="mt-1 block text-xs font-normal text-[var(--muted)]">
+            Press Enter to start a new question. Blank lines are ignored.
+          </span>
         </label>
-        <button className="btn btn-primary md:col-span-2" type="submit">
-          Save configuration
+        <button className="btn btn-primary md:col-span-2" type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save configuration"}
         </button>
       </form>
 
@@ -198,5 +233,17 @@ export default function AgentPage() {
         )}
       </form>
     </div>
+  );
+}
+
+export default function AgentPage() {
+  return (
+    <PermissionGate
+      permission="agent:manage"
+      title="AI Agent"
+      message="Only workspace owners and admins change the AI agent's settings."
+    >
+      <AgentPageContent />
+    </PermissionGate>
   );
 }

@@ -1,9 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
+import { roleHasPermission, type Permission } from "@/lib/permissions";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Channel = {
@@ -69,6 +71,29 @@ type ProviderStatus = {
   email?: { ready?: boolean; status?: string; smtpConfigured?: boolean };
 };
 
+/** IANA zones this browser knows, UTC first; always includes the current value. */
+function timeZoneOptions(current: string | undefined): string[] {
+  let zones: string[] = [];
+  try {
+    zones = Intl.supportedValuesOf("timeZone");
+  } catch {
+    zones = [];
+  }
+  const rest = new Set(zones);
+  if (current && current !== "UTC") rest.add(current);
+  rest.delete("UTC");
+  return ["UTC", ...[...rest].sort()];
+}
+
+/** Same roles PATCH /api/settings accepts for a timezone change. */
+const TIMEZONE_EDIT_ROLES: ReadonlySet<string> = new Set(["OWNER", "ADMINISTRATOR", "SUPER_ADMIN"]);
+
+const OWNER_ADMIN_ONLY = "Only workspace owners and admins can manage this.";
+
+function OwnerAdminOnly({ className = "mt-3" }: { className?: string }) {
+  return <p className={`${className} text-sm text-[var(--muted)]`}>{OWNER_ADMIN_ONLY}</p>;
+}
+
 function StatusChip({ ok, label }: { ok: boolean; label: string }) {
   return (
     <span className={`badge ${ok ? "" : "badge-warn"}`}>{label}</span>
@@ -77,6 +102,32 @@ function StatusChip({ ok, label }: { ok: boolean; label: string }) {
 
 export default function SettingsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const { data: session, status: sessionStatus } = useSession();
+  const role = session?.user?.role ?? null;
+  // Until the session arrives the role is unknown: make no gated call and show no gated control.
+  const sessionKnown = sessionStatus !== "loading";
+  // Each flag mirrors the server check behind the call or page it unlocks.
+  const access = useMemo(() => {
+    const can = (permission: Permission) => (role ? roleHasPermission(role, permission) : false);
+    return {
+      /** GET /api/messaging-channels, GET /api/integrations/zernio */
+      readSettings: can("settings:read"),
+      /** /api/workspace/members and invitation resend/revoke */
+      manageMembers: can("members:manage"),
+      /** POST /api/messaging-channels; connecting accounts on /integrations */
+      manageIntegrations: can("integrations:manage"),
+      /** /agent, /setup and /qualification (their APIs need agent:manage) */
+      manageAgent: can("agent:manage"),
+      /** /knowledge */
+      manageKnowledge: can("knowledge:manage"),
+      /** /business-context */
+      readInsights: can("insights:read"),
+      /** /simulator */
+      useSimulator: can("inbox:write"),
+      /** PATCH /api/settings (timezone) */
+      editTimezone: role ? TIMEZONE_EDIT_ROLES.has(role) : false,
+    };
+  }, [role]);
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<PendingInvite[]>([]);
@@ -94,20 +145,25 @@ export default function SettingsPage() {
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [memberActionBusy, setMemberActionBusy] = useState<string | null>(null);
+  const [timezoneDraft, setTimezoneDraft] = useState<string | null>(null);
+  const [timezoneBusy, setTimezoneBusy] = useState(false);
+  const savedTimezone = org?.timezone || "UTC";
+  const timezoneOptions = useMemo(() => timeZoneOptions(org?.timezone), [org?.timezone]);
 
-  async function load() {
+  const load = useCallback(async () => {
+    // Calls the role may not make are skipped (null) instead of answering 403.
     const [settingsRes, channelsRes, providersRes, membersRes, socialRes] = await Promise.all([
       fetch("/api/settings"),
-      fetch("/api/messaging-channels"),
+      access.readSettings ? fetch("/api/messaging-channels") : null,
       fetch("/api/health/providers"),
-      fetch("/api/workspace/members"),
-      fetch("/api/integrations/zernio"),
+      access.manageMembers ? fetch("/api/workspace/members") : null,
+      access.readSettings ? fetch("/api/integrations/zernio") : null,
     ]);
     if (settingsRes.ok) {
       const json = await settingsRes.json();
       setOrg(json.organisation);
       setIntegrations(json.integrations || []);
-      if (!membersRes.ok) {
+      if (!membersRes?.ok) {
         // Fallback: settings still returns basic member list for read-only viewers.
         setMembers(
           (json.members || []).map(
@@ -126,7 +182,7 @@ export default function SettingsPage() {
         );
       }
     }
-    if (membersRes.ok) {
+    if (membersRes?.ok) {
       const json = await membersRes.json();
       setCanManageMembers(true);
       setMembers(json.members || []);
@@ -135,7 +191,7 @@ export default function SettingsPage() {
       setCanManageMembers(false);
       setInvitations([]);
     }
-    if (channelsRes.ok) {
+    if (channelsRes?.ok) {
       const json = await channelsRes.json();
       setChannels(json.channels || []);
     }
@@ -143,13 +199,13 @@ export default function SettingsPage() {
       const json = await providersRes.json();
       setProviders(json.providers || {});
     }
-    if (socialRes.ok) {
+    if (socialRes?.ok) {
       const json = await socialRes.json();
       setInstagramConnected(Boolean(json.networks?.instagram?.connected));
     } else {
       setInstagramConnected(false);
     }
-  }
+  }, [access]);
 
   async function sendInvite(e: FormEvent) {
     e.preventDefault();
@@ -276,6 +332,37 @@ export default function SettingsPage() {
     }
   }
 
+  async function saveTimezone(e: FormEvent) {
+    e.preventDefault();
+    const timezone = timezoneDraft ?? savedTimezone;
+    if (timezone === savedTimezone) return;
+    setTimezoneBusy(true);
+    try {
+      const res = await workspaceFetch(
+        workspaceContext.loadedOrganisationId,
+        workspaceContext.workspaceRevision,
+        "/api/settings",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timezone }),
+        },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(json.error || "Couldn't update the timezone");
+        return;
+      }
+      setOrg((prev) => ({ ...(prev ?? {}), timezone: json.organisation?.timezone ?? timezone }));
+      setTimezoneDraft(null);
+      toast.success("Timezone updated");
+    } catch {
+      toast.error("Couldn't update the timezone");
+    } finally {
+      setTimezoneBusy(false);
+    }
+  }
+
   async function copyInviteLink() {
     if (!lastInviteUrl) return;
     try {
@@ -287,8 +374,9 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
+    if (!sessionKnown) return;
     load().catch((e) => toast.error(e.message));
-  }, []);
+  }, [sessionKnown, load]);
 
   async function saveChannel(e: FormEvent) {
     e.preventDefault();
@@ -395,7 +483,34 @@ export default function SettingsPage() {
           </div>
           <div>
             <dt className="text-[var(--muted)]">Timezone</dt>
-            <dd className="font-medium">{org?.timezone || "UTC"}</dd>
+            {access.editTimezone && org ? (
+              <dd>
+                <form onSubmit={saveTimezone} className="mt-1 flex flex-wrap items-center gap-2">
+                  <select
+                    className="input max-w-xs"
+                    aria-label="Workspace timezone"
+                    value={timezoneDraft ?? savedTimezone}
+                    onChange={(e) => setTimezoneDraft(e.target.value)}
+                    disabled={timezoneBusy}
+                  >
+                    {timezoneOptions.map((zone) => (
+                      <option key={zone} value={zone}>
+                        {zone.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="btn btn-secondary"
+                    disabled={timezoneBusy || (timezoneDraft ?? savedTimezone) === savedTimezone}
+                  >
+                    {timezoneBusy ? "Saving…" : "Save"}
+                  </button>
+                </form>
+              </dd>
+            ) : (
+              <dd className="font-medium">{savedTimezone}</dd>
+            )}
           </div>
         </dl>
       </section>
@@ -405,6 +520,11 @@ export default function SettingsPage() {
         <p className="mt-1 text-sm text-[var(--muted)]">
           Members and pending invitations for this workspace.
         </p>
+        {sessionKnown && !access.manageMembers && (
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Only workspace owners and admins can invite or change members.
+          </p>
+        )}
 
         {canManageMembers && (
           <form onSubmit={sendInvite} className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
@@ -552,13 +672,18 @@ export default function SettingsPage() {
           <Link href="/autopilot" className="btn btn-secondary">
             Automation level
           </Link>
-          <Link href="/agent" className="btn btn-secondary">
-            Tone & goals
-          </Link>
-          <Link href="/setup" className="btn btn-secondary">
-            Setup Assistant
-          </Link>
+          {sessionKnown && access.manageAgent && (
+            <>
+              <Link href="/agent" className="btn btn-secondary">
+                Tone & goals
+              </Link>
+              <Link href="/setup" className="btn btn-secondary">
+                Setup Assistant
+              </Link>
+            </>
+          )}
         </div>
+        {sessionKnown && !access.manageAgent && <OwnerAdminOnly />}
       </section>
 
       <section id="settings-messaging" className="surface scroll-mt-24 p-5">
@@ -567,21 +692,31 @@ export default function SettingsPage() {
           <div className="rounded-xl border border-[var(--border)] p-4">
             <div className="flex items-center justify-between gap-2">
               <h3 className="font-semibold">Instagram</h3>
-              <StatusChip
-                ok={instagramConnected}
-                label={instagramConnected ? "Connected" : "Not Connected"}
-              />
+              {sessionKnown && access.readSettings && (
+                <StatusChip
+                  ok={instagramConnected}
+                  label={instagramConnected ? "Connected" : "Not Connected"}
+                />
+              )}
             </div>
-            <p className="mt-2 text-sm text-[var(--muted)]">
-              Connect Instagram in Social Accounts so Agent Desk can listen and reply.
-            </p>
+            {sessionKnown && !access.manageIntegrations ? (
+              <OwnerAdminOnly className="mt-2" />
+            ) : (
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                Connect Instagram in Social Accounts so Agent Desk can listen and reply.
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
-              <Link href="/integrations" className="btn btn-primary">
-                Social Accounts
-              </Link>
-              <Link href="/simulator" className="btn btn-secondary">
-                Test
-              </Link>
+              {sessionKnown && access.manageIntegrations && (
+                <Link href="/integrations" className="btn btn-primary">
+                  Social Accounts
+                </Link>
+              )}
+              {sessionKnown && access.useSimulator && (
+                <Link href="/simulator" className="btn btn-secondary">
+                  Test
+                </Link>
+              )}
             </div>
           </div>
 
@@ -596,18 +731,23 @@ export default function SettingsPage() {
             <p className="mt-2 text-sm text-[var(--muted)]">
               Booking link used when a lead is ready to speak.
             </p>
-            <label className="mt-3 block text-sm">
-              Booking URL
-              <input
-                className="input mt-1"
-                value={bookingUrl}
-                onChange={(e) => setBookingUrl(e.target.value)}
-                placeholder="Your booking page URL"
-              />
-            </label>
-            <Link href="/agent" className="btn btn-secondary mt-3">
-              Manage
-            </Link>
+            {sessionKnown && access.manageAgent && (
+              <>
+                <label className="mt-3 block text-sm">
+                  Booking URL
+                  <input
+                    className="input mt-1"
+                    value={bookingUrl}
+                    onChange={(e) => setBookingUrl(e.target.value)}
+                    placeholder="Your booking page URL"
+                  />
+                </label>
+                <Link href="/agent" className="btn btn-secondary mt-3">
+                  Manage
+                </Link>
+              </>
+            )}
+            {sessionKnown && !access.manageAgent && <OwnerAdminOnly />}
           </div>
 
           <div className="rounded-xl border border-[var(--border)] p-4">
@@ -621,9 +761,12 @@ export default function SettingsPage() {
             <p className="mt-2 text-sm text-[var(--muted)]">
               Powers replies, research, and Ask — configure brand voice and behaviour.
             </p>
-            <Link href="/agent" className="btn btn-secondary mt-3">
-              Manage behaviour
-            </Link>
+            {sessionKnown && access.manageAgent && (
+              <Link href="/agent" className="btn btn-secondary mt-3">
+                Manage behaviour
+              </Link>
+            )}
+            {sessionKnown && !access.manageAgent && <OwnerAdminOnly />}
           </div>
 
           <div className="rounded-xl border border-[var(--border)] p-4">
@@ -646,11 +789,14 @@ export default function SettingsPage() {
         <p className="mt-1 text-sm text-[var(--muted)]">
           Score thresholds, fit criteria, and when to hand off a lead.
         </p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <Link href="/qualification" className="btn btn-secondary">
-            Qualification rules
-          </Link>
-        </div>
+        {sessionKnown && access.manageAgent && (
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link href="/qualification" className="btn btn-secondary">
+              Qualification rules
+            </Link>
+          </div>
+        )}
+        {sessionKnown && !access.manageAgent && <OwnerAdminOnly />}
       </section>
 
       <section id="settings-brand" className="surface scroll-mt-24 p-5">
@@ -659,12 +805,16 @@ export default function SettingsPage() {
           Tone of voice, pricing, and policy documents that guide AI replies.
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <Link href="/knowledge" className="btn btn-secondary">
-            Knowledge library
-          </Link>
-          <Link href="/business-context" className="btn btn-secondary">
-            Business profile
-          </Link>
+          {sessionKnown && access.manageKnowledge && (
+            <Link href="/knowledge" className="btn btn-secondary">
+              Knowledge library
+            </Link>
+          )}
+          {sessionKnown && access.readInsights && (
+            <Link href="/business-context" className="btn btn-secondary">
+              Business profile
+            </Link>
+          )}
         </div>
       </section>
 
@@ -704,32 +854,35 @@ export default function SettingsPage() {
         {(showAdvanced || channels.length > 0) && (
           <>
             <p className="mt-3 text-sm font-medium">Instagram channel</p>
-            <form onSubmit={saveChannel} className="mt-2 grid gap-3 md:grid-cols-3">
-              <label className="text-sm font-medium">
-                Channel ID
-                <input
-                  className="input mt-2"
-                  value={externalId}
-                  onChange={(e) => setExternalId(e.target.value)}
-                  required
-                  placeholder="Your Instagram channel"
-                />
-              </label>
-              <label className="text-sm font-medium">
-                Display name
-                <input
-                  className="input mt-2"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Main Instagram"
-                />
-              </label>
-              <div className="flex items-end">
-                <button className="btn btn-primary w-full" type="submit">
-                  Save
-                </button>
-              </div>
-            </form>
+            {sessionKnown && !access.manageIntegrations && <OwnerAdminOnly className="mt-2" />}
+            {sessionKnown && access.manageIntegrations && (
+              <form onSubmit={saveChannel} className="mt-2 grid gap-3 md:grid-cols-3">
+                <label className="text-sm font-medium">
+                  Channel ID
+                  <input
+                    className="input mt-2"
+                    value={externalId}
+                    onChange={(e) => setExternalId(e.target.value)}
+                    required
+                    placeholder="Your Instagram channel"
+                  />
+                </label>
+                <label className="text-sm font-medium">
+                  Display name
+                  <input
+                    className="input mt-2"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Main Instagram"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button className="btn btn-primary w-full" type="submit">
+                    Save
+                  </button>
+                </div>
+              </form>
+            )}
             <ul className="mt-4 space-y-2 text-sm">
               {channels.map((channel) => (
                 <li

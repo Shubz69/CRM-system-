@@ -251,13 +251,50 @@ export async function createDraftPiece(input: {
   return { pieceId: piece.id };
 }
 
+/**
+ * Content approval state machine:
+ *   DRAFT (or FAILED) --submit--> IN_REVIEW --approve--> APPROVED --publish--> SCHEDULED / PUBLISHED
+ *                                 IN_REVIEW --reject---> DRAFT
+ * Editing an APPROVED (or SCHEDULED, once its publish job is cancelled) piece sends it back to
+ * DRAFT so the changed copy has to be reviewed again. Every transition is a conditional update on
+ * the current status, so two people acting at once can't both win.
+ */
+export class ContentStateError extends Error {
+  readonly code = "CONTENT_STATE";
+}
+
+const SUBMITTABLE_STATUSES: ContentPieceStatus[] = [ContentPieceStatus.DRAFT, ContentPieceStatus.FAILED];
+/** Publish jobs that may still post the piece's current copy. */
+const LIVE_PUBLISH_JOB_STATUSES: PublishingJobStatus[] = [
+  PublishingJobStatus.PENDING_APPROVAL,
+  PublishingJobStatus.APPROVED,
+  PublishingJobStatus.QUEUED,
+  PublishingJobStatus.SCHEDULED,
+  PublishingJobStatus.DISPATCHING,
+  PublishingJobStatus.PUBLISHING,
+];
+
+function notSubmittableMessage(status: ContentPieceStatus): string {
+  switch (status) {
+    case ContentPieceStatus.APPROVED:
+    case ContentPieceStatus.SCHEDULED:
+      return "This piece is already approved.";
+    case ContentPieceStatus.PUBLISHED:
+      return "This piece has already been published.";
+    case ContentPieceStatus.ARCHIVED:
+      return "Archived pieces can't be submitted for approval.";
+    default:
+      return "Only drafts can be submitted for approval.";
+  }
+}
+
 export async function updatePiece(input: {
   organisationId: string;
   pieceId: string;
   title?: string;
   body?: string;
   platform?: string | null;
-}): Promise<void> {
+}): Promise<{ status: ContentPieceStatus; changed: boolean }> {
   const piece = await prisma.contentPiece.findFirst({
     where: { id: input.pieceId, organisationId: input.organisationId },
   });
@@ -266,18 +303,48 @@ export async function updatePiece(input: {
     piece.status === ContentPieceStatus.PUBLISHED ||
     piece.status === ContentPieceStatus.ARCHIVED
   ) {
-    throw new Error(`Cannot edit a ${piece.status} piece`);
+    throw new ContentStateError(
+      piece.status === ContentPieceStatus.PUBLISHED
+        ? "Published pieces can't be edited."
+        : "Archived pieces can't be edited.",
+    );
   }
 
   const title = input.title?.trim() ?? piece.title;
   const body = input.body ?? piece.body;
   const platform =
     input.platform !== undefined ? input.platform : piece.platform;
+  const changed = title !== piece.title || body !== piece.body || platform !== piece.platform;
+  if (!changed) return { status: piece.status, changed: false };
 
-  await prisma.contentPiece.updateMany({
-    where: { id: piece.id, organisationId: input.organisationId },
-    data: { title, body, platform },
+  // Approved copy that changes must be reviewed again.
+  let nextStatus: ContentPieceStatus = piece.status;
+  if (
+    piece.status === ContentPieceStatus.APPROVED ||
+    piece.status === ContentPieceStatus.SCHEDULED
+  ) {
+    const liveJobs = await prisma.publishingJob.count({
+      where: {
+        organisationId: input.organisationId,
+        pieceId: piece.id,
+        status: { in: LIVE_PUBLISH_JOB_STATUSES },
+      },
+    });
+    if (liveJobs > 0) {
+      throw new ContentStateError(
+        "This piece is queued to publish. Cancel its publish job before editing, then submit it for approval again.",
+      );
+    }
+    nextStatus = ContentPieceStatus.DRAFT;
+  }
+
+  const updated = await prisma.contentPiece.updateMany({
+    where: { id: piece.id, organisationId: input.organisationId, status: piece.status },
+    data: { title, body, platform, status: nextStatus },
   });
+  if (updated.count === 0) {
+    throw new ContentStateError("This piece changed while you were editing. Reload and try again.");
+  }
 
   const last = await prisma.contentVersion.findFirst({
     where: { pieceId: piece.id, organisationId: input.organisationId },
@@ -292,6 +359,7 @@ export async function updatePiece(input: {
       body,
     },
   });
+  return { status: nextStatus, changed: true };
 }
 
 export async function submitPieceForApproval(input: {
@@ -302,12 +370,32 @@ export async function submitPieceForApproval(input: {
     where: { id: input.pieceId, organisationId: input.organisationId },
   });
   if (!piece) throw new Error("Piece not found");
+
+  if (piece.status === ContentPieceStatus.IN_REVIEW) {
+    // Already waiting — submitting twice is a no-op, not a second approval request.
+    const pending = await prisma.contentApproval.findFirst({
+      where: { organisationId: input.organisationId, pieceId: piece.id, decision: "PENDING" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (pending) return pending.id;
+  } else if (!SUBMITTABLE_STATUSES.includes(piece.status)) {
+    throw new ContentStateError(notSubmittableMessage(piece.status));
+  }
   assertWhyEvidence(piece.whyEvidence as WhyEvidence);
 
-  await prisma.contentPiece.updateMany({
-    where: { id: piece.id, organisationId: input.organisationId },
-    data: { status: ContentPieceStatus.IN_REVIEW },
-  });
+  if (piece.status !== ContentPieceStatus.IN_REVIEW) {
+    const moved = await prisma.contentPiece.updateMany({
+      where: {
+        id: piece.id,
+        organisationId: input.organisationId,
+        status: { in: SUBMITTABLE_STATUSES },
+      },
+      data: { status: ContentPieceStatus.IN_REVIEW },
+    });
+    if (moved.count === 0) {
+      throw new ContentStateError("This piece changed in the meantime. Reload and try again.");
+    }
+  }
 
   const approval = await prisma.contentApproval.create({
     data: {
@@ -319,6 +407,10 @@ export async function submitPieceForApproval(input: {
   return approval.id;
 }
 
+/**
+ * Approve or send back a piece that is IN_REVIEW. Callers must check the approver's permission
+ * (the API requires automations:manage — the same permission as the Approvals queue).
+ */
 export async function decidePieceApproval(input: {
   organisationId: string;
   pieceId: string;
@@ -330,20 +422,23 @@ export async function decidePieceApproval(input: {
     where: { id: input.pieceId, organisationId: input.organisationId },
   });
   if (!piece) throw new Error("Piece not found");
+  if (piece.status !== ContentPieceStatus.IN_REVIEW) {
+    throw new ContentStateError(
+      piece.status === ContentPieceStatus.DRAFT || piece.status === ContentPieceStatus.FAILED
+        ? "Submit this piece for approval before approving or sending it back."
+        : piece.status === ContentPieceStatus.APPROVED || piece.status === ContentPieceStatus.SCHEDULED
+          ? "This piece has already been approved."
+          : "Only pieces awaiting approval can be approved or sent back.",
+    );
+  }
 
-  await prisma.contentApproval.create({
-    data: {
+  // Claim the transition first: only one decision can move a piece out of review.
+  const moved = await prisma.contentPiece.updateMany({
+    where: {
+      id: piece.id,
       organisationId: input.organisationId,
-      pieceId: piece.id,
-      decision: input.decision,
-      decidedByUserId: input.decidedByUserId ?? null,
-      note: input.note ?? null,
-      decidedAt: new Date(),
+      status: ContentPieceStatus.IN_REVIEW,
     },
-  });
-
-  await prisma.contentPiece.updateMany({
-    where: { id: piece.id, organisationId: input.organisationId },
     data: {
       status:
         input.decision === "APPROVED"
@@ -351,6 +446,25 @@ export async function decidePieceApproval(input: {
           : ContentPieceStatus.DRAFT,
     },
   });
+  if (moved.count === 0) {
+    throw new ContentStateError("Someone else already decided this piece. Reload to see where it is.");
+  }
+
+  const decided = {
+    decision: input.decision,
+    decidedByUserId: input.decidedByUserId ?? null,
+    note: input.note ?? null,
+    decidedAt: new Date(),
+  };
+  const closed = await prisma.contentApproval.updateMany({
+    where: { organisationId: input.organisationId, pieceId: piece.id, decision: "PENDING" },
+    data: decided,
+  });
+  if (closed.count === 0) {
+    await prisma.contentApproval.create({
+      data: { organisationId: input.organisationId, pieceId: piece.id, ...decided },
+    });
+  }
 }
 
 /**

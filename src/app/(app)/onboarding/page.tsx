@@ -6,6 +6,23 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 
+const DEFAULT_AGENT_BEHAVIOUR = "Professional, clear, and concise — never pushy.";
+
+type Answers = {
+  businessName: string;
+  whatYouDo: string;
+  whoToReach: string;
+  agentBehaviour: string;
+};
+
+/** The answer each step edits (step 4, Connections, has none). */
+const STEP_FIELD: Record<number, keyof Answers | undefined> = {
+  0: "businessName",
+  1: "whatYouDo",
+  2: "whoToReach",
+  3: "agentBehaviour",
+};
+
 const STEPS = [
   { id: 0, title: "Your business", hint: "What should we call your workspace?" },
   { id: 1, title: "What you do", hint: "In a sentence or two, what do you offer?" },
@@ -22,10 +39,16 @@ export default function OnboardingPage() {
   const [businessName, setBusinessName] = useState("");
   const [whatYouDo, setWhatYouDo] = useState("");
   const [whoToReach, setWhoToReach] = useState("");
-  const [agentBehaviour, setAgentBehaviour] = useState(
-    "Professional, clear, and concise — never pushy.",
-  );
+  const [agentBehaviour, setAgentBehaviour] = useState(DEFAULT_AGENT_BEHAVIOUR);
   const [socialEnabled, setSocialEnabled] = useState(true);
+  // What is saved for the workspace right now. Continue only writes an answer the user
+  // changed from this, so re-entering onboarding never overwrites saved values with defaults.
+  const [savedAnswers, setSavedAnswers] = useState<Answers>({
+    businessName: "",
+    whatYouDo: "",
+    whoToReach: "",
+    agentBehaviour: "",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -38,14 +61,23 @@ export default function OnboardingPage() {
           router.replace("/home");
           return;
         }
-        setBusinessName(json.progress?.businessName || "");
-        setWhatYouDo(json.progress?.whatYouDo || "");
-        setWhoToReach(json.progress?.whoToReach || "");
+        // Live workspace values win over the answers stored in onboarding progress: they may
+        // have been edited since (brand tone in AI Agent, offering in Business profile).
+        const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+        const live: Answers = {
+          businessName: text(json.saved?.businessName),
+          whatYouDo: text(json.saved?.whatYouDo),
+          whoToReach: text(json.saved?.whoToReach),
+          agentBehaviour: text(json.saved?.agentBehaviour),
+        };
+        setSavedAnswers(live);
+        setBusinessName(live.businessName || text(json.progress?.businessName));
+        setWhatYouDo(live.whatYouDo || text(json.progress?.whatYouDo));
+        setWhoToReach(live.whoToReach || text(json.progress?.whoToReach));
         setAgentBehaviour(
-          json.progress?.agentBehaviour ||
-            "Professional, clear, and concise — never pushy.",
+          live.agentBehaviour || text(json.progress?.agentBehaviour) || DEFAULT_AGENT_BEHAVIOUR,
         );
-        setStep(json.progress?.currentStep || 0);
+        setStep(Math.min(Math.max(json.progress?.currentStep || 0, 0), STEPS.length - 1));
         setSocialEnabled(json.socialPolicy?.enabled !== false);
       }
       setLoaded(true);
@@ -55,7 +87,12 @@ export default function OnboardingPage() {
     };
   }, [router]);
 
-  async function save(action: "save_progress" | "complete" | "skip_connections") {
+  async function save(action: "save_progress" | "complete" | "skip_connections"): Promise<boolean> {
+    const current: Answers = { businessName, whatYouDo, whoToReach, agentBehaviour };
+    // Only the answer on this step, and only when the user changed it to something non-empty.
+    const field = action === "save_progress" ? STEP_FIELD[step] : undefined;
+    const value = field ? current[field].trim() : "";
+    const changed = field && value && value !== savedAnswers[field].trim() ? field : undefined;
     setBusy(true);
     try {
       const res = await fetch("/api/onboarding/progress", {
@@ -64,24 +101,25 @@ export default function OnboardingPage() {
         body: JSON.stringify({
           action,
           progress: {
-            currentStep: step,
-            businessName,
-            whatYouDo,
-            whoToReach,
-            agentBehaviour,
+            currentStep:
+              action === "save_progress" ? Math.min(step + 1, STEPS.length - 1) : step,
+            ...(changed ? { [changed]: value } : {}),
             skippedConnections: action === "skip_connections",
           },
         }),
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Save failed");
+      if (changed) setSavedAnswers((prev) => ({ ...prev, [changed]: value }));
       if (action === "complete" || action === "skip_connections") {
         toast.success("You're set — welcome to Agent Desk");
         router.push("/home");
         router.refresh();
       }
+      return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Save failed");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -90,7 +128,9 @@ export default function OnboardingPage() {
   function onNext(e: FormEvent) {
     e.preventDefault();
     if (step < STEPS.length - 1) {
-      void save("save_progress").then(() => setStep((s) => s + 1));
+      void save("save_progress").then((ok) => {
+        if (ok) setStep((s) => s + 1);
+      });
       return;
     }
     void save("complete");

@@ -21,7 +21,12 @@ export default async function AdminUsersPage() {
       memberships: {
         include: { organisation: { select: { id: true, name: true, slug: true } } },
       },
-      sessions: { select: { id: true, expires: true }, take: 10 },
+      // Sessions are JWTs; the only Session row is the "end all sessions" marker.
+      sessions: {
+        where: { sessionToken: { startsWith: "revoked:" } },
+        select: { expires: true },
+        take: 1,
+      },
     },
   });
 
@@ -35,7 +40,7 @@ export default async function AdminUsersPage() {
     lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
     createdAt: user.createdAt.toISOString(),
     lockedUntil: user.lockedUntil?.toISOString() ?? null,
-    activeSessions: user.sessions.filter((s) => s.expires > new Date()).length,
+    sessionsEndedAt: user.sessions[0]?.expires.toISOString() ?? null,
     memberships: user.memberships.map((m) => ({
       organisationId: m.organisationId,
       organisationName: m.organisation.name,

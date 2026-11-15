@@ -134,8 +134,70 @@ export function kpiLabel(key: string): string {
   return KPI_LABELS[key] ?? humanizeKey(key);
 }
 
+const INTEGRATION_LABELS: Record<string, string> = {
+  MANYCHAT: "ManyChat",
+  META_INSTAGRAM: "Instagram (Meta)",
+  AYRSHARE: "Ayrshare",
+  ZERNIO: "Zernio",
+  OPENAI: "OpenAI",
+  ANTHROPIC: "Anthropic",
+  BOOKING: "Booking calendar",
+  GOOGLE_SHEETS: "Google Sheets",
+  EMAIL: "Email",
+  WEBHOOK: "Webhook",
+};
+
+/**
+ * A deal amount in its own currency: whole amounts without decimals ("£1,200"), others to the
+ * penny ("€1,234.50" — rounding it to "€1,235" misstated the deal).
+ */
+export function formatDealAmount(
+  cents: number | null | undefined,
+  currency: string | null | undefined,
+  locale?: string,
+): string {
+  if (cents == null) return "—";
+  const code = (currency || "GBP").toUpperCase();
+  const digits = cents % 100 === 0 ? 0 : 2;
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: code,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(cents / 100);
+  } catch {
+    return `${code} ${(cents / 100).toFixed(digits)}`;
+  }
+}
+
+/** "GOOGLE_SHEETS" → "Google Sheets". */
+export function integrationLabel(type: string): string {
+  return INTEGRATION_LABELS[type] ?? humanizeKey(type);
+}
+
 export function unitLabel(unit: string): string {
-  return UNIT_LABELS[unit] ?? unit;
+  const currency = currencyOfUnit(unit);
+  return UNIT_LABELS[unit] ?? (currency ? currencySymbol(currency).trim() : unit);
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = { GBP: "£", USD: "$", EUR: "€" };
+
+/** "USD_CENTS" → "USD"; null for units that aren't money. */
+export function currencyOfUnit(unit: string | null | undefined): string | null {
+  const match = /^([A-Z]{3})_CENTS$/.exec(unit ?? "");
+  return match ? match[1]! : null;
+}
+
+/** The money KPI unit for a currency: "usd" → "USD_CENTS". */
+export function moneyUnitFor(currency: string): string {
+  return `${currency.trim().toUpperCase()}_CENTS`;
+}
+
+/** "£", "$", "€", or the code followed by a space ("AUD ") for other currencies. */
+export function currencySymbol(currency: string): string {
+  const code = currency.trim().toUpperCase();
+  return CURRENCY_SYMBOLS[code] ?? `${code} `;
 }
 
 export function statusLabel(status: string | null | undefined): string {
@@ -153,17 +215,65 @@ export function attributionLabel(value: string | null | undefined): string {
   return ATTRIBUTION_LABELS[value] ?? humanizeKey(value);
 }
 
-/** Format cents units as currency for display. */
+/**
+ * KPI unit convention (shared by the calculators, KPI snapshots, targets and the opportunity
+ * detectors that compare them):
+ * - <CURRENCY>_CENTS (GBP_CENTS, USD_CENTS, EUR_CENTS…) — minor units (pence / cents), e.g.
+ *   £5,000 is stored as 500000
+ * - RATE — a 0–1 fraction, e.g. 25% is stored as 0.25
+ * - PERCENT — 0–100 as typed
+ * - COUNT — as typed
+ * People type pounds and percentages; convert at the form edge with these helpers.
+ */
+function isCentsUnit(unit: string): boolean {
+  return currencyOfUnit(unit) !== null;
+}
+
+/** What a person types (pounds, percent, count) → the stored KPI value. */
+export function kpiInputToStored(input: number, unit: string): number {
+  if (isCentsUnit(unit)) return Math.round(input * 100);
+  if (unit === "RATE") return Number((input / 100).toPrecision(12));
+  return input;
+}
+
+/** Stored KPI value → what a person types (inverse of kpiInputToStored). */
+export function kpiStoredToInput(value: number, unit: string): number {
+  if (isCentsUnit(unit)) return value / 100;
+  if (unit === "RATE") return Number((normaliseStoredRate(value) * 100).toPrecision(12));
+  return value;
+}
+
+/** Short hint for the target input ("£", "%", or "" for counts). */
+export function kpiInputAffix(unit: string): { prefix: string; suffix: string } {
+  const currency = currencyOfUnit(unit);
+  if (currency) return { prefix: currencySymbol(currency).trim(), suffix: "" };
+  if (unit === "RATE" || unit === "PERCENT") return { prefix: "", suffix: "%" };
+  return { prefix: "", suffix: "" };
+}
+
+/**
+ * RATE targets saved before the form converted percentages were stored as typed (25 for 25%).
+ * A real rate can never exceed 1 (100%), so anything above 1 is one of those and is read as a
+ * percentage.
+ */
+function normaliseStoredRate(value: number): number {
+  return value > 1 ? value / 100 : value;
+}
+
+/** Format a stored KPI value (see convention above) for display. */
 export function formatKpiValue(value: number, unit: string): string {
-  if (unit === "GBP_CENTS" || unit === "USD_CENTS") {
-    const symbol = unit === "USD_CENTS" ? "$" : "£";
+  if (isCentsUnit(unit)) {
+    const symbol = currencySymbol(currencyOfUnit(unit)!);
     return `${symbol}${(value / 100).toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     })}`;
   }
-  if (unit === "RATE" || unit === "PERCENT") {
-    return `${(value * (unit === "RATE" ? 100 : 1)).toFixed(1)}%`;
+  if (unit === "RATE") {
+    return `${(normaliseStoredRate(value) * 100).toFixed(1)}%`;
+  }
+  if (unit === "PERCENT") {
+    return `${value.toFixed(1)}%`;
   }
   return value.toLocaleString();
 }

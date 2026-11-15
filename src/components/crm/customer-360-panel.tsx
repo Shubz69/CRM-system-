@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { statusLabel } from "@/lib/customer-labels";
+import { formatDealAmount, statusLabel } from "@/lib/customer-labels";
 
 type Attribution = {
   id: string;
@@ -48,12 +48,7 @@ type Customer360 = {
 };
 
 function formatMoney(cents: number | null, currency: string) {
-  if (cents == null) return "—";
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currency || "USD",
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
+  return formatDealAmount(cents, currency);
 }
 
 /**

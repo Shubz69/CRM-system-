@@ -62,7 +62,14 @@ export default function SetupAssistantPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Approve failed");
-      toast.success("Setup approved and saved");
+      const message =
+        typeof json.message === "string" && json.message ? json.message : "Setup approved and saved";
+      if (Array.isArray(json.notApplied?.pipelineStages) && json.notApplied.pipelineStages.length > 0) {
+        // Long enough to read the list of stages that still need adding by hand.
+        toast.success(message, { duration: 12000 });
+      } else {
+        toast.success(message);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {

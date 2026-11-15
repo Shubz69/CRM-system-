@@ -7,6 +7,7 @@ import {
   AGENT_CONFIGURATION_NOT_FOUND,
   createAgentVersionCandidate,
   promoteAgentVersionCandidate,
+  PromotionBlockedError,
   runEvalSuite,
 } from "@/services/learning-os";
 
@@ -103,6 +104,7 @@ export async function PATCH(req: NextRequest) {
     if (message === AGENT_CONFIGURATION_NOT_FOUND || message === "Candidate not found") {
       return jsonError(message, 404);
     }
+    if (error instanceof PromotionBlockedError) return jsonError(message, 409);
     return jsonError(message, 500);
   }
 }

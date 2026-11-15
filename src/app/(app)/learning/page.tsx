@@ -40,6 +40,30 @@ function maturityLabel(maturity: string, fallback: string) {
   return MATURITY_COPY[maturity] ?? fallback;
 }
 
+/** Plain-English line for each stored feedback signal (stored values are lower_snake). */
+const CORRECTION_COPY: Record<string, string> = {
+  accepted: "You accepted recommendations — Agent Desk keeps those approaches in mind.",
+  approve: "You accepted recommendations — Agent Desk keeps those approaches in mind.",
+  approved: "You accepted recommendations — Agent Desk keeps those approaches in mind.",
+  thumbs_up: "You marked suggestions as helpful.",
+  helpful: "You marked suggestions as helpful.",
+  rejected: "You dismissed recommendations — those paths are deprioritised.",
+  dismissed: "You dismissed recommendations — those paths are deprioritised.",
+  dismiss: "You dismissed recommendations — those paths are deprioritised.",
+  thumbs_down: "You marked suggestions as not helpful.",
+  not_helpful: "You marked suggestions as not helpful.",
+  outcome_positive: "Recommendations you followed that led to a good result.",
+  outcome_negative: "Recommendations you followed that didn't work out.",
+};
+
+function correctionCopy(signal: string): string {
+  const key = signal.trim().toLowerCase();
+  const known = CORRECTION_COPY[key];
+  if (known) return known;
+  const words = key.replace(/[_-]+/g, " ").trim();
+  return words ? `Other feedback: ${words}` : "Other feedback";
+}
+
 /**
  * Customer Analytics → Learning: business insights only.
  * Engineering eval / candidates / calibration live under Admin → Learning Lab.
@@ -79,17 +103,13 @@ export default function LearningPage() {
     [patterns],
   );
   const corrections = useMemo(() => {
-    const signals = Object.entries(feedback.bySignal);
-    return signals.map(([signal, count]) => ({
-      signal,
-      count,
-      copy:
-        signal === "APPROVE" || signal === "THUMBS_UP"
-          ? "You approved recommendations — Agent Desk keeps those approaches in mind."
-          : signal === "DISMISS" || signal === "THUMBS_DOWN"
-            ? "You dismissed recommendations — those paths are deprioritised."
-            : `${signal.replace(/_/g, " ").toLowerCase()} · ${count}`,
-    }));
+    // Signals with the same meaning (e.g. "accepted" and "APPROVE") share one line.
+    const byCopy = new Map<string, number>();
+    for (const [signal, count] of Object.entries(feedback.bySignal)) {
+      const copy = correctionCopy(signal);
+      byCopy.set(copy, (byCopy.get(copy) ?? 0) + count);
+    }
+    return [...byCopy].map(([copy, count]) => ({ copy, count }));
   }, [feedback]);
 
   const completedExperiments = experiments.filter(
@@ -201,7 +221,7 @@ export default function LearningPage() {
         ) : (
           <ul className="space-y-2">
             {corrections.map((c) => (
-              <li key={c.signal} className="surface flex items-center justify-between gap-3 p-4 text-sm">
+              <li key={c.copy} className="surface flex items-center justify-between gap-3 p-4 text-sm">
                 <span>{c.copy}</span>
                 <span className="badge">{c.count}</span>
               </li>

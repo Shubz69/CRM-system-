@@ -16,10 +16,17 @@ export type WebhookRow = {
   attempts?: number;
 };
 
+/** Error the old retry wrote when it wrongly gave up on a replayable event (see replay.ts). */
+const LEGACY_UNRETRIABLE_ERROR = "Payload is not a retriable inbound message shape";
+/** A row still PROCESSING this long after it arrived was abandoned (matches the retry route). */
+const STUCK_PROCESSING_MS = 10 * 60 * 1000;
+
 export function WebhooksClient({ initial }: { initial: WebhookRow[] }) {
   const [rows, setRows] = useState(initial);
   const [selected, setSelected] = useState<WebhookRow | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // Page-load time: decides whether a PROCESSING row is old enough to count as abandoned.
+  const [loadedAt] = useState(() => Date.now());
 
   async function retry(id: string) {
     setBusy(id);
@@ -30,11 +37,28 @@ export function WebhooksClient({ initial }: { initial: WebhookRow[] }) {
         body: JSON.stringify({ webhookEventId: id }),
       });
       const json = await res.json();
+      if (typeof json.status === "string") {
+        // Show the event's real state — a failed or ignored replay must stay visible.
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === id
+              ? {
+                  ...r,
+                  status: json.status,
+                  error: json.status === "PROCESSED" ? null : r.error,
+                  processedAt:
+                    json.status === "PROCESSED" ? new Date().toISOString() : r.processedAt,
+                }
+              : r,
+          ),
+        );
+      }
       if (!res.ok) throw new Error(json.error || "Retry failed");
-      toast.success(json.duplicate ? "Already processed" : "Retry completed");
-      setRows((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, status: "PROCESSED", error: null } : r)),
-      );
+      if (json.status === "PROCESSED" || json.duplicate) {
+        toast.success(json.message || "Retry completed");
+      } else {
+        toast.message(json.message || "Retry finished");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Retry failed");
     } finally {
@@ -83,7 +107,11 @@ export function WebhooksClient({ initial }: { initial: WebhookRow[] }) {
                     >
                       Inspect
                     </button>
-                    {(event.status === "FAILED" || event.status === "RECEIVED") && (
+                    {(event.status === "FAILED" ||
+                      event.status === "RECEIVED" ||
+                      (event.status === "PROCESSING" &&
+                        loadedAt - new Date(event.createdAt).getTime() > STUCK_PROCESSING_MS) ||
+                      (event.status === "IGNORED" && event.error === LEGACY_UNRETRIABLE_ERROR)) && (
                       <button
                         type="button"
                         className="text-left text-[var(--accent)] hover:underline"

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { integrationLabel } from "@/lib/customer-labels";
 import { jsonError, requirePermission } from "@/lib/session";
 
 export async function GET() {
@@ -105,9 +106,9 @@ export async function GET() {
       ...disconnected.map((i) => ({
         id: `int-${i.id}`,
         type: "integration_disconnected",
-        title: `${i.type} disconnected`,
+        title: `${integrationLabel(i.type)} disconnected`,
         detail: i.name,
-        href: `/settings`,
+        href: `/integrations`,
         severity: "high" as const,
         createdAt: i.updatedAt.toISOString(),
       })),

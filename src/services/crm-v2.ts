@@ -144,6 +144,8 @@ export async function upsertCompany(input: {
   }
 
   const row = await prisma.$transaction(async (tx) => {
+    // A deleted company may still hold this exact name (unique per workspace).
+    await freeCompanyNameFromDeletedRows(tx, input.organisationId, name);
     const company = await tx.company.create({
       data: {
         organisationId: input.organisationId,
@@ -220,6 +222,9 @@ export async function createDeal(input: {
     throw new Error("Deal probability must be between 0 and 1 (or null if unknown)");
   }
   await assertDealLinksInOrganisation(input);
+  // No more hard-wired USD: an explicit currency wins, else the workspace's usual one (else GBP).
+  const currency =
+    normaliseDealCurrency(input.currency) ?? (await getDefaultDealCurrency(input.organisationId));
   const row = await prisma.$transaction(async (tx) => {
     const deal = await tx.deal.create({
       data: {
@@ -229,7 +234,7 @@ export async function createDeal(input: {
         contactId: input.contactId || null,
         leadId: input.leadId || null,
         amountCents: input.amountCents ?? null,
-        currency: input.currency ?? "USD",
+        currency,
         probability: input.probability ?? null,
         stageLabel: input.stageLabel ?? null,
         summary: input.summary ?? null,
@@ -252,6 +257,207 @@ export async function createDeal(input: {
     return deal;
   });
   return row.id;
+}
+
+/** Currencies offered in the deal picker (any ISO 4217 code is accepted by the API). */
+export const DEAL_CURRENCIES = ["GBP", "EUR", "USD", "AUD", "CAD", "NZD", "CHF", "AED", "INR", "SGD", "ZAR"] as const;
+export const FALLBACK_DEAL_CURRENCY = "GBP";
+
+/** Every ISO 4217 code the runtime knows, or null where Intl can't list them. */
+const ISO_CURRENCY_CODES: ReadonlySet<string> | null = (() => {
+  try {
+    return new Set(Intl.supportedValuesOf("currency"));
+  } catch {
+    return null;
+  }
+})();
+
+/** Upper-case ISO 4217 code, or null when the value isn't a real currency (e.g. "ABC"). */
+export function normaliseDealCurrency(raw: string | null | undefined): string | null {
+  const code = (raw ?? "").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) return null;
+  if (ISO_CURRENCY_CODES && !ISO_CURRENCY_CODES.has(code)) return null;
+  return code;
+}
+
+/**
+ * The currency new deals start in: the one this workspace already uses most, else GBP
+ * (deals used to be hard-wired to USD, so the old schema default is not a signal on its own).
+ */
+export async function getDefaultDealCurrency(organisationId: string): Promise<string> {
+  try {
+    const rows = await prisma.deal.groupBy({
+      by: ["currency"],
+      where: { organisationId, deletedAt: null },
+      _count: { _all: true },
+    });
+    let best: { currency: string; count: number } | null = null;
+    for (const row of rows) {
+      const currency = normaliseDealCurrency(row.currency);
+      if (!currency) continue;
+      const count = row._count._all;
+      if (!best || count > best.count || (count === best.count && currency === FALLBACK_DEAL_CURRENCY)) {
+        best = { currency, count };
+      }
+    }
+    return best?.currency ?? FALLBACK_DEAL_CURRENCY;
+  } catch {
+    return FALLBACK_DEAL_CURRENCY;
+  }
+}
+
+/** A company edit that would collide with another live company's name. */
+export class CompanyConflictError extends Error {}
+
+/**
+ * Company names are unique per workspace in the database, including soft-deleted rows. When a
+ * deleted company still holds the exact name someone wants to use, rename that deleted row out
+ * of the way (its original name stays in metadata) so the live company can take it.
+ */
+async function freeCompanyNameFromDeletedRows(
+  tx: Prisma.TransactionClient,
+  organisationId: string,
+  name: string,
+): Promise<void> {
+  const holder = await tx.company.findFirst({
+    where: { organisationId, name, deletedAt: { not: null } },
+    select: { id: true, metadata: true },
+  });
+  if (!holder) return;
+  const metadata =
+    holder.metadata && typeof holder.metadata === "object" && !Array.isArray(holder.metadata)
+      ? (holder.metadata as Record<string, unknown>)
+      : {};
+  await tx.company.update({
+    where: { id: holder.id },
+    data: {
+      name: `${name.slice(0, 160)} (deleted ${holder.id.slice(-6)})`,
+      metadata: { ...metadata, deletedName: name } as Prisma.InputJsonValue,
+    },
+  });
+}
+
+export async function updateCompany(input: {
+  organisationId: string;
+  companyId: string;
+  name?: string;
+  domain?: string | null;
+  website?: string | null;
+  industry?: string | null;
+  sizeBand?: string | null;
+}): Promise<{ id: string; changed: Record<string, { from: unknown; to: unknown }> }> {
+  const existing = await prisma.company.findFirst({
+    where: { id: input.companyId, organisationId: input.organisationId, deletedAt: null },
+  });
+  if (!existing) throw new DealLinkError("Company not found in this workspace.");
+
+  const name = input.name === undefined ? undefined : input.name.trim();
+  if (name !== undefined && !name) throw new CompanyConflictError("Company name is required.");
+  if (name && name.toLowerCase() !== existing.name.toLowerCase()) {
+    const clash = await prisma.company.findFirst({
+      where: {
+        organisationId: input.organisationId,
+        name: { equals: name, mode: "insensitive" },
+        deletedAt: null,
+        NOT: { id: existing.id },
+      },
+      select: { id: true },
+    });
+    if (clash) throw new CompanyConflictError(`A company called "${name}" already exists.`);
+  }
+
+  const next = {
+    name: name ?? existing.name,
+    domain: input.domain === undefined ? existing.domain : input.domain?.trim() || null,
+    website: input.website === undefined ? existing.website : input.website?.trim() || null,
+    industry: input.industry === undefined ? existing.industry : input.industry?.trim() || null,
+    sizeBand: input.sizeBand === undefined ? existing.sizeBand : input.sizeBand?.trim() || null,
+  };
+  const changed: Record<string, { from: unknown; to: unknown }> = {};
+  for (const key of Object.keys(next) as Array<keyof typeof next>) {
+    if (next[key] !== existing[key]) changed[key] = { from: existing[key], to: next[key] };
+  }
+  if (Object.keys(changed).length === 0) return { id: existing.id, changed };
+
+  await prisma.$transaction(async (tx) => {
+    if (changed.name) await freeCompanyNameFromDeletedRows(tx, input.organisationId, next.name);
+    await tx.company.update({ where: { id: existing.id }, data: next });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "COMPANY_UPDATED",
+      aggregateType: "Company",
+      aggregateId: existing.id,
+      payload: { companyId: existing.id },
+      dedupeKey: `COMPANY_UPDATED:${existing.id}:${Date.now()}`,
+    });
+  });
+  return { id: existing.id, changed };
+}
+
+/**
+ * Soft-delete a company. Its deals and contacts stay (they keep working) but are unlinked so no
+ * list shows a deleted account; the unlinked ids are kept in the company's metadata.
+ */
+export async function softDeleteCompany(input: {
+  organisationId: string;
+  companyId: string;
+}): Promise<{ id: string; name: string; unlinkedDealIds: string[]; unlinkedContactIds: string[] }> {
+  const existing = await prisma.company.findFirst({
+    where: { id: input.companyId, organisationId: input.organisationId, deletedAt: null },
+  });
+  if (!existing) throw new DealLinkError("Company not found in this workspace.");
+
+  return prisma.$transaction(async (tx) => {
+    const [deals, contacts] = await Promise.all([
+      tx.deal.findMany({
+        where: { organisationId: input.organisationId, companyId: existing.id },
+        select: { id: true },
+      }),
+      tx.contact.findMany({
+        where: { organisationId: input.organisationId, companyId: existing.id },
+        select: { id: true },
+      }),
+    ]);
+    const unlinkedDealIds = deals.map((d) => d.id);
+    const unlinkedContactIds = contacts.map((c) => c.id);
+    if (unlinkedDealIds.length) {
+      await tx.deal.updateMany({
+        where: { organisationId: input.organisationId, id: { in: unlinkedDealIds } },
+        data: { companyId: null },
+      });
+    }
+    if (unlinkedContactIds.length) {
+      await tx.contact.updateMany({
+        where: { organisationId: input.organisationId, id: { in: unlinkedContactIds } },
+        data: { companyId: null },
+      });
+    }
+    const metadata =
+      existing.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata)
+        ? (existing.metadata as Record<string, unknown>)
+        : {};
+    await tx.company.update({
+      where: { id: existing.id },
+      data: {
+        deletedAt: new Date(),
+        metadata: {
+          ...metadata,
+          deletedUnlinked: { dealIds: unlinkedDealIds, contactIds: unlinkedContactIds },
+        } as Prisma.InputJsonValue,
+      },
+    });
+    const { appendDomainEvent } = await import("@/services/domain-events/append");
+    await appendDomainEvent(tx, {
+      organisationId: input.organisationId,
+      eventType: "COMPANY_UPDATED",
+      aggregateType: "Company",
+      aggregateId: existing.id,
+      payload: { companyId: existing.id },
+      dedupeKey: `COMPANY_UPDATED:${existing.id}:deleted`,
+    });
+    return { id: existing.id, name: existing.name, unlinkedDealIds, unlinkedContactIds };
+  });
 }
 
 export async function recordAttribution(input: {

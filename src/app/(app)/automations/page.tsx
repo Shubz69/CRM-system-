@@ -1,5 +1,6 @@
 "use client";
 
+import { PermissionGate } from "@/components/permission-gate";
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
@@ -76,7 +77,7 @@ function summarizeActions(actions: unknown): string {
     .join("; ");
 }
 
-export default function AutomationsPage() {
+function AutomationsPageContent() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -389,5 +390,17 @@ export default function AutomationsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AutomationsPage() {
+  return (
+    <PermissionGate
+      permission="automations:manage"
+      title="Automations"
+      message="Only workspace owners, admins and managers manage automations."
+    >
+      <AutomationsPageContent />
+    </PermissionGate>
   );
 }

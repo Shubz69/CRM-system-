@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePlatformAccess } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
+import { retryFailedJob } from "@/services/failed-jobs";
 import { hashForIdempotency } from "@/lib/crypto";
 
 const schema = z.object({
@@ -61,15 +62,19 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true });
     }
 
-    // Idempotent retry: mark resolved and record a retry audit with a stable key.
-    // Actual re-enqueue is best-effort via cron-compatible marker in payload.
     if (job.resolvedAt) {
       return Response.json({ ok: true, duplicate: true, message: "Already resolved" });
     }
 
+    // Re-run / re-queue the real work first; the job is only resolved once that happened.
+    const outcome = await retryFailedJob(job);
+    if (!outcome.ok) {
+      return jsonError(outcome.reason, outcome.status);
+    }
+
     const retryKey = hashForIdempotency(`retry:${job.id}:${job.attempts}`);
-    await prisma.failedJob.update({
-      where: { id: job.id },
+    await prisma.failedJob.updateMany({
+      where: { id: job.id, resolvedAt: null },
       data: {
         attempts: { increment: 1 },
         resolvedAt: new Date(),
@@ -78,6 +83,8 @@ export async function POST(req: NextRequest) {
           retryRequestedAt: new Date().toISOString(),
           retryKey,
           retryBy: session.userId,
+          retryOutcome: outcome.detail,
+          ...(outcome.requeuedJobId ? { requeuedJobId: outcome.requeuedJobId } : {}),
         },
       },
     });
@@ -88,10 +95,20 @@ export async function POST(req: NextRequest) {
       action: "failed_job.retry",
       entityType: "FailedJob",
       entityId: job.id,
-      metadata: { retryKey, queue: job.queue, jobName: job.jobName },
+      metadata: {
+        retryKey,
+        queue: job.queue,
+        jobName: job.jobName,
+        requeuedJobId: outcome.requeuedJobId ?? null,
+      },
     });
 
-    return Response.json({ ok: true, retryKey });
+    return Response.json({
+      ok: true,
+      retryKey,
+      message: outcome.detail,
+      requeuedJobId: outcome.requeuedJobId ?? null,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

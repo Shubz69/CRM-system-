@@ -17,6 +17,7 @@ import {
 import { prisma } from "@/lib/db";
 import { appendDomainEvent } from "@/services/domain-events/append";
 import { getKpiCalculator } from "@/services/goals/calculators";
+import { currencyOfUnit } from "@/lib/customer-labels";
 import {
   assertGoalAchievedAllowed,
   assertGoalTransition,
@@ -198,11 +199,17 @@ export async function createKpiDefinition(input: {
 }): Promise<KpiDefinition> {
   const calc = getKpiCalculator(input.calculatorKey);
   if (!calc) throw new Error(`Unknown KPI calculator: ${input.calculatorKey}`);
-  assertSameUnit(input.unit, calc.unit);
+  // Money calculators measure whichever currency the KPI is in (£, $, €…).
+  if (!(currencyOfUnit(calc.unit) && currencyOfUnit(input.unit))) {
+    assertSameUnit(input.unit, calc.unit);
+  }
   const existing = await prisma.kpiDefinition.findFirst({
     where: { organisationId: input.organisationId, key: input.key },
   });
-  if (existing) return existing;
+  if (existing) {
+    assertSameUnit(input.unit, existing.unit);
+    return existing;
+  }
   return prisma.kpiDefinition.create({
     data: {
       organisationId: input.organisationId,
@@ -252,6 +259,33 @@ export async function attachKpiTarget(input: {
       unit: input.unit,
       currency: input.currency,
       deadlineAt: input.deadlineAt,
+    },
+  });
+}
+
+/**
+ * Change an existing target's value (and optionally its deadline). Targets saved before the
+ * goals form converted pounds to pence show 100× too small, so people need to fix them here.
+ */
+export async function updateKpiTarget(input: {
+  organisationId: string;
+  targetId: string;
+  targetValue: number;
+  deadlineAt?: Date | null;
+}): Promise<KpiTarget> {
+  const existing = await prisma.kpiTarget.findFirst({
+    where: { id: input.targetId, organisationId: input.organisationId },
+  });
+  if (!existing) throw new Error("KPI target not found");
+  // Stored RATE targets are 0–1 fractions (see kpiInputToStored).
+  if (existing.unit === "RATE" && input.targetValue > 1) {
+    throw new Error("Rate targets must be between 0% and 100%.");
+  }
+  return prisma.kpiTarget.update({
+    where: { id: existing.id },
+    data: {
+      targetValue: input.targetValue,
+      ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
     },
   });
 }
@@ -319,7 +353,7 @@ export async function refreshKpiFromCalculator(input: {
   if (!kpi) throw new Error("KPI definition not found");
   const calc = getKpiCalculator(kpi.calculatorKey);
   if (!calc) throw new Error(`Unknown calculator ${kpi.calculatorKey}`);
-  const result = await calc.calculate(input.organisationId);
+  const result = await calc.calculate(input.organisationId, { unit: kpi.unit });
   assertSameUnit(result.unit, kpi.unit);
   return recordKpiSnapshot({
     organisationId: input.organisationId,

@@ -3,6 +3,8 @@
  */
 
 import { prisma } from "@/lib/db";
+import { currencyOfUnit, moneyUnitFor } from "@/lib/customer-labels";
+import { getDefaultDealCurrency, normaliseDealCurrency } from "@/services/crm-v2";
 
 export type KpiCalculationResult = {
   value: number;
@@ -15,40 +17,91 @@ export type KpiCalculationResult = {
 
 export type KpiCalculator = {
   key: string;
+  /** For money calculators this is the default unit; a KPI can measure any <CURRENCY>_CENTS. */
   unit: string;
   description: string;
-  calculate: (organisationId: string) => Promise<KpiCalculationResult>;
+  /** `unit` is the KPI definition's unit — money calculators count deals in its currency. */
+  calculate: (organisationId: string, options?: { unit?: string }) => Promise<KpiCalculationResult>;
 };
 
-async function openPipelineValueCents(organisationId: string): Promise<KpiCalculationResult> {
-  const agg = await prisma.deal.aggregate({
-    where: { organisationId, deletedAt: null, status: "OPEN" },
+/**
+ * Revenue KPIs add up deals in ONE currency — the currency of the KPI's own unit (a £ target
+ * counts £ deals, a $ target counts $ deals). Summing USD and GBP amounts into one figure was
+ * wrong; deals in other currencies are reported per currency in the snapshot metadata instead
+ * of being converted or mixed in. Without a unit, the workspace's main deal currency is used.
+ */
+async function sumDealsInCurrency(
+  organisationId: string,
+  status: "OPEN" | "WON",
+  unit?: string,
+): Promise<{
+  currency: string;
+  amountCents: number;
+  count: number;
+  excludedCurrencies: Array<{ currency: string; amountCents: number; count: number }>;
+}> {
+  const rows = await prisma.deal.groupBy({
+    by: ["currency"],
+    where: { organisationId, deletedAt: null, status },
     _sum: { amountCents: true },
-    _count: true,
+    _count: { _all: true },
   });
+  const currency = currencyOfUnit(unit) ?? (await getDefaultDealCurrency(organisationId));
+  let amountCents = 0;
+  let count = 0;
+  const excluded = new Map<string, { currency: string; amountCents: number; count: number }>();
+  for (const row of rows) {
+    const rowCurrency = normaliseDealCurrency(row.currency) ?? "UNKNOWN";
+    const sum = row._sum.amountCents ?? 0;
+    const n = row._count._all;
+    if (rowCurrency === currency) {
+      amountCents += sum;
+      count += n;
+    } else {
+      const entry = excluded.get(rowCurrency) ?? { currency: rowCurrency, amountCents: 0, count: 0 };
+      entry.amountCents += sum;
+      entry.count += n;
+      excluded.set(rowCurrency, entry);
+    }
+  }
+  return { currency, amountCents, count, excludedCurrencies: [...excluded.values()] };
+}
+
+async function openPipelineValueCents(
+  organisationId: string,
+  options?: { unit?: string },
+): Promise<KpiCalculationResult> {
+  const agg = await sumDealsInCurrency(organisationId, "OPEN", options?.unit);
   return {
-    value: agg._sum.amountCents ?? 0,
-    unit: "GBP_CENTS",
+    value: agg.amountCents,
+    unit: moneyUnitFor(agg.currency),
     confidence: 1,
-    sourceReference: `deal.open.sum:${agg._count}`,
+    sourceReference: `deal.open.sum:${agg.currency}:${agg.count}`,
     freshness: "FRESH",
-    metadata: { openDealCount: agg._count },
+    metadata: {
+      openDealCount: agg.count,
+      currency: agg.currency,
+      excludedCurrencies: agg.excludedCurrencies,
+    },
   };
 }
 
-async function wonRevenueCents(organisationId: string): Promise<KpiCalculationResult> {
-  const agg = await prisma.deal.aggregate({
-    where: { organisationId, deletedAt: null, status: "WON" },
-    _sum: { amountCents: true },
-    _count: true,
-  });
+async function wonRevenueCents(
+  organisationId: string,
+  options?: { unit?: string },
+): Promise<KpiCalculationResult> {
+  const agg = await sumDealsInCurrency(organisationId, "WON", options?.unit);
   return {
-    value: agg._sum.amountCents ?? 0,
-    unit: "GBP_CENTS",
+    value: agg.amountCents,
+    unit: moneyUnitFor(agg.currency),
     confidence: 1,
-    sourceReference: `deal.won.sum:${agg._count}`,
+    sourceReference: `deal.won.sum:${agg.currency}:${agg.count}`,
     freshness: "FRESH",
-    metadata: { wonDealCount: agg._count },
+    metadata: {
+      wonDealCount: agg.count,
+      currency: agg.currency,
+      excludedCurrencies: agg.excludedCurrencies,
+    },
   };
 }
 
@@ -108,13 +161,13 @@ export const KPI_CALCULATORS: Record<string, KpiCalculator> = {
   open_pipeline_cents: {
     key: "open_pipeline_cents",
     unit: "GBP_CENTS",
-    description: "Sum of open Deal.amountCents",
+    description: "Sum of open deal amounts in the KPI's currency (deals in other currencies are listed separately)",
     calculate: openPipelineValueCents,
   },
   won_revenue_cents: {
     key: "won_revenue_cents",
     unit: "GBP_CENTS",
-    description: "Sum of won Deal.amountCents",
+    description: "Sum of won deal amounts in the KPI's currency (deals in other currencies are listed separately)",
     calculate: wonRevenueCents,
   },
   qualified_lead_count: {

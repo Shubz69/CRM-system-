@@ -8,6 +8,8 @@ import { PageShell } from "@/components/ui/page-shell";
 import { PageLoading } from "@/components/ui/page-state";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 import { statusLabel } from "@/lib/customer-labels";
+import { useCan } from "@/hooks/use-can";
+import { isOpenOpportunity, opportunityStatusLabel } from "./opportunity-status";
 
 type Opp = {
   id: string;
@@ -31,6 +33,8 @@ function impactWhy(impact: string, urgency: string): string {
 }
 
 export default function OpportunitiesPage() {
+  // Scanning, accepting and dismissing go through POST /api/opportunities (agent:manage).
+  const canAct = useCan("agent:manage");
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [opportunities, setOpportunities] = useState<Opp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +80,7 @@ export default function OpportunitiesPage() {
       <PageHeader
         description="Commercial moves Agent Desk recommends — with evidence you can inspect."
         actions={
+          !canAct ? undefined : (
           <button
             className="btn btn-secondary"
             type="button"
@@ -113,6 +118,7 @@ export default function OpportunitiesPage() {
           >
             {scanning ? "Scanning…" : "Scan for opportunities"}
           </button>
+          )
         }
       />
 
@@ -133,6 +139,7 @@ export default function OpportunitiesPage() {
             <p className="mt-1 text-[var(--muted)]">
               Signal → Evidence → Opportunity → You decide
             </p>
+            {canAct ? (
             <button
               type="button"
               className="btn btn-primary mt-4"
@@ -159,15 +166,19 @@ export default function OpportunitiesPage() {
             >
               Scan now
             </button>
+            ) : null}
           </div>
         </div>
       ) : (
         <div className="space-y-4">
-          {opportunities.map((o) => (
+          {[
+            ...opportunities.filter((o) => isOpenOpportunity(o.status)),
+            ...opportunities.filter((o) => !isOpenOpportunity(o.status)),
+          ].map((o) => (
             <article key={o.id} className="surface space-y-3 p-5">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="caption">{statusLabel(o.status)}</p>
+                  <p className="caption">{opportunityStatusLabel(o.status)}</p>
                   <h3 className="section-title mt-1">{o.title}</h3>
                 </div>
                 <span className="badge">{statusLabel(o.urgency)} urgency</span>
@@ -199,7 +210,7 @@ export default function OpportunitiesPage() {
                 </details>
               ) : null}
 
-              {(o.status === "DETECTED" || o.status === "REVIEWED" || o.status === "ACCEPTED") && (
+              {canAct && (o.status === "DETECTED" || o.status === "REVIEWED" || o.status === "ACCEPTED") && (
                 <div className="flex flex-wrap gap-2 pt-1">
                   <button
                     className="btn btn-primary"

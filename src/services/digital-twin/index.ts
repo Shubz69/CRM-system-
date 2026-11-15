@@ -101,10 +101,27 @@ export async function createProductOffering(input: {
   targetAudience?: string;
   businessModel?: string;
 }) {
+  const name = input.name.trim();
+  // Adding a product that already exists (same name, any case) returns it instead of creating
+  // a duplicate — the profile used to list "Balayage colour, Balayage colour".
+  const existing = await findLiveProductOfferingByName(input.organisationId, name);
+  if (existing) {
+    const updates = {
+      ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+      ...(input.category ? { category: input.category } : {}),
+      ...(input.priceMinCents != null ? { priceMinCents: input.priceMinCents } : {}),
+      ...(input.priceMaxCents != null ? { priceMaxCents: input.priceMaxCents } : {}),
+      ...(input.currency ? { currency: input.currency } : {}),
+      ...(input.targetAudience ? { targetAudience: input.targetAudience } : {}),
+      ...(input.businessModel ? { businessModel: input.businessModel } : {}),
+    };
+    if (Object.keys(updates).length === 0) return existing;
+    return prisma.productOffering.update({ where: { id: existing.id }, data: updates });
+  }
   return prisma.productOffering.create({
     data: {
       organisationId: input.organisationId,
-      name: input.name,
+      name,
       description: input.description,
       category: input.category,
       priceMinCents: input.priceMinCents,
@@ -113,6 +130,27 @@ export async function createProductOffering(input: {
       targetAudience: input.targetAudience,
       businessModel: input.businessModel,
     },
+  });
+}
+
+/** A live (not archived) product with this name, ignoring case. */
+export async function findLiveProductOfferingByName(organisationId: string, name: string) {
+  return prisma.productOffering.findFirst({
+    where: {
+      organisationId,
+      name: { equals: name.trim(), mode: "insensitive" },
+      status: { not: "ARCHIVED" },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+/** An audience segment with this name, ignoring case. */
+export async function findAudienceSegmentByName(organisationId: string, name: string) {
+  return prisma.audienceSegment.findFirst({
+    where: { organisationId, name: { equals: name.trim(), mode: "insensitive" } },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
   });
 }
 
@@ -130,10 +168,27 @@ export async function createAudienceSegment(input: {
   for (const key of blocked) {
     if (key in attrs) throw new Error(`Sensitive attribute ${key} is not allowed`);
   }
+  const name = input.name.trim();
+  // Adding an audience appends to the list; adding one that already exists (same name, any
+  // case) returns that segment instead of creating a duplicate.
+  const existing = await prisma.audienceSegment.findFirst({
+    where: { organisationId: input.organisationId, name: { equals: name, mode: "insensitive" } },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) {
+    const description = input.description?.trim();
+    if (description && description !== existing.description) {
+      return prisma.audienceSegment.update({
+        where: { id: existing.id },
+        data: { description },
+      });
+    }
+    return existing;
+  }
   return prisma.audienceSegment.create({
     data: {
       organisationId: input.organisationId,
-      name: input.name,
+      name,
       description: input.description,
       attributes: attrs as Prisma.InputJsonValue,
       evidenceNote: input.evidenceNote,
@@ -185,6 +240,18 @@ export async function upsertAudienceSegmentByName(input: {
   return createAudienceSegment(input);
 }
 
+/**
+ * Predicates that hold a SET of values (a business can operate in several markets): a new
+ * value is added alongside the existing ones instead of superseding them.
+ */
+const MULTI_VALUED_PREDICATES = new Set(["operates_in_market", "serves_region", "market_region"]);
+
+const LIVE_CLAIM_STATUSES = [
+  BusinessClaimStatus.CONFIRMED,
+  BusinessClaimStatus.OBSERVED,
+  BusinessClaimStatus.INFERRED,
+];
+
 export async function upsertBusinessClaim(input: {
   organisationId: string;
   subjectType: string;
@@ -199,6 +266,52 @@ export async function upsertBusinessClaim(input: {
   validUntil?: Date;
 }) {
   await assertEntityInOrg(input.organisationId, input.subjectType, input.subjectId);
+
+  const multiValue = MULTI_VALUED_PREDICATES.has(input.predicate) ? input.valueText?.trim() : undefined;
+  if (multiValue) {
+    // Adding a second market used to mark the first STALE (single-value supersede below), so
+    // only the latest market survived. Append instead; re-adding a value just re-verifies it.
+    const now = new Date();
+    const same = await prisma.businessClaim.findFirst({
+      where: {
+        organisationId: input.organisationId,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        predicate: input.predicate,
+        valueText: { equals: multiValue, mode: "insensitive" },
+        status: { in: LIVE_CLAIM_STATUSES },
+        OR: [{ validUntil: null }, { validUntil: { gt: now } }],
+      },
+      orderBy: { observedAt: "desc" },
+    });
+    if (same) {
+      return prisma.businessClaim.update({
+        where: { id: same.id },
+        data: {
+          lastVerifiedAt: now,
+          confidence: input.confidence ?? same.confidence,
+          evidenceReference: input.evidenceReference ?? same.evidenceReference,
+        },
+      });
+    }
+    return prisma.businessClaim.create({
+      data: {
+        organisationId: input.organisationId,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        predicate: input.predicate,
+        valueText: multiValue,
+        status: input.status ?? BusinessClaimStatus.OBSERVED,
+        confidence: input.confidence,
+        source: input.source,
+        evidenceReference: input.evidenceReference,
+        validFrom: input.validFrom ?? now,
+        validUntil: input.validUntil,
+        lastVerifiedAt: now,
+      },
+    });
+  }
+
   // Temporal: create a new claim row rather than silently rewriting history when values change.
   const latest = await prisma.businessClaim.findFirst({
     where: {

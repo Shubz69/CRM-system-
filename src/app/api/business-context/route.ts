@@ -4,6 +4,8 @@ import {
   createAudienceSegment,
   createEntityRelation,
   createProductOffering,
+  findAudienceSegmentByName,
+  findLiveProductOfferingByName,
   getBusinessContextCompleteness,
   getBusinessProfile,
   upsertBusinessClaim,
@@ -52,13 +54,43 @@ const bodySchema = z.object({
   valueText: z.string().optional(),
 });
 
+const FIELD_LABELS: Record<string, string> = {
+  action: "Action",
+  name: "Name",
+  description: "Description",
+  evidenceNote: "Evidence note",
+  confidence: "Confidence",
+  priceMinCents: "Minimum price",
+  priceMaxCents: "Maximum price",
+  attributes: "Attributes",
+};
+
+/** One readable sentence for the first problem — never zod's raw issue JSON. */
+function readableBodyError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "Check the details and try again.";
+  const field = String(issue.path[0] ?? "");
+  if (field === "action") return "That isn't something the business profile can do.";
+  const label = FIELD_LABELS[field] ?? "A field";
+  if (issue.code === "too_small") return `${label} can't be empty.`;
+  if (issue.code === "too_big") {
+    const max = (issue as { maximum?: number | bigint }).maximum;
+    return max != null ? `${label} must be ${String(max)} characters or fewer.` : `${label} is too long.`;
+  }
+  if (field === "confidence") return "Confidence must be between 0 and 1.";
+  return `${label} is invalid.`;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await requirePermission("agent:manage");
     const body = bodySchema.parse(await req.json());
 
     if (body.action === "create_product") {
-      if (!body.name) return jsonError("name required", 400);
+      if (!body.name?.trim()) return jsonError("Enter the product or service name.", 400);
+      const alreadyExisted = Boolean(
+        await findLiveProductOfferingByName(session.organisationId, body.name),
+      );
       const product = await createProductOffering({
         organisationId: session.organisationId,
         name: body.name,
@@ -68,10 +100,13 @@ export async function POST(req: Request) {
         priceMaxCents: body.priceMaxCents,
         currency: body.currency,
       });
-      return Response.json({ product });
+      return Response.json({ product, alreadyExisted });
     }
     if (body.action === "create_audience") {
-      if (!body.name) return jsonError("name required", 400);
+      if (!body.name?.trim()) return jsonError("Enter the audience name.", 400);
+      const alreadyExisted = Boolean(
+        await findAudienceSegmentByName(session.organisationId, body.name),
+      );
       const segment = await createAudienceSegment({
         organisationId: session.organisationId,
         name: body.name,
@@ -80,7 +115,7 @@ export async function POST(req: Request) {
         evidenceNote: body.evidenceNote,
         confidence: body.confidence,
       });
-      return Response.json({ segment });
+      return Response.json({ segment, alreadyExisted });
     }
     if (body.action === "create_relation") {
       if (
@@ -91,7 +126,7 @@ export async function POST(req: Request) {
         !body.targetId ||
         !body.source
       ) {
-        return jsonError("relation fields required", 400);
+        return jsonError("Choose both items and how they're related.", 400);
       }
       const relation = await createEntityRelation({
         organisationId: session.organisationId,
@@ -108,7 +143,7 @@ export async function POST(req: Request) {
     }
     if (body.action === "upsert_claim") {
       if (!body.subjectType || !body.subjectId || !body.predicate || !body.source) {
-        return jsonError("claim fields required", 400);
+        return jsonError("Say what the fact is about, what it is and where it came from.", 400);
       }
       const claim = await upsertBusinessClaim({
         organisationId: session.organisationId,
@@ -122,11 +157,25 @@ export async function POST(req: Request) {
       });
       return Response.json({ claim });
     }
-    return jsonError("Unknown action", 400);
+    return jsonError("That isn't something the business profile can do.", 400);
   } catch (error) {
+    if (error instanceof z.ZodError) return jsonError(readableBodyError(error), 400);
+    if (error instanceof SyntaxError) return jsonError("Invalid request body.", 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
     if (message.startsWith("Forbidden")) return jsonError(message, 403);
-    return jsonError(message, 400);
+    if (/^Entity \S+ not found in organisation$/.test(message)) {
+      return jsonError("One of those items isn't in this workspace.", 404);
+    }
+    // Service checks (e.g. "Sensitive attribute … is not allowed") are already sentences;
+    // anything else is internal and is not shown.
+    if (/^Sensitive attribute /.test(message)) return jsonError(`${message}.`, 400);
+    if (message === "Invalid entity type" || message === "Invalid relationship type") {
+      return jsonError("That kind of link isn't supported in the business profile.", 400);
+    }
+    if (message === "Cross-org entity rejected") {
+      return jsonError("One of those items isn't in this workspace.", 404);
+    }
+    return jsonError("Couldn't save that to the business profile. Try again.", 500);
   }
 }

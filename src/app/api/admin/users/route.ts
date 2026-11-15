@@ -10,6 +10,9 @@ import { getEmailAdapter } from "@/adapters/email";
 import { logger } from "@/lib/logger";
 import { revokeAllSessions } from "@/lib/session-security";
 
+/** Prefix of the per-user revocation marker row (see revocationMarkerToken). */
+const SESSION_REVOCATION_PREFIX = "revoked:";
+
 const mutateSchema = z.object({
   action: z.enum([
     "suspend",
@@ -63,7 +66,12 @@ export async function GET(req: NextRequest) {
         memberships: {
           include: { organisation: { select: { id: true, name: true, slug: true } } },
         },
-        sessions: { select: { id: true, expires: true }, take: 10 },
+        // Sessions are JWTs; the only Session row is the "end all sessions" marker.
+        sessions: {
+          where: { sessionToken: { startsWith: SESSION_REVOCATION_PREFIX } },
+          select: { expires: true },
+          take: 1,
+        },
       },
     });
 
@@ -79,7 +87,7 @@ export async function GET(req: NextRequest) {
         lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
         createdAt: user.createdAt.toISOString(),
         lockedUntil: user.lockedUntil?.toISOString() ?? null,
-        activeSessions: user.sessions.filter((s) => s.expires > new Date()).length,
+        sessionsEndedAt: user.sessions[0]?.expires.toISOString() ?? null,
         memberships: user.memberships.map((m) => ({
           organisationId: m.organisationId,
           organisationName: m.organisation.name,
@@ -224,7 +232,7 @@ export async function POST(req: NextRequest) {
     });
 
     const env = getEnv();
-    const base = (env.APP_URL || env.NEXTAUTH_URL || "").replace(/\/$/, "");
+    const base = (env.APP_URL || env.NEXTAUTH_URL || req.nextUrl.origin || "").replace(/\/$/, "");
     const resetUrl = base ? `${base}/reset-password?token=${rawToken}` : null;
     let emailed = false;
     if (env.EMAIL_SMTP_URL && resetUrl) {
@@ -263,11 +271,12 @@ export async function POST(req: NextRequest) {
         emailed,
       },
     });
+    // The one-time link goes back to the admin only when it wasn't emailed (no mail
+    // configured, or delivery failed) — otherwise the user's inbox is the only copy.
     return Response.json({
       ok: true,
-      resetToken: rawToken,
-      resetUrl,
       emailed,
+      resetUrl: emailed ? null : resetUrl,
       expiresAt: expires.toISOString(),
     });
   } catch (error) {

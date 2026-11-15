@@ -1,5 +1,6 @@
 "use client";
 
+import { PermissionGate } from "@/components/permission-gate";
 import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
@@ -27,9 +28,10 @@ const blank = {
   disqualifyingAnswers: "",
 };
 
-export default function QualificationPage() {
+function QualificationPageContent() {
   const [fields, setFields] = useState<Field[]>([]);
   const [form, setForm] = useState(blank);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const load = async () => {
     const response = await fetch("/api/qualification-fields");
     const data = await response.json();
@@ -58,11 +60,37 @@ export default function QualificationPage() {
           .filter(Boolean),
       }),
     });
-    const data = await response.json();
-    if (!response.ok) return toast.error(data.error || "Failed");
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return toast.error(data.error || "Couldn't create the field");
     setForm(blank);
     await load();
     toast.success("Field created");
+  }
+
+  async function setActive(field: Field, active: boolean) {
+    setBusyId(field.id);
+    try {
+      const response = active
+        ? await fetch("/api/qualification-fields", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: field.id, active: true }),
+          })
+        : await fetch(`/api/qualification-fields?id=${encodeURIComponent(field.id)}`, {
+            method: "DELETE",
+          });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        toast.error(data.error || (active ? "Unable to reactivate" : "Unable to deactivate"));
+        return;
+      }
+      toast.success(active ? `“${field.label}” reactivated` : `“${field.label}” deactivated`);
+      await load();
+    } catch {
+      toast.error(active ? "Unable to reactivate" : "Unable to deactivate");
+    } finally {
+      setBusyId(null);
+    }
   }
   return (
     <div className="space-y-6">
@@ -108,18 +136,28 @@ export default function QualificationPage() {
               </p>
             </div>
             <button
+              type="button"
               className="btn btn-secondary"
-              onClick={async () => {
-                const response = await fetch(`/api/qualification-fields?id=${field.id}`, { method: "DELETE" });
-                if (!response.ok) toast.error("Unable to deactivate");
-                else void load();
-              }}
+              disabled={busyId === field.id}
+              onClick={() => void setActive(field, !field.active)}
             >
-              Deactivate
+              {field.active ? "Deactivate" : "Reactivate"}
             </button>
           </article>
         ))}
       </div>
     </div>
+  );
+}
+
+export default function QualificationPage() {
+  return (
+    <PermissionGate
+      permission="agent:manage"
+      title="Qualification"
+      message="Only workspace owners and admins change the qualification questions."
+    >
+      <QualificationPageContent />
+    </PermissionGate>
   );
 }

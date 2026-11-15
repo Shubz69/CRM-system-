@@ -141,7 +141,7 @@ export default function InsightsPage() {
             <EmptyState
               title="No content ideas yet"
               body="Ideas appear after conversations reveal questions and objections. Handle some DMs first, or research a topic on Home."
-              actionHref="/ask"
+              actionHref="/home"
               actionLabel="Go to Home"
             />
           )}

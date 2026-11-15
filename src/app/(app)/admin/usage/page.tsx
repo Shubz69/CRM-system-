@@ -28,7 +28,7 @@ export default async function AdminUsagePage() {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - 30);
 
-  const [records, byOrg, recent, aiMessages, failedAi, executions, byModel] = await Promise.all([
+  const [records, byOrg, recent, aiMessages, totalAi, failedAi, executions, byModel] = await Promise.all([
     prisma.usageRecord.groupBy({
       by: ["feature", "provider"],
       where: { createdAt: { gte: since } },
@@ -48,6 +48,9 @@ export default async function AdminUsagePage() {
     }),
     prisma.message.count({
       where: { senderType: "AI", createdAt: { gte: since } },
+    }),
+    prisma.aiExecution.count({
+      where: { createdAt: { gte: since } },
     }),
     prisma.aiExecution.count({
       where: { createdAt: { gte: since }, success: false },
@@ -79,8 +82,9 @@ export default async function AdminUsagePage() {
     (sum, r) => sum + estimateCost(r.feature, r._sum.quantity ?? 0, r.provider),
     0,
   );
-  const failureRate =
-    aiMessages + failedAi === 0 ? 0 : Math.round((failedAi / Math.max(aiMessages + failedAi, 1)) * 1000) / 10;
+  // Failed AI calls out of all AI calls in the window (AI messages are a different unit —
+  // one call can produce no message, and failed calls were counted twice before).
+  const failureRate = totalAi === 0 ? 0 : Math.round((failedAi / totalAi) * 1000) / 10;
 
   return (
     <div className="space-y-6">
@@ -107,6 +111,9 @@ export default async function AdminUsagePage() {
         <div className="surface p-4">
           <p className="text-xs uppercase text-[var(--muted)]">Failure rate</p>
           <p className="mt-2 font-[family-name:var(--font-fraunces)] text-3xl">{failureRate}%</p>
+          <p className="text-xs text-[var(--muted)]">
+            {failedAi} of {totalAi} AI calls failed
+          </p>
         </div>
       </div>
 
