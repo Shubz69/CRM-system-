@@ -119,11 +119,27 @@ describe("image providers — config and safety", () => {
     });
   });
 
-  it("asks for an upload when imaging is requested without a reference", () => {
+  // Updated: the Ask "Make an image" card promises "Generate from a reference or brief",
+  // so a request that already carries a brief now goes straight to imaging_generate
+  // (no upload). Only reference-only asks with no brief still ask for an upload.
+  it("generates from a brief when imaging is requested without a reference", () => {
     ensureAgentsRegistered();
     const plan = planAgentRunDeterministic("Generate an image of a calm workspace");
-    expect(plan.kind).toBe("clarification");
-    if (plan.kind !== "clarification") return;
-    expect(plan.question).toMatch(/upload/i);
+    expect(plan.kind).toBe("plan");
+    if (plan.kind !== "plan") return;
+    expect(plan.plan.steps).toHaveLength(1);
+    expect(plan.plan.steps[0]?.agentName).toBe("imaging_generate");
+    expect(String((plan.plan.steps[0]?.input as { prompt?: string }).prompt)).toMatch(/calm workspace/i);
+    expect((plan.plan.steps[0]?.input as { referenceAssetId?: string }).referenceAssetId).toBeUndefined();
+  });
+
+  it("asks for an upload when a reference-only ask has no brief", () => {
+    ensureAgentsRegistered();
+    for (const q of ["Make me something like this", "Generate an image", "Make something like this reference: "]) {
+      const plan = planAgentRunDeterministic(q);
+      expect(plan.kind).toBe("clarification");
+      if (plan.kind !== "clarification") return;
+      expect(plan.question).toMatch(/upload/i);
+    }
   });
 });

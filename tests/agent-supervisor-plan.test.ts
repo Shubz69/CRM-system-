@@ -252,8 +252,21 @@ describe("supervisor planning", () => {
     expect(result.kind).toBe("clarification");
   });
 
-  it("still asks for a reference image on explicit imaging asks", () => {
+  // Updated: "Make me an image of a calm wellness studio" contains a brief, and the Ask
+  // "Make an image" card is "Generate from a reference or brief" — so it now plans
+  // imaging_generate without an upload instead of asking for a reference image.
+  it("generates from a brief on explicit imaging asks without a reference", () => {
     const result = planAgentRunDeterministic("Make me an image of a calm wellness studio", {
+      answerMode: "QUICK",
+    });
+    expect(result.kind).toBe("plan");
+    if (result.kind === "plan") {
+      expect(result.plan.steps[0]?.agentName).toBe("imaging_generate");
+    }
+  });
+
+  it("still asks for a reference image when there is no brief to work from", () => {
+    const result = planAgentRunDeterministic("Make me something like this", {
       answerMode: "QUICK",
     });
     expect(result.kind).toBe("clarification");

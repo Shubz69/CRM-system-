@@ -1,4 +1,8 @@
-import { registerAgent, hasAgent, clearAgentRegistry as clearRegistry } from "@/agents/registry";
+import {
+  registerBuiltinAgent,
+  hasAgent,
+  clearAgentRegistry as clearRegistry,
+} from "@/agents/registry";
 import { echoAgent } from "@/agents/echo";
 import { summariseAgent } from "@/agents/summarise";
 import { researchAgent } from "@/agents/research";
@@ -8,6 +12,7 @@ import { criticAgent } from "@/agents/critic";
 import { imagingAnalyzeAgent } from "@/agents/imaging-analyze";
 import { imagingGenerateAgent } from "@/agents/imaging-generate";
 import { crmDeskAgent } from "@/agents/crm-desk";
+import { contentWriterAgent } from "@/agents/content-writer";
 import type { AnyAgent } from "@/agents/types";
 import { ensureBuiltinToolsRegistered } from "@/kernel";
 
@@ -23,14 +28,15 @@ const BUILTIN: AnyAgent[] = [
   imagingAnalyzeAgent,
   imagingGenerateAgent,
   crmDeskAgent,
+  contentWriterAgent,
 ];
 
-/** Register built-in agents once. */
+/** Register built-in agents once (and refresh stale built-ins after a dev hot reload). */
 export function ensureAgentsRegistered(): void {
   const allPresent = BUILTIN.every((a) => hasAgent(a.name));
   if (bootstrapped && allPresent) return;
   for (const agent of BUILTIN) {
-    if (!hasAgent(agent.name)) registerAgent(agent);
+    registerBuiltinAgent(agent);
   }
   ensureBuiltinToolsRegistered();
   bootstrapped = true;
@@ -52,6 +58,7 @@ export {
   imagingAnalyzeAgent,
   imagingGenerateAgent,
   crmDeskAgent,
+  contentWriterAgent,
 };
 export {
   getAgent,

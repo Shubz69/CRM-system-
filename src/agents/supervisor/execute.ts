@@ -39,6 +39,7 @@ import { attachVisibleResearchEvidence } from "@/lib/research-visible-evidence";
 import { isWebResearchAuthRequiredOutput } from "@/lib/research-job-present";
 import { WEB_SEARCH_MISSING_KEY_MESSAGE } from "@/adapters/sources/web";
 import {
+  isNonWebResearchOutput,
   isResearchEvidenceAgent,
   isResearchPlanStepName,
   looksLikeResearchOutput,
@@ -1739,12 +1740,27 @@ async function finalizeModeOutput(input: {
     }
   }
 
+  // Mode shapers keep only text; a generated image must stay renderable on the Ask page.
+  if (
+    input.raw &&
+    typeof input.raw === "object" &&
+    base &&
+    typeof base === "object" &&
+    base !== input.raw
+  ) {
+    const raw = input.raw as Record<string, unknown>;
+    if (typeof raw.assetId === "string" && typeof raw.url === "string") {
+      base = { ...(base as Record<string, unknown>), assetId: raw.assetId, url: raw.url };
+    }
+  }
+
   return attachResearchQualityIfApplicable({
     organisationId: input.organisationId,
     answerMode: input.answerMode,
     originalUserPrompt: input.originalUserPrompt,
     request: input.request,
     output: base,
+    raw: input.raw,
   });
 }
 
@@ -1754,9 +1770,14 @@ function attachResearchQualityIfApplicable(input: {
   originalUserPrompt?: string | null;
   request?: string | null;
   output: unknown;
+  /** Pre-shaping agent output — shaped answers drop the `source` marker. */
+  raw?: unknown;
 }): unknown {
   if (!input.output || typeof input.output !== "object") return input.output;
   const obj = input.output as Record<string, unknown>;
+  // The quality gate scores web-research claims/sources only — never answers built
+  // from this workspace's own data (CRM desk, content drafts) or image results.
+  if (isNonWebResearchOutput(input.raw) || isNonWebResearchOutput(obj)) return input.output;
   if (!looksLikeResearchOutput(obj)) return input.output;
 
   try {

@@ -22,8 +22,11 @@ describe("agent registry", () => {
     const names = listAgents()
       .map((a) => a.name)
       .sort();
+    // content_writer added so "Write content" Ask cards draft from business context
+    // instead of depending on web research.
     expect(names).toEqual([
       "analyst",
+      "content_writer",
       "critic",
       "crm_desk",
       "echo",
@@ -35,7 +38,7 @@ describe("agent registry", () => {
     ]);
     expect(getAgent("research").name).toBe("research");
     ensureAgentsRegistered();
-    expect(listAgents()).toHaveLength(9);
+    expect(listAgents()).toHaveLength(10);
   });
 
   it("rejects duplicate registration", () => {
@@ -65,6 +68,7 @@ describe("agent registry", () => {
         referenceAssetId: "asset_1",
       },
       crm_desk: { intent: "pipeline_summary", request: "Summarise my pipeline" },
+      content_writer: { request: "Write an Instagram post about our bridal hair packages" },
     };
 
     for (const agent of listAgents()) {

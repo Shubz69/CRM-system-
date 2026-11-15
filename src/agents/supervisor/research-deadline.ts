@@ -97,8 +97,25 @@ export function isResearchEvidenceAgent(agentName: string): boolean {
   return RESEARCH_EVIDENCE_AGENTS.has(agentName);
 }
 
+/**
+ * Answers that are NOT web research: built from this workspace's own data (CRM desk,
+ * content drafts from the Business Profile) or image generation results. The
+ * research quality gate (claims/sources scoring) must never run on these.
+ */
+export function isNonWebResearchOutput(output: unknown): boolean {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+  const obj = output as Record<string, unknown>;
+  return (
+    obj.source === "internal_crm" ||
+    obj.source === "workspace_content" ||
+    obj.notConfigured === true ||
+    (typeof obj.assetId === "string" && typeof obj.prompt === "string")
+  );
+}
+
 export function looksLikeResearchOutput(output: unknown): boolean {
   if (!output || typeof output !== "object") return false;
+  if (isNonWebResearchOutput(output)) return false;
   const obj = output as Record<string, unknown>;
   return (
     Array.isArray(obj.claims) ||

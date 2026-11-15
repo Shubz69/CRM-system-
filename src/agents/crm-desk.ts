@@ -5,6 +5,18 @@ import { buildChiefOfStaffFacts } from "@/services/chief-of-staff";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import { getBusinessProfile } from "@/services/digital-twin";
 import { buildBusinessEvidencePack } from "@/services/business-evidence-pack";
+import {
+  formatDmTriageLines,
+  formatLeadPipelineLines,
+  formatObjectionLines,
+  formatResultsLines,
+  resultsNextSteps,
+  loadDmTriage,
+  loadLeadPipelineSummary,
+  loadObjectionSummary,
+  loadResultsReport,
+  type LeadPipelineSummary,
+} from "@/services/crm-ask-insights";
 
 export const crmDeskInputSchema = z.object({
   intent: z.enum([
@@ -16,8 +28,35 @@ export const crmDeskInputSchema = z.object({
     "operator_brief",
     "business_context",
     "desk_overview",
+    /** Objection rows from recent conversations, grouped by category. */
+    "objections",
+    /** Instagram conversations needing a reply / human, with a next step each. */
+    "dm_triage",
+    /** Last 7 days vs previous 7 days from workspace data. */
+    "results_report",
   ]),
   request: z.string().max(4000).optional(),
+});
+
+const leadPipelineOutputSchema = z.object({
+  totalLeads: z.number(),
+  openLeads: z.number(),
+  wonLeads: z.number(),
+  lostLeads: z.number(),
+  stages: z.array(
+    z.object({
+      stageId: z.string().nullable(),
+      name: z.string(),
+      slug: z.string().nullable(),
+      count: z.number(),
+      closed: z.enum(["won", "lost"]).nullable(),
+    }),
+  ),
+  stalled: z.array(z.record(z.unknown())),
+  hot: z.array(z.record(z.unknown())),
+  hotIsFallback: z.boolean(),
+  needsHuman: z.array(z.record(z.unknown())),
+  nextActions: z.array(z.string()),
 });
 
 export const crmDeskOutputSchema = z.object({
@@ -81,6 +120,11 @@ export const crmDeskOutputSchema = z.object({
       insufficientEvidence: z.array(z.string()),
     })
     .optional(),
+  /** Lead / PipelineStage pipeline — for DM-led businesses this IS the pipeline. */
+  leadPipeline: leadPipelineOutputSchema.optional(),
+  dmTriage: z.record(z.unknown()).optional(),
+  objections: z.record(z.unknown()).optional(),
+  results: z.record(z.unknown()).optional(),
 });
 
 export type CrmDeskInput = z.infer<typeof crmDeskInputSchema>;
@@ -542,6 +586,114 @@ function buildOperatorBrief(input: {
   return { summary, shortAnswer, sections };
 }
 
+const EMPTY_COUNTS: CrmDeskOutput["counts"] = {
+  openDeals: 0,
+  stalledDeals: 0,
+  conversationsNeedingHuman: 0,
+  conversationsNeedingReply: 0,
+  goalsAtRisk: 0,
+  contentAwaitingApproval: 0,
+};
+
+/** Action-mode list for the card answers (ACTION shaping reads operatorSections). */
+function actionSections(topPriorities: string[]): NonNullable<CrmDeskOutput["operatorSections"]> {
+  return {
+    topPriorities: topPriorities.slice(0, 6),
+    needsAttention: [],
+    sales: [],
+    pipelineRisk: [],
+    content: [],
+    automation: [],
+    goalsKpi: [],
+    ignore: [],
+    risks: [],
+    insufficientEvidence: [],
+  };
+}
+
+/** Objections / DM triage / weekly results — workspace data only, no web research. */
+async function workspaceInsightAnswer(
+  intent: "objections" | "dm_triage" | "results_report",
+  orgId: string,
+): Promise<CrmDeskOutput> {
+  const base = {
+    source: "internal_crm" as const,
+    organisationId: orgId,
+    counts: { ...EMPTY_COUNTS },
+    deals: [],
+    conversations: [],
+    goals: [],
+    content: [],
+  };
+  if (intent === "objections") {
+    const summary = await loadObjectionSummary(orgId);
+    const top = summary.categories[0];
+    return {
+      ...base,
+      shortAnswer:
+        summary.total === 0
+          ? `No objections were recorded in the last ${summary.windowDays} days.`
+          : `${summary.total} objection${summary.total === 1 ? "" : "s"} in the last ${summary.windowDays} days — most common: ${top?.label} (${top?.count}).`,
+      summary: formatObjectionLines(summary).join("\n"),
+      objections: summary as unknown as Record<string, unknown>,
+      ...(summary.categories.length
+        ? {
+            operatorSections: actionSections(
+              summary.categories.map((c) => `${c.label} objections (${c.count}): ${c.suggestedResponse}`),
+            ),
+          }
+        : {}),
+    };
+  }
+  if (intent === "dm_triage") {
+    const triage = await loadDmTriage(orgId);
+    const total = triage.needsHuman + triage.awaitingReply;
+    return {
+      ...base,
+      counts: {
+        ...EMPTY_COUNTS,
+        conversationsNeedingHuman: triage.needsHuman,
+        conversationsNeedingReply: total,
+      },
+      conversations: triage.items.map((i) => ({
+        id: i.conversationId,
+        contactName: i.name,
+        needsHumanReview: i.reason === "needs_human",
+        unreadCount: 0,
+        lastMessageAt: null,
+      })),
+      shortAnswer:
+        total === 0
+          ? "No DMs are waiting on you right now."
+          : `${total} conversation${total === 1 ? "" : "s"} need you (${triage.needsHuman} for a human, ${triage.awaitingReply} awaiting a reply).`,
+      summary: formatDmTriageLines(triage).join("\n"),
+      dmTriage: triage as unknown as Record<string, unknown>,
+      ...(triage.items.length
+        ? { operatorSections: actionSections(triage.items.map((i) => `${i.name}: ${i.nextStep}`)) }
+        : {}),
+    };
+  }
+  const report = await loadResultsReport(orgId);
+  const c = report.current;
+  return {
+    ...base,
+    shortAnswer: `Last 7 days: ${c.conversations} new conversations, ${c.newLeads} new leads, ${c.qualified} qualified, ${c.bookings} bookings (${Math.round(report.conversion * 100)}% conversion).`,
+    summary: formatResultsLines(report).join("\n"),
+    results: report as unknown as Record<string, unknown>,
+    ...(resultsNextSteps(report).length
+      ? { operatorSections: actionSections(resultsNextSteps(report)) }
+      : {}),
+  };
+}
+
+function leadPipelineHeadline(p: LeadPipelineSummary): string {
+  if (p.totalLeads === 0) return "No leads in this workspace yet.";
+  const hot = p.hotIsFallback ? 0 : p.hot.length;
+  return `${p.openLeads} open lead${p.openLeads === 1 ? "" : "s"} across ${
+    p.stages.filter((s) => !s.closed && s.count > 0).length
+  } stages; ${p.stalled.length} stalled; ${hot} hot.`;
+}
+
 /**
  * Internal CRM desk agent — org-scoped Prisma reads only. Never web research / echo.
  */
@@ -569,6 +721,12 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         return "Building your prioritised operator brief from workspace data";
       case "business_context":
         return "Reading your Business Profile / business context";
+      case "objections":
+        return "Grouping objections from recent conversations";
+      case "dm_triage":
+        return "Checking which DMs need a reply or a human";
+      case "results_report":
+        return "Comparing this week's results with last week";
       default:
         return "Reading your CRM desk from workspace data";
     }
@@ -664,6 +822,10 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       };
     }
 
+    if (intent === "objections" || intent === "dm_triage" || intent === "results_report") {
+      return { output: await workspaceInsightAnswer(intent, orgId), costCents: 0 };
+    }
+
     const contactFocused =
       /\bhow many\s+contacts?\b/.test(req) ||
       /\b(contact|contacts)\s+(count|total|inventory|size)\b/.test(req) ||
@@ -711,6 +873,13 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       (intent === "operator_brief" || intent === "desk_overview");
     const needContacts = contactFocused || intent === "desk_overview" || intent === "operator_brief";
     const needApprovals = needContent;
+    // DM-led businesses run on the Lead / PipelineStage pipeline, not Deals.
+    const leadPipelinePromise: Promise<LeadPipelineSummary | null> =
+      !contactFocused &&
+      !companyFocused &&
+      (intent === "pipeline_summary" || intent === "desk_overview")
+        ? loadLeadPipelineSummary(orgId).catch(() => null)
+        : Promise.resolve(null);
     const companyCountPromise = companyFocused
       ? prisma.company.count({ where: { organisationId: orgId, deletedAt: null } }).catch(() => 0)
       : Promise.resolve(null as number | null);
@@ -1155,7 +1324,63 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
       };
     }
 
+    const leadPipeline = await leadPipelinePromise;
     const lines: string[] = [];
+    if (parsed.intent === "pipeline_summary" && leadPipeline) {
+      // Lead stages first — for these businesses the lead pipeline IS the pipeline.
+      const blocks = formatLeadPipelineLines(leadPipeline);
+      blocks.push("", "DEALS");
+      if (stalledDeals.length) {
+        blocks.push(
+          `• Open deals: ${counts.openDeals}; stalled (≥14 days quiet): ${counts.stalledDeals}`,
+          ...stalledDeals
+            .slice(0, 5)
+            .map((d) => `• Stuck: ${d.name} (${d.stageLabel || "no stage"}, ${money(d.amountCents)}) → message the buyer or book a checkpoint this week`),
+        );
+      } else if (dealRows.length) {
+        blocks.push(
+          `• Open deals: ${counts.openDeals}, none stalled: ${dealRows
+            .slice(0, 5)
+            .map((d) => `${d.name} (${d.stageLabel || "no stage"})`)
+            .join("; ")}`,
+        );
+      } else {
+        blocks.push("• No open deals — the lead pipeline above is your sales pipeline.");
+      }
+      blocks.push("", "Source: this workspace's Leads, pipeline stages and Deals. No web research.");
+      const summary = blocks.join("\n");
+      return {
+        output: {
+          shortAnswer: `${leadPipelineHeadline(leadPipeline)} ${
+            counts.openDeals ? `${counts.openDeals} open deal${counts.openDeals === 1 ? "" : "s"} (${counts.stalledDeals} stalled).` : "No open deals."
+          }`,
+          summary,
+          source: "internal_crm" as const,
+          organisationId: orgId,
+          counts,
+          deals: dealRows.slice(0, 12),
+          conversations: convRows,
+          goals: goals.map((g) => ({ id: g.id, name: g.name, status: g.status })),
+          content: contentRows.slice(0, 12),
+          leadPipeline,
+          ...(leadPipeline.nextActions.length
+            ? { operatorSections: actionSections(leadPipeline.nextActions) }
+            : {}),
+        },
+        costCents: 0,
+      };
+    }
+    if (parsed.intent === "desk_overview" && leadPipeline && leadPipeline.totalLeads > 0) {
+      lines.push(`Leads: ${leadPipelineHeadline(leadPipeline)}`);
+      if (leadPipeline.hot.length && !leadPipeline.hotIsFallback) {
+        lines.push(
+          `Hot leads: ${leadPipeline.hot
+            .slice(0, 3)
+            .map((l) => `${l.name} (score ${l.score}, ${l.stage})`)
+            .join("; ")}.`,
+        );
+      }
+    }
     if (
       parsed.intent === "pipeline_summary" ||
       parsed.intent === "desk_overview"
@@ -1182,7 +1407,11 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
             ".",
         );
       } else {
-        lines.push("No open deals in this workspace yet.");
+        lines.push(
+          leadPipeline && leadPipeline.totalLeads > 0
+            ? "No open deals — your leads above are the pipeline."
+            : "No open deals in this workspace yet.",
+        );
       }
     }
 
@@ -1239,6 +1468,7 @@ export const crmDeskAgent: Agent<CrmDeskInput, CrmDeskOutput> = {
         conversations: convRows,
         goals: goals.map((g) => ({ id: g.id, name: g.name, status: g.status })),
         content: contentRows.slice(0, 12),
+        ...(leadPipeline ? { leadPipeline } : {}),
       },
       costCents: 0,
     };

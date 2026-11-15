@@ -4,6 +4,7 @@ import type { Agent } from "@/agents/types";
 import {
   getImageProvider,
   estimateImageGenerationCostCents,
+  isImageProviderConfigured,
   ImageSafetyError,
   ImageProviderNotConfiguredError,
 } from "@/adapters/images";
@@ -21,7 +22,7 @@ export const imagingGenerateInputSchema = z.object({
   request: z.string().max(4000).optional(),
 });
 
-export const imagingGenerateOutputSchema = z.object({
+const imagingGeneratedOutputSchema = z.object({
   assetId: z.string(),
   url: z.string().url(),
   prompt: z.string(),
@@ -30,6 +31,42 @@ export const imagingGenerateOutputSchema = z.object({
   costCents: z.number().int().nonnegative(),
   summary: z.string(),
 });
+
+/** Brief-only ask while no image provider is configured — a clear answer, not a failure. */
+const imagingNotConfiguredOutputSchema = z.object({
+  notConfigured: z.literal(true),
+  prompt: z.string(),
+  shortAnswer: z.string(),
+  summary: z.string(),
+  costCents: z.literal(0),
+});
+
+export const imagingGenerateOutputSchema = z.union([
+  imagingGeneratedOutputSchema,
+  imagingNotConfiguredOutputSchema,
+]);
+
+const NOT_SET_UP_MESSAGE =
+  "Image generation isn't set up for this workspace yet, so no image was created. Ask an admin to configure OpenAI or Gemini image generation.";
+
+function notConfiguredOutput(prompt: string, request?: string): z.infer<typeof imagingNotConfiguredOutputSchema> {
+  const mentionsReference = /\b(reference|like this|based on this)\b/i.test(request || "");
+  return {
+    notConfigured: true,
+    prompt,
+    shortAnswer: NOT_SET_UP_MESSAGE,
+    summary: [
+      NOT_SET_UP_MESSAGE,
+      "",
+      "Here's the brief I would use — paste it into any image tool, or run it again once generation is configured:",
+      prompt,
+      ...(mentionsReference
+        ? ["", "No reference image was attached, so this brief is based on your description only."]
+        : []),
+    ].join("\n"),
+    costCents: 0,
+  };
+}
 
 export type ImagingGenerateInput = z.infer<typeof imagingGenerateInputSchema>;
 export type ImagingGenerateOutput = z.infer<typeof imagingGenerateOutputSchema>;
@@ -74,6 +111,12 @@ export const imagingGenerateAgent: Agent<ImagingGenerateInput, ImagingGenerateOu
     const unsafe = looksLikeUnsafePrompt(parsed.prompt);
     if (unsafe) {
       throw unsafe;
+    }
+
+    // Brief-only generation (no reference) answers plainly when no provider is set up,
+    // instead of failing the run. The reference-confirm path keeps its existing error.
+    if (!parsed.referenceAssetId && !isImageProviderConfigured()) {
+      return { output: notConfiguredOutput(parsed.prompt, parsed.request), costCents: 0 };
     }
 
     const estimate = estimateImageGenerationCostCents();
@@ -132,7 +175,7 @@ export const imagingGenerateAgent: Agent<ImagingGenerateInput, ImagingGenerateOu
         },
       });
 
-      const output: ImagingGenerateOutput = {
+      const output: z.infer<typeof imagingGeneratedOutputSchema> = {
         assetId: asset.id,
         url: asset.url,
         prompt: parsed.prompt,

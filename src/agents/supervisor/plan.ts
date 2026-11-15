@@ -109,8 +109,81 @@ export function looksLikeOperatorBrief(request: string): boolean {
   );
 }
 
+/**
+ * "What objections came up…", "Common objections this week" — Objection rows from
+ * this workspace's conversations (not the generic operator brief).
+ */
+export function looksLikeObjectionsAsk(request: string): boolean {
+  const t = request.toLowerCase();
+  if (!/\bobjections?\b/.test(t)) return false;
+  // "Summarise this: <pasted text mentioning objections>" is a summarise job.
+  if (/^(please\s+)?(summaris[e]|summarize|tl;?dr|repeat|echo)\b[^?]*:/.test(t)) return false;
+  return true;
+}
+
+/**
+ * "Help me handle DMs", "Help me respond to open Instagram conversations" — the
+ * Inbox threads that need a reply or a human, each with a next step.
+ */
+export function looksLikeDmTriageAsk(request: string): boolean {
+  const t = request.toLowerCase();
+  const dmNoun =
+    /\b(dms?|direct messages?|(instagram|ig|insta|open|unanswered|unread|new|customer) (conversations?|messages?|chats?|dms?|inbox)|my inbox|my messages)\b/;
+  if (!dmNoun.test(t)) return false;
+  return (
+    /\bhelp me (with|handle|respond|reply|answer|manage|triage|qualify|go through|clear|work through|sort|deal with|get through)\b/.test(t) ||
+    /\b(handle|respond to|reply to|answer|manage|triage|qualify|deal with|go through|clear|work through|sort out|catch up on|prioriti[sz]e)\b.{0,40}\b(dms?|messages?|conversations?|chats?|inbox)\b/.test(
+      t,
+    ) ||
+    /\b(which|what) (dms?|messages?|conversations?)\b.{0,30}\b(reply|respond|answer|need|waiting)\b/.test(t)
+  );
+}
+
+/**
+ * "Show me results", "Weekly performance", "Give me a weekly performance briefing" —
+ * last 7 days vs the previous 7 from workspace data.
+ */
+export function looksLikeResultsReportAsk(request: string): boolean {
+  const t = request.toLowerCase();
+  return (
+    /\bshow (me )?(my |our |the )?(results|numbers|performance|stats)\b/.test(t) ||
+    /\b(my|our) (weekly )?(results|numbers|performance)\b/.test(t) ||
+    /\bweekly (performance|report|results|review|briefing|brief|summary|numbers|stats|recap|update)\b/.test(t) ||
+    /\bperformance (briefing|brief|report|review|summary|recap|update|this week|last week|over the (last|past) week)\b/.test(t) ||
+    /\b(week in review|weekly recap)\b/.test(t) ||
+    /\bhow did (we|i) do (this|last) week\b/.test(t) ||
+    /\b(this|last) week'?s (results|numbers|performance|stats)\b/.test(t) ||
+    /\bresults (this|last|over the (last|past)) week\b/.test(t) ||
+    /\b(conversion|reply|booking) rates?\b.{0,30}\b(this week|last week|week|7 days)\b/.test(t) ||
+    /\bwhat moved and what stalled\b/.test(t)
+  );
+}
+
+/** Write / draft a post, caption, script… — content in the business's voice. */
+export function looksLikeContentWriting(request: string): boolean {
+  const t = request.toLowerCase();
+  // Approval-queue questions stay on the CRM desk.
+  if (/\b(awaiting|waiting for|pending|in review)\b.{0,20}\bapproval\b|\bawaiting approval\b/.test(t)) return false;
+  // Image creation ("create an Instagram graphic") is imaging, not copywriting.
+  if (/\b(make|create|generate|design|draw|produce)\b.{0,24}\b(image|picture|photo|illustration|artwork|graphic|visual)s?\b/.test(t)) {
+    return false;
+  }
+  return (
+    /\b(write|draft|compose|craft|rewrite)\b.{0,48}\b(posts?|captions?|content|copy|scripts?|reels?|carousels?|stor(y|ies)|blogs?|newsletters?|emails?|bio|hashtags?|tweets?|threads?|ads?|announcements?|promos?)\b/.test(
+      t,
+    ) ||
+    /\b(create|make|give me|come up with)\b.{0,24}\b(an? |some |\d+ )?(instagram |ig |facebook |tiktok |social( media)? )?(posts?|captions?|reel scripts?|carousels?|ad copy)\b/.test(
+      t,
+    ) ||
+    /^write content\b/.test(t)
+  );
+}
+
 export function looksLikeCrmInternal(request: string): boolean {
   const t = request.toLowerCase();
+  if (looksLikeObjectionsAsk(t) || looksLikeDmTriageAsk(t) || looksLikeResultsReportAsk(t)) {
+    return true;
+  }
   if (looksLikeOperatorBrief(t)) return true;
   if (
     /\b(summaris[e]|summarize|summary)\b/.test(t) &&
@@ -198,7 +271,10 @@ function crmDeskIntentFromRequest(
   | "content_awaiting_approval"
   | "operator_brief"
   | "business_context"
-  | "desk_overview" {
+  | "desk_overview"
+  | "objections"
+  | "dm_triage"
+  | "results_report" {
   const t = request.toLowerCase();
   // Business-profile questions must win over ACTION operator_brief preference —
   // otherwise "ideal customer / what we sell" collapses into a generic CRM priority list.
@@ -214,6 +290,11 @@ function crmDeskIntentFromRequest(
   ) {
     return "business_context";
   }
+  // Ask-page card intents answer from their own data in every answer mode —
+  // ACTION/EXECUTIVE must not collapse them into the generic operator brief.
+  if (looksLikeObjectionsAsk(t)) return "objections";
+  if (looksLikeResultsReportAsk(t)) return "results_report";
+  if (looksLikeDmTriageAsk(t)) return "dm_triage";
   if (opts?.preferOperatorBrief && !isPureDeterministicCrmFact(t)) {
     return "operator_brief";
   }
@@ -243,26 +324,34 @@ function crmDeskIntentFromRequest(
   return "desk_overview";
 }
 
+const CRM_DESK_PLAN_COPY: Record<ReturnType<typeof crmDeskIntentFromRequest>, string> = {
+  operator_brief:
+    "I'll read this workspace's CRM, inbox, goals, content, and opportunities and give you a prioritised operator brief — no web research.",
+  pipeline_summary:
+    "I'll read your lead pipeline stages and open deals in this workspace and flag anything stalled — no web research.",
+  objections:
+    "I'll group the objections customers raised in your conversations over the last 7 days, with suggested responses — no web research.",
+  dm_triage:
+    "I'll list the Instagram conversations that need a reply or a human, with a suggested next step for each — nothing is sent.",
+  results_report:
+    "I'll compare the last 7 days with the 7 days before from your Inbox, leads and bookings — no web research.",
+  business_context: "I'll read your Business Profile / business context for this workspace — no web research.",
+  goals_at_risk: "I'll check goals and KPIs marked at risk in this workspace — no web research.",
+  follow_ups: "I'll check Inbox conversations that need a reply or human handoff — no web research.",
+  conversations_needing_human:
+    "I'll check Inbox conversations that need a reply or human handoff — no web research.",
+  content_awaiting_approval: "I'll list content waiting for approval in this workspace — no web research.",
+  desk_overview:
+    "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
+};
+
 function planCrmDesk(request: string, opts?: { preferOperatorBrief?: boolean }): PlanResult {
   const intent = crmDeskIntentFromRequest(request, opts);
   return {
     kind: "plan",
     plan: {
       steps: [{ agentName: "crm_desk", input: { intent, request: request.slice(0, 2000) } }],
-      plainEnglishPlan:
-        intent === "operator_brief"
-          ? "I'll read this workspace's CRM, inbox, goals, content, and opportunities and give you a prioritised operator brief — no web research."
-          : intent === "pipeline_summary"
-            ? "I'll read your open deals in this workspace and flag anything stalled — no web research."
-            : intent === "business_context"
-              ? "I'll read your Business Profile / business context for this workspace — no web research."
-              : intent === "goals_at_risk"
-                ? "I'll check goals and KPIs marked at risk in this workspace — no web research."
-                : intent === "follow_ups" || intent === "conversations_needing_human"
-                  ? "I'll check Inbox conversations that need a reply or human handoff — no web research."
-                  : intent === "content_awaiting_approval"
-                    ? "I'll list content waiting for approval in this workspace — no web research."
-                    : "I'll read this workspace's CRM data (deals, inbox, goals, content) and summarise what needs attention.",
+      plainEnglishPlan: CRM_DESK_PLAN_COPY[intent],
     },
   };
 }
@@ -331,7 +420,7 @@ export function isQuickResearchAsk(
 }
 
 function looksLikeImaging(request: string): boolean {
-  return /\b(image|picture|photo|illustration|artwork|graphic|visual|make me something like|generate (an? )?(image|picture)|create (an? )?(image|picture|graphic)|reference image|based on (this|the) (image|picture|photo))\b/i.test(
+  return /\b(image|picture|photo|illustration|artwork|graphic|visual|make (me )?something like|generate (an? )?(image|picture)|create (an? )?(image|picture|graphic)|reference image|like this reference|based on (this|the) (image|picture|photo))\b/i.test(
     request,
   );
 }
@@ -537,6 +626,82 @@ function planImagingAnalyze(request: string, referenceAssetId: string): PlanResu
   };
 }
 
+/** An explicit ask to create an image (not just a sentence that mentions a photo). */
+export function looksLikeImageCreation(request: string): boolean {
+  return (
+    /\b(make|create|generate|design|draw|produce|render|mock ?up)\b.{0,30}\b(image|picture|photo|illustration|artwork|graphic|visual|poster|flyer)s?\b/i.test(
+      request,
+    ) ||
+    /^(please\s+)?(make|create|generate|design)\b.{0,20}\bsomething like\b/i.test(request) ||
+    /\b(i (want|need)|give me)\b.{0,12}\b(an? )?(image|picture|graphic|visual|illustration)\b/i.test(request)
+  );
+}
+
+const IMAGE_BRIEF_STOPWORDS = new Set([
+  "the", "and", "for", "with", "our", "your", "this", "that", "these", "those", "make", "made", "it",
+  "its", "some", "something", "like", "image", "images", "picture", "photo", "graphic", "visual",
+  "please", "more", "less", "want", "need", "just", "new", "one", "use", "using", "from", "into",
+  "look", "looks", "style", "version", "reference", "based", "similar", "inspired", "can", "you",
+  "could", "would", "create", "generate", "design", "draw",
+]);
+
+/**
+ * Strip the "make an image" verb and any reference phrasing; what remains is the
+ * creative brief ("Make an image for a bridal hair promo" → "a bridal hair promo").
+ */
+export function extractImageBrief(request: string): string {
+  let t = request.trim().replace(/\s+/g, " ");
+  t = t.replace(/^(please\s+)?(can you\s+|could you\s+)?/i, "");
+  t = t.replace(
+    /^(make|create|generate|design|draw|produce|render|give me|i want|i need)\s+(me\s+|us\s+)?((an?|some|the|new|another)\s+)*([\w-]+\s+){0,2}?(image|picture|photo|illustration|artwork|graphic|visual|poster|flyer|something|one)s?\b/i,
+    "",
+  );
+  t = t.replace(
+    /\b(something\s+)?(like|based on|similar to|inspired by)\s+(this|that|the|my|our)(\s+(reference|image|picture|photo))*\b/gi,
+    " ",
+  );
+  t = t.replace(/\b(this|the|a|my)\s+reference(\s+(image|picture|photo))?\b/gi, " ");
+  t = t.replace(/^[\s:,.;\-–—]*((of|for|about|showing|featuring|that shows|with)\s+)?/i, "");
+  return t.replace(/\s+/g, " ").replace(/[\s:,.;\-–—]+$/, "").trim();
+}
+
+/** At least two meaningful words — enough to generate without a reference upload. */
+export function hasImageBrief(brief: string): boolean {
+  const words = brief
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter((w) => w.length > 2 && !IMAGE_BRIEF_STOPWORDS.has(w));
+  return words.length >= 2;
+}
+
+function planImagingFromBrief(request: string, brief: string): PlanResult {
+  const prompt = `Promotional image: ${brief}. Square, social-media-ready image for a small business — clean composition, natural light, realistic detail, no third-party logos, no watermarks, no embedded text.`;
+  return {
+    kind: "plan",
+    plan: {
+      steps: [
+        {
+          agentName: "imaging_generate",
+          input: { prompt: prompt.slice(0, 4000), request: request.slice(0, 4000) },
+        },
+      ],
+      plainEnglishPlan:
+        "I'll create an image from your brief — no reference upload needed. If image generation isn't set up for this workspace, I'll tell you instead.",
+    },
+  };
+}
+
+function planContentWriter(request: string): PlanResult {
+  return {
+    kind: "plan",
+    plan: {
+      steps: [{ agentName: "content_writer", input: { request: request.slice(0, 4000) } }],
+      plainEnglishPlan:
+        "I'll write this in your brand voice from your Business Profile, offerings and knowledge — quick web research is used only when it's available.",
+    },
+  };
+}
+
 function clarificationForImagingUpload(): Clarification {
   return {
     kind: "clarification",
@@ -596,7 +761,18 @@ export function planAgentRunDeterministic(
     return planImagingAnalyze(trimmed, org.referenceAssetId);
   }
 
+  // Content in the business's voice — must not depend on web research.
+  if (looksLikeContentWriting(trimmed)) {
+    return planContentWriter(trimmed);
+  }
+
   if (looksLikeImaging(trimmed)) {
+    // "Generate from a reference or brief": a brief is enough to generate without an
+    // upload. Only reference-only asks ("make something like this") need the image first.
+    if (looksLikeImageCreation(trimmed)) {
+      const brief = extractImageBrief(trimmed);
+      if (hasImageBrief(brief)) return planImagingFromBrief(trimmed, brief);
+    }
     return clarificationForImagingUpload();
   }
 
@@ -759,6 +935,7 @@ const llmPlanSchema = z.object({
           "imaging_analyze",
           "imaging_generate",
           "crm_desk",
+          "content_writer",
         ]),
         text: z.string().optional(),
         topic: z.string().optional(),
@@ -792,7 +969,7 @@ export async function planAgentRun(
   const result = await completeStructuredSafe(llmPlanSchema, {
     organisationId: org.organisationId,
     tier: "cheap",
-    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research, prefer a fast research-only plan (add analyst only for Deep). Skip critic. For images, use imaging_analyze only when a referenceAssetId is known — never call imaging_generate until the user confirms a prompt. If unclear, ask ONE clarifying question with 2-4 short options.`,
+    system: `You plan jobs for a business owner. Available capabilities:\n${agentCatalog}\nNever invent other capabilities. For research, prefer a fast research-only plan (add analyst only for Deep). Skip critic. For CRM questions (pipeline, leads, DMs, objections, results) use crm_desk. For writing posts/captions/scripts use content_writer (it does not need research). For images, use imaging_analyze only when a referenceAssetId is known — never call imaging_generate until the user confirms a prompt. If unclear, ask ONE clarifying question with 2-4 short options.`,
     prompt: `Request:\n${request}\n\nOrganisation: ${org.organisationName || org.organisationId}\nReference asset id: ${org.referenceAssetId || "(none)"}`,
     skipSpendGate: false,
   });
@@ -847,10 +1024,21 @@ export async function planAgentRun(
         };
       }
       if (s.agentName === "crm_desk") {
+        const crmRequest = s.text || s.topic || request;
         return {
           agentName: s.agentName,
-          input: { intent: "desk_overview", request: s.text || s.topic || request },
+          // Same intent routing as the deterministic planner (pipeline, objections,
+          // DM triage, results…) — not a blanket desk overview.
+          input: {
+            intent: crmDeskIntentFromRequest(crmRequest, {
+              preferOperatorBrief: org.answerMode === "ACTION" || org.answerMode === "EXECUTIVE",
+            }),
+            request: crmRequest,
+          },
         };
+      }
+      if (s.agentName === "content_writer") {
+        return { agentName: s.agentName, input: { request: s.text || s.topic || request } };
       }
       return { agentName: s.agentName, input: {} };
     })
