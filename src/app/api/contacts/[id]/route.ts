@@ -6,6 +6,7 @@ import { applyOptOut, clearOptOut } from "@/services/opt-out";
 type Params = { params: Promise<{ id: string }> };
 
 const patchSchema = z.object({
+  fullName: z.string().trim().min(1).max(200).optional(),
   email: z.string().email().nullable().optional(),
   phone: z.string().max(100).nullable().optional(),
   note: z.string().trim().min(1).max(10_000).optional(),
@@ -50,6 +51,15 @@ export async function PATCH(req: Request, { params }: Params) {
     });
     if (!contact) return jsonError("Contact not found", 404);
 
+    // Same rule as creating a contact: one live contact per email in a workspace.
+    if (body.email) {
+      const dup = await prisma.contact.findFirst({
+        where: { organisationId: session.organisationId, deletedAt: null, email: body.email, id: { not: id } },
+        select: { id: true },
+      });
+      if (dup) return jsonError("A contact with this email already exists in this workspace.", 409);
+    }
+
     if (body.optedOut !== undefined) {
       if (body.optedOut) {
         await applyOptOut({ organisationId: session.organisationId, contactId: id, userId: session.userId, source: "manual" });
@@ -65,17 +75,31 @@ export async function PATCH(req: Request, { params }: Params) {
       await prisma.contactTag.deleteMany({ where: { contactId: id } });
       await prisma.contactTag.createMany({ data: validTags.map((tag) => ({ contactId: id, tagId: tag.id })) });
     }
-    if (body.email !== undefined || body.phone !== undefined || body.deleted !== undefined) {
+    if (
+      body.fullName !== undefined ||
+      body.email !== undefined ||
+      body.phone !== undefined ||
+      body.deleted !== undefined
+    ) {
       await prisma.contact.update({
         where: { id },
-        data: { email: body.email, phone: body.phone, deletedAt: body.deleted ? new Date() : undefined },
+        data: {
+          fullName: body.fullName,
+          email: body.email,
+          phone: body.phone,
+          deletedAt: body.deleted ? new Date() : undefined,
+        },
       });
     }
     return Response.json({ ok: true });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof z.ZodError) {
+      return jsonError(error.issues[0]?.message || "Check the contact details and try again.", 400);
+    }
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
 }

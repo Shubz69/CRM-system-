@@ -2,6 +2,11 @@ import { NotificationType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
+/**
+ * Create a notification. Without a `userId` it is for the whole workspace: one row per
+ * active member, so each person has their own read state (a shared row meant one
+ * person's "mark all read" hid it for everyone). Returns the ids of the rows created.
+ */
 export async function createNotification(input: {
   organisationId: string;
   userId?: string | null;
@@ -9,25 +14,41 @@ export async function createNotification(input: {
   title: string;
   body: string;
   metadata?: Record<string, unknown>;
-}): Promise<string> {
-  const notification = await prisma.notification.create({
-    data: {
+}): Promise<string[]> {
+  const recipients = input.userId
+    ? [input.userId]
+    : (
+        await prisma.organisationMember.findMany({
+          where: {
+            organisationId: input.organisationId,
+            user: { deletedAt: null, isActive: true, isSuspended: false },
+          },
+          select: { userId: true },
+        })
+      ).map((m) => m.userId);
+  if (recipients.length === 0) return [];
+
+  const metadata = JSON.parse(JSON.stringify(input.metadata ?? {}));
+  const created = await prisma.notification.createManyAndReturn({
+    data: recipients.map((userId) => ({
       organisationId: input.organisationId,
-      userId: input.userId ?? undefined,
+      userId,
       type: input.type,
       title: input.title,
       body: input.body,
-      metadata: JSON.parse(JSON.stringify(input.metadata ?? {})),
-    },
+      metadata,
+    })),
+    select: { id: true },
   });
 
   logger.info("Notification created", {
     organisationId: input.organisationId,
     type: input.type,
-    notificationId: notification.id,
+    notificationIds: created.map((n) => n.id),
+    recipients: created.length,
   });
 
-  return notification.id;
+  return created.map((n) => n.id);
 }
 
 export async function notifyOrganisationOwners(input: {

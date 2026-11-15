@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/db", () => ({
   prisma: {
+    // No workspace-owned booking secret → the shared secret path is exercised.
+    integration: { findUnique: vi.fn(async () => null) },
     organisation: { findFirst: mocks.organisationFindFirst },
     webhookEvent: {
       findUnique: mocks.webhookEventFindUnique,

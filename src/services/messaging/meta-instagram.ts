@@ -789,6 +789,8 @@ export async function resolveOrganisationByMetaIgAccountId(
       provider: MESSAGING_PROVIDER.META_INSTAGRAM,
       externalId: igAccountId,
       isActive: true,
+      // A deleted workspace's channel can stay active; never route DMs to it.
+      organisation: { deletedAt: null },
     },
     select: { id: true, organisationId: true },
     take: 2,

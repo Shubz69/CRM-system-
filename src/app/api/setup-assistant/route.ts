@@ -66,6 +66,34 @@ function humanizeSetupAiError(message: string): string {
   return toCustomerAiError(message);
 }
 
+const SETUP_ASSISTANT_TAG = "setup-assistant";
+const MAX_TITLE_LENGTH = 180;
+
+function withTitleSuffix(title: string, suffix: string): string {
+  return `${title.slice(0, MAX_TITLE_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
+/**
+ * upsertKnowledgeDocument matches on title and overwrites what it finds, so a proposal doc
+ * titled like a hand-written one ("Pricing") would replace it. Keep the plain title only when
+ * every doc already using it came from the Setup Assistant (re-approving updates it);
+ * otherwise save under "<title> (Setup Assistant)", numbered if that is taken by another doc.
+ */
+async function setupAssistantDocumentTitle(organisationId: string, title: string): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidate =
+      attempt === 0
+        ? title
+        : withTitleSuffix(title, ` (Setup Assistant${attempt > 1 ? ` ${attempt}` : ""})`);
+    const sameTitle = await prisma.knowledgeDocument.findMany({
+      where: { organisationId, title: candidate },
+      select: { tags: true },
+    });
+    if (sameTitle.every((doc) => doc.tags.includes(SETUP_ASSISTANT_TAG))) return candidate;
+  }
+  return withTitleSuffix(title, ` (Setup Assistant ${Date.now().toString(36)})`);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const session = await requirePermission("agent:manage");
@@ -197,17 +225,18 @@ Return ONLY JSON. Do not invent fake customer data, prices or policies that are 
 
     // Through the knowledge service so documents are chunked/embedded (retrievable) and
     // re-approving the same proposal updates the existing documents instead of duplicating them.
+    // A same-titled doc the team wrote by hand is never overwritten (see setupAssistantDocumentTitle).
     let knowledgeDocuments = 0;
     for (const doc of proposal.knowledgeStructure?.slice(0, 12) ?? []) {
-      const title = doc.title.trim().slice(0, 180);
+      const proposedTitle = doc.title.trim().slice(0, MAX_TITLE_LENGTH);
       const content = doc.content.trim();
-      if (!title || !content) continue;
+      if (!proposedTitle || !content) continue;
       await upsertKnowledgeDocument({
         organisationId: session.organisationId,
-        title,
+        title: await setupAssistantDocumentTitle(session.organisationId, proposedTitle),
         category: doc.category.trim() || "setup",
         content,
-        tags: ["setup-assistant"],
+        tags: [SETUP_ASSISTANT_TAG],
       });
       knowledgeDocuments += 1;
     }

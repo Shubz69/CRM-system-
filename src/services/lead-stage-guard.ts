@@ -53,10 +53,11 @@ export function aiMayMoveStage(input: {
 }): boolean {
   const { current, target } = input;
   if (!target) return false;
+  // A person's decision wins even if their stage can't be resolved (e.g. it belongs to
+  // another pipeline or was deleted).
+  if (readLeadMeta(input.metadata).stageChangedBy === "HUMAN") return false;
   if (!current) return true;
   if (current.id === target.id) return false;
-  const meta = readLeadMeta(input.metadata);
-  if (meta.stageChangedBy === "HUMAN") return false;
   if (isLockedStage(current)) return false;
   // A lost lead the AI itself disqualified may be re-engaged when they write back.
   if (current.isLost) return !target.isLost;

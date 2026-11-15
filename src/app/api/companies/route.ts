@@ -10,16 +10,37 @@ import {
 import { prisma } from "@/lib/db";
 import { upsertCompany } from "@/services/crm-v2";
 
-export async function GET() {
+/** Live (not soft-deleted) related rows only. */
+const liveCounts = {
+  _count: {
+    select: {
+      contacts: { where: { deletedAt: null } },
+      deals: { where: { deletedAt: null } },
+    },
+  },
+} as const;
+
+export async function GET(req: Request) {
   try {
     const session = await requirePermission("leads:read");
-    const companies = await prisma.company.findMany({
-      where: { organisationId: session.organisationId, deletedAt: null },
-      orderBy: { updatedAt: "desc" },
-      take: 100,
-      include: { _count: { select: { contacts: true, deals: true } } },
-    });
-    return Response.json({ companies, organisationId: session.organisationId });
+    const where = { organisationId: session.organisationId, deletedAt: null };
+
+    // Overview pages only need the number — a real count, not the length of the capped list.
+    if (new URL(req.url).searchParams.get("countOnly") === "1") {
+      const total = await prisma.company.count({ where });
+      return Response.json({ total, organisationId: session.organisationId });
+    }
+
+    const [companies, total] = await Promise.all([
+      prisma.company.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take: 100,
+        include: liveCounts,
+      }),
+      prisma.company.count({ where }),
+    ]);
+    return Response.json({ companies, total, organisationId: session.organisationId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

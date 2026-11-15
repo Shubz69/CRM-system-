@@ -56,6 +56,25 @@ describe("messaging follow-up and qualification", () => {
     expect(mocks.followUpUpdateMany).not.toHaveBeenCalled();
   });
 
+  it("still schedules on the default 'approval required' setting (the sender gates each one)", async () => {
+    mocks.organisationFindUnique.mockResolvedValue({
+      autopilotConfig: { followUps: "approval_required" },
+    });
+    mocks.followUpUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.followUpCreate.mockImplementation(async ({ data }: { data: unknown }) => ({ id: "fu_1", ...(data as object) }));
+
+    const scheduled = await scheduleFollowUps({
+      organisationId: "org-1",
+      contactId: "contact-1",
+      conversationId: "conversation-1",
+      delaysMinutes: [60],
+      maxFollowUps: 1,
+      skipIfAutopilotDisabled: true,
+    });
+    expect(scheduled).toBeGreaterThan(0);
+    expect(mocks.followUpCreate).toHaveBeenCalled();
+  });
+
   it("enforces the maximum number of follow-up attempts", () => {
     expect(
       planFollowUpSchedule({

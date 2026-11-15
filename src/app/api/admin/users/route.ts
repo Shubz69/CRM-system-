@@ -8,6 +8,7 @@ import { writeAuditLog } from "@/services/audit";
 import { getEnv } from "@/lib/env";
 import { getEmailAdapter } from "@/adapters/email";
 import { logger } from "@/lib/logger";
+import { revokeAllSessions } from "@/lib/session-security";
 
 const mutateSchema = z.object({
   action: z.enum([
@@ -116,7 +117,9 @@ export async function POST(req: NextRequest) {
         where: { id: user.id },
         data: { isSuspended: true },
       });
-      await prisma.session.deleteMany({ where: { userId: user.id } });
+      // Bump (never delete) the revocation marker: deleting it would make tokens revoked
+      // earlier valid again once the user is reactivated.
+      await revokeAllSessions(user.id);
       await writeAuditLog({
         organisationId: body.organisationId || session.organisationId,
         userId: session.userId,
@@ -143,16 +146,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "revoke_sessions") {
-      const result = await prisma.session.deleteMany({ where: { userId: user.id } });
+      // Sessions are JWTs (no rows to delete); bump the user's revocation marker so every
+      // token issued before now fails its next request.
+      await revokeAllSessions(user.id);
       await writeAuditLog({
         organisationId: body.organisationId || session.organisationId,
         userId: session.userId,
         action: "user.revoke_sessions",
         entityType: "User",
         entityId: user.id,
-        metadata: { deleted: result.count },
       });
-      return Response.json({ ok: true, deleted: result.count });
+      return Response.json({ ok: true });
     }
 
     if (body.action === "verify") {

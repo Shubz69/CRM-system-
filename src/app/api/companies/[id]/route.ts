@@ -24,7 +24,13 @@ export async function GET(
           take: 20,
           select: { id: true, name: true, status: true, amountCents: true, currency: true },
         },
-        _count: { select: { contacts: true, deals: true } },
+        // Live (not soft-deleted) related rows only.
+        _count: {
+          select: {
+            contacts: { where: { deletedAt: null } },
+            deals: { where: { deletedAt: null } },
+          },
+        },
       },
     });
     if (!company) return jsonError("Company not found", 404);

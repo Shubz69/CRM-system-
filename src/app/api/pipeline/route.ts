@@ -16,7 +16,8 @@ export async function GET() {
           orderBy: { position: "asc" },
           include: {
             leads: {
-              where: { deletedAt: null },
+              // A deleted contact's leads leave the board.
+              where: { deletedAt: null, contact: { deletedAt: null } },
               // Only what the board renders — not full contact rows (emails, phones, metadata).
               select: {
                 id: true,

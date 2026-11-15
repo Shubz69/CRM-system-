@@ -17,7 +17,12 @@ vi.mock("@/lib/db", () => {
   const usageRecordCount = vi.fn();
   return {
     prisma: {
-      approvalRequest: { findFirst: approvalFindFirst, update: approvalUpdate },
+      approvalRequest: {
+        findFirst: approvalFindFirst,
+        update: approvalUpdate,
+        // The decision is claimed atomically (PENDING → decided) before actions run.
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
       experiment: { findFirst: experimentFindFirst, update: experimentUpdate },
       agentVersionCandidate: {
         findFirst: candidateFindFirst,

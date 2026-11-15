@@ -210,7 +210,7 @@ describe("GET /api/conversations/[id] (polled by the open thread)", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("does not write when there is nothing unread", async () => {
-    prismaMocks.conversation.findFirst.mockResolvedValueOnce({ id: "conv_1", unreadCount: 0 });
+    prismaMocks.conversation.findFirst.mockResolvedValueOnce({ id: "conv_1", unreadCount: 0, messages: [] });
     const { GET } = await import("@/app/api/conversations/[id]/route");
     const res = await GET(new NextRequest("http://localhost/api/conversations/conv_1"), {
       params: Promise.resolve({ id: "conv_1" }),
@@ -220,7 +220,7 @@ describe("GET /api/conversations/[id] (polled by the open thread)", () => {
   });
 
   it("clears unread once when there is something to clear", async () => {
-    prismaMocks.conversation.findFirst.mockResolvedValueOnce({ id: "conv_1", unreadCount: 3 });
+    prismaMocks.conversation.findFirst.mockResolvedValueOnce({ id: "conv_1", unreadCount: 3, messages: [] });
     const { GET } = await import("@/app/api/conversations/[id]/route");
     await GET(new NextRequest("http://localhost/api/conversations/conv_1"), {
       params: Promise.resolve({ id: "conv_1" }),

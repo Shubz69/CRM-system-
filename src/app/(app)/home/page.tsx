@@ -329,7 +329,7 @@ export default function HomePage() {
 
       <SectionCard
         title="Business snapshot"
-        description="Honest counts — ‘needing human’ is handoffs only; ‘needing reply’ also includes unread threads."
+        description="Honest counts — ‘needing human’ is handoffs only; ‘needing reply’ means the customer messaged last."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <SnapshotCard
@@ -348,9 +348,9 @@ export default function HomePage() {
             body={
               snapshot.needsReply == null
                 ? "No data yet"
-                : "Unread or needing human review"
+                : "Customer messaged last — same as the inbox queue"
             }
-            href="/inbox"
+            href="/inbox?queue=needs_reply"
           />
           <SnapshotCard
             title="Contacts"

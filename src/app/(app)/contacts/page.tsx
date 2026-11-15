@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
@@ -30,6 +30,13 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [q, setQ] = useState("");
+  /** Search the loaded pages were drawn from — "Load more" keeps using it. */
+  const [loadedQuery, setLoadedQuery] = useState("");
+  const [total, setTotal] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** Bumps on every fresh load so a slow "Load more" never appends to a newer search. */
+  const listSeqRef = useRef(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -40,6 +47,7 @@ export default function ContactsPage() {
   const [saving, setSaving] = useState(false);
 
   async function load(query = q) {
+    listSeqRef.current += 1;
     setListState("loading");
     const res = await fetch(`/api/contacts?q=${encodeURIComponent(query)}`);
     const json = await res.json();
@@ -48,7 +56,35 @@ export default function ContactsPage() {
       throw new Error(json.error || "Failed");
     }
     setContacts(json.contacts ?? []);
+    setLoadedQuery(query);
+    setTotal(typeof json.total === "number" ? json.total : (json.contacts ?? []).length);
+    setNextOffset(typeof json.nextOffset === "number" ? json.nextOffset : null);
     setListState("ready");
+  }
+
+  async function loadMore() {
+    if (nextOffset == null || loadingMore) return;
+    setLoadingMore(true);
+    const seq = listSeqRef.current;
+    try {
+      const res = await fetch(
+        `/api/contacts?q=${encodeURIComponent(loadedQuery)}&offset=${nextOffset}`,
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load more contacts");
+      if (seq !== listSeqRef.current) return;
+      const page = (json.contacts ?? []) as Contact[];
+      setContacts((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        return [...prev, ...page.filter((c) => !seen.has(c.id))];
+      });
+      if (typeof json.total === "number") setTotal(json.total);
+      setNextOffset(typeof json.nextOffset === "number" ? json.nextOffset : null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load more contacts");
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   useEffect(() => {
@@ -207,6 +243,21 @@ export default function ContactsPage() {
             ))}
           </tbody>
         </table>
+        {listState === "ready" && contacts.length > 0 && nextOffset != null ? (
+          <div className="flex items-center justify-between gap-2 p-3">
+            <span className="meta">
+              Showing {contacts.length.toLocaleString()} of {total.toLocaleString()}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <SlideOver

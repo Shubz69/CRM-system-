@@ -10,58 +10,106 @@ const DEFAULT_OPT_OUT_KEYWORDS = [
   "unsubscribe",
   "opt out",
   "opt-out",
+  "stop messaging",
+  "stop texting",
+  "stop contacting",
+  "stop sending",
+  "stop emailing",
+  "stop dming",
   "don't message",
   "do not message",
   "don't contact",
   "do not contact",
   "remove me",
-  "stop messaging",
   "leave me alone",
+  "no more messages",
+  "take me off",
 ];
 
-/** Lowercase, straighten apostrophes, collapse spaces, drop punctuation/emoji at the edges. */
-function normaliseOptOutText(text: string): string {
+/**
+ * Split a message into lowercase clauses: emoji/symbols dropped, apostrophes straightened,
+ * hyphens inside words become spaces ("opt-out" → "opt out", "non-stop" → "non stop"), and
+ * sentence punctuation, spaced dashes, newlines and " but " separate clauses.
+ */
+function optOutClauses(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[\u2018\u2019\u02bc]/g, "'")
-    .replace(/\s+/g, " ")
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    .replace(/[\u2018\u2019\u02bc`\u00b4]/g, "'")
+    .replace(/\s[-\u2010-\u2015]+\s|[\u2013-\u2015]/g, "\n")
+    .replace(/[.,!?;:\u2026\r\n]+/g, "\n")
+    .replace(/[^\p{L}\p{N}'\n]+/gu, " ")
+    // Apostrophes only survive inside words ("don't"); quote marks around a word do not.
+    .replace(/(?<![\p{L}\p{N}])'+|'+(?![\p{L}\p{N}])/gu, " ")
+    .replace(/(?<![\p{L}\p{N}'])dont(?![\p{L}\p{N}'])/gu, "don't")
+    .split(/\n|\s+but\s+/)
+    .map((clause) => clause.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
-/** Polite lead-ins that still leave a direct command: "please stop", "I'd like to unsubscribe". */
-const OPT_OUT_LEAD_IN =
-  /^(?:(?:please|pls|plz|kindly|just|ok|okay|no|can you|could you|would you|will you|i want to|i'd like to|i would like to|i wish to|i want you to|i need you to)(?![\p{L}\p{N}'])[\s,.!]*)+/u;
-
-/** "stop by", "stop in" invite a visit — not a request to end the conversation. */
-const VISIT_CONTINUATION = /^\s+(?:by|in|over|round|around)\b/;
+function normaliseKeyword(keyword: unknown): string {
+  return optOutClauses(String(keyword ?? "")).join(" ");
+}
 
 /**
- * Return the opt-out keyword the message is a command for, or null.
+ * A bare "stop" is an opt-out only when it is a clause of its own once filler is removed:
+ * "STOP", "Hi, stop", "I said STOP", "No thanks.\nStop it now". Never "can't stop thinking
+ * about it", "the bus stop", "don't stop", "stop by later" or "one-stop shop".
+ */
+const BARE_STOP_WORDS = new Set(["stop", "stopp", "stahp"]);
+const STOP_LEAD_IN =
+  "hi|hey|hello|ok|okay|k|no|nope|nah|but|and|ugh|omg|thanks|thank you|thx|please|pls|plz|" +
+  "kindly|just|seriously|i said|i said to|i told you|i told you to|now|so|can you|could you|" +
+  "would you|will you|i want you to|i need you to|i'd like you to|i would like you to";
+const STOP_SUFFIX =
+  "it|this|now|please|pls|plz|already|all|thanks|thank you|messaging|texting|" +
+  "messaging me|texting me|contacting me|emailing me|dming me|spamming me";
+const STOP_CLAUSE = new RegExp(`^(?:(?:${STOP_LEAD_IN}) )*(?:stop+|stahp)(?: (?:${STOP_SUFFIX}))*$`);
+
+/**
+ * Phrases match anywhere as whole words, except straight after a negation aimed at them:
+ * "please don't remove me", "I don't want to unsubscribe", "don't stop sending me updates".
+ */
+const NEGATED_BEFORE =
+  /(?:^| )(?:don't|do not|didn't|did not|never|not|no need to|(?:i|we) (?:can't|cannot|can not|couldn't))(?: (?:want|wanna|need|mean|plan|intend|wish|like)(?: to)?)?(?: you to| to)?$/;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function phraseMatches(clause: string, phrase: string): boolean {
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}'])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}'])`, "gu");
+  for (const match of clause.matchAll(pattern)) {
+    if (!NEGATED_BEFORE.test(clause.slice(0, match.index).trimEnd())) return true;
+  }
+  return false;
+}
+
+/**
+ * Return the opt-out keyword the message contains as a command, or null.
  *
- * A keyword counts only when it is the whole message or the message starts with it
- * (after a polite lead-in) — "STOP", "stop messaging me", "please unsubscribe me".
- * An occurrence inside a sentence ("can't stop thinking about it", "non-stop",
- * "one-stop shop") is not an opt-out: it would hard-suppress the contact.
+ * - Bare "stop" (also "stopp" / "stahp") counts only as a clause of its own after filler
+ *   ("STOP", "Hi, stop", "I said STOP", "No thanks.\nStop") — never inside a sentence
+ *   ("can't stop thinking about it", "non-stop", "can you stop by tomorrow?").
+ * - Multi-word phrases ("stop messaging", "remove me", "opt out", "leave me alone") and other
+ *   single words ("unsubscribe") match anywhere as whole words, so "Not interested, please
+ *   stop messaging me" and "Thanks but remove me" opt out.
+ *
+ * Org-configured keywords follow the same rules. An opt-out hard-suppresses the contact,
+ * so the bare-"stop" rule stays strict.
  */
 export function matchOptOutKeyword(
   text: string,
   keywords: string[] = DEFAULT_OPT_OUT_KEYWORDS,
 ): string | null {
-  const full = normaliseOptOutText(text);
-  if (!full) return null;
-  // Keep the un-stripped form too, so configured phrases like "no more messages" still match.
-  const candidates = [...new Set([full, full.replace(OPT_OUT_LEAD_IN, "")])];
+  const clauses = optOutClauses(String(text ?? ""));
+  if (!clauses.length) return null;
   for (const keyword of keywords) {
-    const phrase = normaliseOptOutText(String(keyword ?? ""));
+    const phrase = normaliseKeyword(keyword);
     if (!phrase) continue;
-    for (const message of candidates) {
-      if (!message.startsWith(phrase)) continue;
-      const rest = message.slice(phrase.length);
-      // Whole-word only: "stopping", "stop-loss", "unsubscribed" are not the command.
-      if (/^[\p{L}\p{N}'-]/u.test(rest)) continue;
-      if (VISIT_CONTINUATION.test(rest)) continue;
-      return phrase;
-    }
+    const matched = BARE_STOP_WORDS.has(phrase)
+      ? clauses.some((clause) => STOP_CLAUSE.test(clause))
+      : clauses.some((clause) => phraseMatches(clause, phrase));
+    if (matched) return phrase;
   }
   return null;
 }

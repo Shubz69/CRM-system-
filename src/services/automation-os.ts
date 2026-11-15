@@ -5,6 +5,7 @@
 
 import { ApprovalRequestStatus, FollowUpStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { ensureBuiltinToolsRegistered, evaluateToolPolicy } from "@/kernel";
 import {
   AUTOMATION_TRIGGERS,
@@ -51,13 +52,46 @@ export function isOutboundAction(type: string): boolean {
  * the trigger must be one that is emitted, and every action must have an executor.
  * Returns a customer-readable error, or null when valid. Omitted fields are not checked.
  */
+/** Triggers that run after the AI has scored the message (payload carries score + sentiment). */
+const SCORED_TRIGGERS = new Set([
+  "human_requested",
+  "negative_sentiment",
+  "lead_score_changed",
+  "lead_qualified",
+  "lead_disqualified",
+]);
+/** Triggers whose payload carries the customer's message text. */
+const TEXT_TRIGGERS = new Set([...SCORED_TRIGGERS, "new_inbound_message", "lead_replied"]);
+
+/**
+ * Conditions fail closed (a condition the event can't answer never matches), so reject
+ * conditions the chosen trigger can never satisfy instead of saving a rule that never runs.
+ */
+function conditionProblem(triggerType: string, conditions: Record<string, unknown>): string | null {
+  if ((conditions.minScore !== undefined || conditions.sentiment !== undefined) && !SCORED_TRIGGERS.has(triggerType)) {
+    return `Score and sentiment conditions only work with triggers that run after the AI has assessed the message: ${[...SCORED_TRIGGERS].join(", ")}.`;
+  }
+  if (conditions.topicIncludes !== undefined && !TEXT_TRIGGERS.has(triggerType)) {
+    return `Topic conditions need the customer's message — use one of: ${[...TEXT_TRIGGERS].join(", ")}.`;
+  }
+  if (conditions.minutes !== undefined) {
+    return "Inactivity minutes can't be checked by any trigger — schedule a follow-up action with a delay instead.";
+  }
+  return null;
+}
+
 export function validateAutomationRule(input: {
   triggerType?: string | null;
   actions?: Array<Record<string, unknown>> | null;
+  conditions?: Record<string, unknown> | null;
 }): string | null {
   if (input.triggerType !== undefined && input.triggerType !== null) {
     if (!isFiringAutomationTrigger(input.triggerType)) {
       return `Unknown trigger "${input.triggerType}" — it never fires. Use one of: ${AUTOMATION_TRIGGERS.join(", ")}.`;
+    }
+    if (input.conditions) {
+      const problem = conditionProblem(input.triggerType, input.conditions);
+      if (problem) return problem;
     }
   }
   if (input.actions) {
@@ -116,12 +150,15 @@ export function compileNaturalLanguageToWorkflow(nl: string): VisibleWorkflow {
 
   const conditions: Record<string, unknown> = {};
   const scoreMatch = lower.match(/scores?\s*(?:>=|>|above)\s*(\d+)/);
-  if (scoreMatch) conditions.minScore = Number(scoreMatch[1]);
+  if (scoreMatch) {
+    conditions.minScore = Number(scoreMatch[1]);
+    // A score only exists once the AI has assessed the message.
+    if (!SCORED_TRIGGERS.has(triggerType)) triggerType = "lead_score_changed";
+  }
   if (/\bpricing\b|\bprice\b/.test(lower)) {
     conditions.topicIncludes = ["pricing", "price"];
-    unsupported.push(
-      "Topic filters (e.g. pricing) are recorded but not checked yet — the rule runs on every matching trigger.",
-    );
+    // Topics are matched against the customer's message text.
+    if (!TEXT_TRIGGERS.has(triggerType)) triggerType = "new_inbound_message";
   }
   const minutesMatch = lower.match(/(\d+)\s*min/);
 
@@ -277,7 +314,11 @@ export async function createRuleFromWorkflow(input: {
   isActive?: boolean;
 }): Promise<string> {
   const wf = input.workflow;
-  const invalid = validateAutomationRule({ triggerType: wf.triggerType, actions: wf.actions });
+  const invalid = validateAutomationRule({
+    triggerType: wf.triggerType,
+    actions: wf.actions,
+    conditions: wf.conditions as Record<string, unknown> | null,
+  });
   if (invalid) throw new Error(invalid);
   const row = await prisma.automationRule.create({
     data: {
@@ -356,6 +397,8 @@ export type AiOutboundApprovalPayload = {
    * (STALE_CONTEXT) if the customer or the team has written since.
    */
   expectedActivityVersion?: number;
+  /** Booking offer + follow-ups to run once the approved reply is delivered. */
+  followThrough?: import("@/services/messaging/ai-reply-follow-through").AiReplyFollowThrough;
 };
 
 /**
@@ -363,18 +406,47 @@ export type AiOutboundApprovalPayload = {
  * them (the customer wrote again) or a person replied by hand — otherwise owners could
  * approve outdated replies, or approve three drafts and send three answers.
  */
+function draftVersion(payload: unknown): number | null {
+  const v = (payload as { expectedActivityVersion?: unknown } | null)?.expectedActivityVersion;
+  return typeof v === "number" ? v : null;
+}
+
+async function pendingAiDrafts(organisationId: string, conversationId: string) {
+  return prisma.approvalRequest.findMany({
+    where: {
+      organisationId,
+      kind: "ai_outbound_message",
+      status: ApprovalRequestStatus.PENDING,
+      payload: { path: ["conversationId"], equals: conversationId },
+    },
+    select: { id: true, payload: true },
+  });
+}
+
+/**
+ * Retire pending AI reply drafts for a conversation. Used when a newer draft replaces
+ * them (the customer wrote again) or a person replied by hand — otherwise owners could
+ * approve outdated replies, or approve three drafts and send three answers.
+ * With `upToVersion`, only drafts written against that conversation version or earlier
+ * are retired (never a newer one that finished first).
+ */
 export async function expirePendingAiDrafts(input: {
   organisationId: string;
   conversationId: string;
   reason: string;
+  upToVersion?: number | null;
 }): Promise<number> {
+  const pending = await pendingAiDrafts(input.organisationId, input.conversationId);
+  const ids = pending
+    .filter((d) => {
+      if (input.upToVersion == null) return true;
+      const v = draftVersion(d.payload);
+      return v === null || v <= input.upToVersion;
+    })
+    .map((d) => d.id);
+  if (ids.length === 0) return 0;
   const result = await prisma.approvalRequest.updateMany({
-    where: {
-      organisationId: input.organisationId,
-      kind: "ai_outbound_message",
-      status: ApprovalRequestStatus.PENDING,
-      payload: { path: ["conversationId"], equals: input.conversationId },
-    },
+    where: { id: { in: ids }, status: ApprovalRequestStatus.PENDING },
     data: {
       status: ApprovalRequestStatus.EXPIRED,
       decidedAt: new Date(),
@@ -384,20 +456,39 @@ export async function expirePendingAiDrafts(input: {
   return result.count;
 }
 
-/** Send outcomes after which this draft can never be sent — it leaves the queue. */
-const TERMINAL_APPROVAL_SEND_CODES: Record<string, string> = {
-  STALE_CONTEXT:
-    "Not sent — the conversation has moved on since this draft was written. Open it in the inbox and reply from there.",
-  CONTACT_OPTED_OUT: "Not sent — this contact opted out.",
-  DO_NOT_CONTACT: "Not sent — this contact is marked do-not-contact.",
-  CONTACT_SUPPRESSED: "Not sent — this contact opted out.",
-  CONTACT_NOT_FOUND: "Not sent — this contact no longer exists.",
-  CONVERSATION_CLOSED: "Not sent — this conversation is closed.",
-  MESSAGING_WINDOW_CLOSED: "Not sent — the messaging window for this conversation has closed.",
-  META_INSTAGRAM_NO_PRIOR_INBOUND: "Not sent — Instagram only allows replies after the customer messages first.",
-  ZERNIO_NO_PRIOR_INBOUND: "Not sent — Instagram only allows replies after the customer messages first.",
-  PROVIDER_POLICY_BLOCKED: "Not sent — blocked by the messaging platform's rules.",
-};
+/** Plain-English reason an approved message was not (or may not have been) sent. */
+function approvalSendFailureReason(code: string): string {
+  switch (code) {
+    case "STALE_CONTEXT":
+      return "Not sent — the conversation has moved on since this draft was written. Open it in the inbox and reply from there.";
+    case "CONTACT_OPTED_OUT":
+    case "CONTACT_SUPPRESSED":
+      return "Not sent — this contact opted out.";
+    case "DO_NOT_CONTACT":
+      return "Not sent — this contact is marked do-not-contact.";
+    case "CONTACT_NOT_FOUND":
+      return "Not sent — this contact no longer exists.";
+    case "CONVERSATION_NOT_FOUND":
+      return "Not sent — this conversation no longer exists.";
+    case "CONVERSATION_CLOSED":
+      return "Not sent — this conversation is closed.";
+    case "AI_PAUSED":
+      return "Not sent — a person has taken over this conversation (AI is paused). Reply from the inbox.";
+    case "MESSAGING_WINDOW_CLOSED":
+      return "Not sent — the messaging window for this conversation has closed.";
+    case "META_INSTAGRAM_NO_PRIOR_INBOUND":
+    case "ZERNIO_NO_PRIOR_INBOUND":
+      return "Not sent — Instagram only allows replies after the customer messages first.";
+    case "PROVIDER_POLICY_BLOCKED":
+      return "Not sent — blocked by the messaging platform's rules.";
+    case "CONNECTION_REVOKED":
+      return "Not sent — the messaging connection is disconnected. Reconnect it in Integrations, then reply from the inbox.";
+    case "RECONCILIATION_REQUIRED":
+      return "Delivery uncertain — the platform may have received this message. Check the conversation before sending anything else.";
+    default:
+      return `Not sent — the messaging platform rejected it${code ? ` (${code})` : ""}. Reply from the inbox instead.`;
+  }
+}
 
 /** Queue an AI/automated social outbound for human Edit | Reject | Approve & Send. */
 export async function createAiOutboundApprovalRequest(input: {
@@ -406,13 +497,24 @@ export async function createAiOutboundApprovalRequest(input: {
   summary?: string;
   payload: AiOutboundApprovalPayload;
 }): Promise<string> {
-  // A new AI draft is written with the whole conversation in view, so it replaces any
-  // earlier drafts still waiting for approval on the same conversation.
+  // A new AI draft is written with the whole conversation in view, so it replaces earlier
+  // drafts still waiting on the same conversation. When DMs arrive in a burst the replies
+  // can finish out of order: a draft for an older message must never retire a newer one.
   if (input.payload.source === "AI" && input.payload.conversationId) {
+    const version = draftVersion(input.payload);
+    if (version !== null) {
+      const pending = await pendingAiDrafts(input.organisationId, input.payload.conversationId);
+      const newer = pending.find((d) => {
+        const v = draftVersion(d.payload);
+        return v !== null && v > version;
+      });
+      if (newer) return newer.id;
+    }
     await expirePendingAiDrafts({
       organisationId: input.organisationId,
       conversationId: input.payload.conversationId,
       reason: "Replaced by a newer draft after the customer wrote again",
+      upToVersion: version,
     });
   }
   return createApprovalRequest({
@@ -493,9 +595,9 @@ export async function decideApprovalRequest(input: {
       select: { id: true },
     });
     if (newer) {
-      const reason = TERMINAL_APPROVAL_SEND_CODES.STALE_CONTEXT!;
-      await prisma.approvalRequest.update({
-        where: { id: existing.id },
+      const reason = approvalSendFailureReason("STALE_CONTEXT");
+      await prisma.approvalRequest.updateMany({
+        where: { id: existing.id, status: ApprovalRequestStatus.PENDING },
         data: {
           status: ApprovalRequestStatus.EXPIRED,
           decidedAt: new Date(),
@@ -538,8 +640,10 @@ export async function decideApprovalRequest(input: {
     } as Prisma.InputJsonValue;
   }
 
-  await prisma.approvalRequest.update({
-    where: { id: existing.id },
+  // Claim the decision atomically: two approvers (or a double-click) used to both pass the
+  // PENDING check above and both dispatch the message.
+  const claimed = await prisma.approvalRequest.updateMany({
+    where: { id: existing.id, status: ApprovalRequestStatus.PENDING },
     data: {
       status,
       decidedByUserId: input.decidedByUserId ?? null,
@@ -548,6 +652,9 @@ export async function decideApprovalRequest(input: {
       payload: auditPayload,
     },
   });
+  if (claimed.count === 0) {
+    throw new Error("This approval was already decided — refresh to see the latest.");
+  }
 
   let actionsRun = 0;
   if (status === ApprovalRequestStatus.APPROVED && existing.kind === "ai_outbound_message") {
@@ -581,21 +688,27 @@ export async function decideApprovalRequest(input: {
       },
     });
     // ALREADY_CONFIRMED: this exact draft was delivered before (idempotency) — not a failure.
-    if (!send.ok && send.code !== "ALREADY_CONFIRMED") {
+    // IDEMPOTENT_RACE: another request is delivering this same draft right now.
+    if (!send.ok && send.code !== "ALREADY_CONFIRMED" && send.code !== "IDEMPOTENT_RACE") {
       const code = typeof send.code === "string" ? send.code : "";
-      const terminalReason = TERMINAL_APPROVAL_SEND_CODES[code];
-      // The row was marked APPROVED before sending. Never leave it "approved" with nothing
-      // sent: drop drafts that can never go out, and put the rest back in the queue.
+      // The row was marked APPROVED before sending; never leave it "approved" with nothing
+      // sent. A retry reuses this draft's idempotency key and would hit the same recorded
+      // outcome forever, so every failure except a momentary lease clash is final.
+      if (code === "LEASE_UNAVAILABLE") {
+        await prisma.approvalRequest.update({
+          where: { id: existing.id },
+          data: { status: ApprovalRequestStatus.PENDING, decidedAt: null, decidedByUserId: null },
+        });
+        throw new Error(
+          "Another message is being sent to this conversation right now — the draft is still waiting; try again in a moment.",
+        );
+      }
+      const reason = approvalSendFailureReason(code);
       await prisma.approvalRequest.update({
         where: { id: existing.id },
-        data: terminalReason
-          ? { status: ApprovalRequestStatus.EXPIRED, decisionNote: terminalReason }
-          : { status: ApprovalRequestStatus.PENDING, decidedAt: null, decidedByUserId: null },
+        data: { status: ApprovalRequestStatus.EXPIRED, decisionNote: reason },
       });
-      throw new Error(
-        terminalReason ??
-          "Not sent — the messaging provider didn't accept it. The draft is still waiting; try again.",
-      );
+      throw new Error(reason);
     }
     actionsRun = 1;
     await prisma.approvalRequest.update({
@@ -619,6 +732,26 @@ export async function decideApprovalRequest(input: {
           sentAt: new Date(),
           cancelReason: null,
         },
+      });
+    }
+    // Same follow-through as a directly sent AI reply: record the booking offer and
+    // schedule follow-ups. Skipped on an idempotent replay — it already ran then.
+    if (send.ok && p.followThrough) {
+      const { runAiReplyFollowThrough } = await import(
+        "@/services/messaging/ai-reply-follow-through"
+      );
+      await runAiReplyFollowThrough({
+        organisationId: input.organisationId,
+        contactId: p.contactId,
+        conversationId: p.conversationId,
+        leadId: p.leadId ?? null,
+        plan: p.followThrough,
+      }).catch((error) => {
+        // The message is already delivered — never report the approval as failed.
+        logger.warn("Approval follow-through after send failed", {
+          approvalRequestId: existing.id,
+          message: error instanceof Error ? error.message : "unknown",
+        });
       });
     }
   } else if (

@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       .parse(body);
     const conditions = parsed.conditions ?? {};
     const actions = parsed.actions ?? [];
-    const invalid = validateAutomationRule({ triggerType: parsed.triggerType, actions });
+    const invalid = validateAutomationRule({ triggerType: parsed.triggerType, actions, conditions });
     if (invalid) return jsonError(invalid, 400);
     const requiresApproval =
       parsed.requiresApproval ?? actions.some((a) => isOutboundAction(String(a.type)));
@@ -149,7 +149,20 @@ export async function PATCH(req: Request) {
       raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null,
     );
     const body = ruleSchema.extend({ id: z.string() }).parse(raw);
-    const invalid = validateAutomationRule({ triggerType: body.triggerType, actions: body.actions });
+    // Conditions are checked against the rule's trigger — the stored one if not changing.
+    let effectiveTrigger = body.triggerType;
+    if (body.conditions && !effectiveTrigger) {
+      const existing = await prisma.automationRule.findFirst({
+        where: { id: body.id, organisationId: session.organisationId },
+        select: { triggerType: true },
+      });
+      effectiveTrigger = existing?.triggerType;
+    }
+    const invalid = validateAutomationRule({
+      triggerType: effectiveTrigger,
+      actions: body.actions,
+      conditions: body.conditions,
+    });
     if (invalid) return jsonError(invalid, 400);
     const { id, conditions, actions, naturalLanguage: _naturalLanguage, ...rest } = body;
     void _naturalLanguage;

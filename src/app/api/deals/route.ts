@@ -22,6 +22,8 @@ export async function GET(req: Request) {
         organisationId: session.organisationId,
         deletedAt: null,
         status: DealStatus.OPEN,
+        // A deleted contact's deals leave the totals with it (deals without a contact stay).
+        OR: [{ contactId: null }, { contact: { deletedAt: null } }],
       };
       const [openDeals, byCurrency] = await Promise.all([
         prisma.deal.count({ where: openWhere }),

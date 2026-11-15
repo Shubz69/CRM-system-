@@ -9,6 +9,34 @@ import { recordRecommendationFeedback } from "@/services/learning-os";
 /** Gaps still waiting on the team. APPROVED / DISMISSED / USED are closed. */
 const OPEN_RECOMMENDATION_STATUSES = ["NEW", "REVIEWED"];
 
+const KNOWLEDGE_GAP_TAG = "knowledge-gap";
+const MAX_TITLE_LENGTH = 180;
+
+function withTitleSuffix(title: string, suffix: string): string {
+  return `${title.slice(0, MAX_TITLE_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
+/**
+ * upsertKnowledgeDocument matches on title and overwrites what it finds, so approving a gap
+ * titled like a hand-written doc ("Pricing") would replace that doc. Keep the plain title only
+ * when every doc already using it came from this flow (re-approving updates it); otherwise
+ * save under "<title> (from knowledge gap)", numbered if that is taken by another doc too.
+ */
+async function knowledgeGapDocumentTitle(organisationId: string, title: string): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const candidate =
+      attempt === 0
+        ? title
+        : withTitleSuffix(title, ` (from knowledge gap${attempt > 1 ? ` ${attempt}` : ""})`);
+    const sameTitle = await prisma.knowledgeDocument.findMany({
+      where: { organisationId, title: candidate },
+      select: { tags: true },
+    });
+    if (sameTitle.every((doc) => doc.tags.includes(KNOWLEDGE_GAP_TAG))) return candidate;
+  }
+  return withTitleSuffix(title, ` (from knowledge gap ${Date.now().toString(36)})`);
+}
+
 export async function GET() {
   try {
     const session = await requirePermission("knowledge:manage");
@@ -57,12 +85,16 @@ export async function PATCH(req: NextRequest) {
       if (!answer) {
         return jsonError("Add an answer before approving — it is saved to Knowledge for the AI to use.", 400);
       }
+      const title = await knowledgeGapDocumentTitle(
+        session.organisationId,
+        (body.title || existing.question).trim().slice(0, MAX_TITLE_LENGTH),
+      );
       documentId = await upsertKnowledgeDocument({
         organisationId: session.organisationId,
-        title: (body.title || existing.question).trim().slice(0, 180),
+        title,
         category: body.category || "faq",
         content: `Q: ${existing.question.trim()}\n\nA: ${answer}`,
-        tags: ["knowledge-gap"],
+        tags: [KNOWLEDGE_GAP_TAG],
       });
     }
 

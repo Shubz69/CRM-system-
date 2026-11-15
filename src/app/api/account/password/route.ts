@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requireSession } from "@/lib/session";
 import { writeAuditLog } from "@/services/audit";
+import { loadSessionFingerprint, signSessionRefreshProof } from "@/lib/session-security";
 
 const bodySchema = z.object({
   currentPassword: z.string().min(1),
@@ -47,7 +48,14 @@ export async function POST(req: Request) {
       entityId: user.id,
     });
 
-    return Response.json({ ok: true });
+    // Every other session is now revoked. This caller proved they knew the old password,
+    // so hand them a short-lived proof their browser uses to stay signed in.
+    const current = await loadSessionFingerprint(user.id);
+    const sessionRefreshProof = current
+      ? signSessionRefreshProof(user.id, current.fingerprint)
+      : undefined;
+
+    return Response.json({ ok: true, sessionRefreshProof });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);

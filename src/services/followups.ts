@@ -2,7 +2,7 @@ import { FollowUpStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { writeAuditLog } from "@/services/audit";
-import { capabilityAllowsAuto, parseAutopilotConfig } from "@/services/autopilot";
+import { parseAutopilotConfig } from "@/services/autopilot";
 import {
   planFollowUpSchedule,
   type FollowUpPolicyInput,
@@ -31,9 +31,12 @@ export async function scheduleFollowUps(input: {
       where: { id: input.organisationId },
       select: { autopilotConfig: true },
     });
+    // Skip only when follow-ups are switched off. "approval_required" (the default) must
+    // still schedule them — the sender turns each due follow-up into an approval request.
+    // Treating it as "off" meant workspaces on default settings never got a follow-up.
     if (
       !organisation ||
-      !capabilityAllowsAuto(parseAutopilotConfig(organisation.autopilotConfig), "followUps")
+      parseAutopilotConfig(organisation.autopilotConfig).followUps === "disabled"
     ) {
       return 0;
     }

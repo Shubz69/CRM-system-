@@ -66,6 +66,9 @@ export default function ApprovalsPage() {
   const [publishingJobs, setPublishingJobs] = useState<PubJob[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [editDrafts, setEditDrafts] = useState<Record<string, string>>({});
+  // The approval being decided right now — its buttons stay disabled so a double-click
+  // can't send the same message twice.
+  const [deciding, setDeciding] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/approvals");
@@ -148,7 +151,9 @@ export default function ApprovalsPage() {
                 <button
                   className="btn btn-primary"
                   type="button"
+                  disabled={deciding === a.id}
                   onClick={async () => {
+                    setDeciding(a.id);
                     try {
                       const isOutbound =
                         a.kind === "ai_outbound_message" || a.kind === "outbound_message";
@@ -172,23 +177,32 @@ export default function ApprovalsPage() {
                       toast.error(e instanceof Error ? e.message : "Failed");
                       // A refused send may have retired the draft — refresh so it drops off.
                       await load();
+                    } finally {
+                      setDeciding(null);
                     }
                   }}
                 >
                   {a.kind === "ai_outbound_message" || a.kind === "outbound_message"
-                    ? "Approve & Send"
+                    ? deciding === a.id
+                      ? "Sending…"
+                      : "Approve & Send"
                     : "Approve"}
                 </button>
                 <button
                   className="btn btn-secondary"
                   type="button"
+                  disabled={deciding === a.id}
                   onClick={async () => {
+                    setDeciding(a.id);
                     try {
                       await decide({ id: a.id, decision: "REJECTED" });
                       toast.success("Rejected");
                       await load();
                     } catch (e) {
                       toast.error(e instanceof Error ? e.message : "Failed");
+                      await load();
+                    } finally {
+                      setDeciding(null);
                     }
                   }}
                 >

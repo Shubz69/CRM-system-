@@ -19,6 +19,8 @@ export async function GET(req: Request) {
     const where: Prisma.ConversationWhereInput = {
       organisationId: session.organisationId,
       deletedAt: null,
+      // A deleted contact's threads leave the inbox and its counts.
+      contact: { deletedAt: null },
     };
 
     // Overview pages only need numbers — real counts, not the length of a capped list.
@@ -28,8 +30,15 @@ export async function GET(req: Request) {
         prisma.conversation.count({
           where: { ...where, OR: [{ needsHumanReview: true }, { handlingMode: "HUMAN" }] },
         }),
+        // Same rule as the inbox "Needs reply" queue: the customer spoke last.
         prisma.conversation.count({
-          where: { ...where, OR: [{ unreadCount: { gt: 0 } }, { needsHumanReview: true }] },
+          where: {
+            ...where,
+            OR: [
+              { lastInboundAt: { gt: prisma.conversation.fields.lastOutboundAt } },
+              { lastOutboundAt: null, lastInboundAt: { not: null } },
+            ],
+          },
         }),
       ]);
       return Response.json({ total, needingHuman, needsReply });

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   messageFindMany: vi.fn(),
   messageUpdate: vi.fn(),
   conversationUpdate: vi.fn(),
+  conversationFindUnique: vi.fn(async () => ({ activityVersion: 7 })),
   bookingFindFirst: vi.fn(),
   bookingCreate: vi.fn(),
   knowledgeRecommendationCreate: vi.fn(),
@@ -48,7 +49,7 @@ vi.mock("@/lib/db", () => ({
     pipeline: { findFirst: mocks.pipelineFindFirst },
     agentConfiguration: { findFirst: mocks.agentConfigurationFindFirst },
     message: { findMany: mocks.messageFindMany, update: mocks.messageUpdate },
-    conversation: { update: mocks.conversationUpdate },
+    conversation: { update: mocks.conversationUpdate, findUnique: mocks.conversationFindUnique },
     booking: { findFirst: mocks.bookingFindFirst, create: mocks.bookingCreate },
     knowledgeRecommendation: { create: mocks.knowledgeRecommendationCreate },
     $transaction: mocks.$transaction,
@@ -200,10 +201,17 @@ function makeTx(opts: { identifierContact?: Record<string, unknown> | null } = {
     },
     message: {
       upsert: vi.fn(async () => ({ id: "in-msg-1" })),
+      findUnique: vi.fn(async () => null),
     },
     lead: {
       findFirst: vi.fn(async () => ({
         id: "lead-1",
+        stageId: null,
+        score: 0,
+        metadata: {},
+        qualificationStatus: "UNKNOWN",
+      })),
+      findUnique: vi.fn(async () => ({
         stageId: null,
         score: 0,
         metadata: {},

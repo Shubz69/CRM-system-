@@ -37,14 +37,15 @@ export default function CrmHubPage() {
   useEffect(() => {
     Promise.all([
       fetch("/api/contacts?countOnly=1").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/companies").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/companies?countOnly=1").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/deals?summary=1").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/pipeline/stages").then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([contacts, companies, deals, pipeline]) => {
         setSnap({
           contacts: typeof contacts?.total === "number" ? contacts.total : 0,
-          companies: (companies?.companies ?? []).length,
+          // Real count — the list endpoint is capped at 100.
+          companies: typeof companies?.total === "number" ? companies.total : 0,
           openDeals: typeof deals?.openDeals === "number" ? deals.openDeals : 0,
           openValueByCurrency: deals?.openValueByCurrency ?? [],
           stages: (pipeline?.stages ?? []).length,

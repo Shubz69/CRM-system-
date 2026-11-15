@@ -9,6 +9,8 @@ import { prepareAndSendOutbound } from "@/services/messaging/outbound";
 import { createAiOutboundApprovalRequest } from "@/services/automation-os";
 import { isAiAutoSocialSendEnabled } from "@/lib/ai-auto-social-send";
 import { isContactSuppressed } from "@/services/messaging/suppression";
+import { resolveConversationRecipient } from "@/services/messaging/recipient";
+import { parseAutopilotConfig } from "@/lib/autopilot-config";
 
 // Re-export enqueue from jobs layer (no-op — Postgres sweep is authoritative).
 export { enqueueFollowUpCheck } from "@/jobs/follow-ups";
@@ -23,14 +25,53 @@ export async function processDueFollowUps(): Promise<number> {
     },
     include: {
       contact: { include: { identifiers: true } },
-      conversation: true,
+      conversation: { include: { messagingChannel: { select: { provider: true } } } },
     },
     take: 50,
   });
 
   let sent = 0;
+  const followUpModeByOrg = new Map<string, string>();
 
   for (const followUp of due) {
+    // Claim the row before doing anything: overlapping sweeps (worker + cron fallback, or
+    // two worker instances) used to both turn the same follow-up into an approval request.
+    // Pushing scheduledFor out acts as a lease — if this run dies, it is retried later.
+    const claimed = await prisma.followUp.updateMany({
+      where: {
+        id: followUp.id,
+        status: FollowUpStatus.SCHEDULED,
+        scheduledFor: followUp.scheduledFor,
+      },
+      data: { scheduledFor: new Date(Date.now() + 10 * 60_000) },
+    });
+    if (claimed.count === 0) continue;
+
+    if (!followUpModeByOrg.has(followUp.organisationId)) {
+      const org = await prisma.organisation.findUnique({
+        where: { id: followUp.organisationId },
+        select: { autopilotConfig: true },
+      });
+      followUpModeByOrg.set(
+        followUp.organisationId,
+        parseAutopilotConfig(org?.autopilotConfig).followUps,
+      );
+    }
+    const followUpMode = followUpModeByOrg.get(followUp.organisationId);
+    if (followUpMode === "disabled") {
+      await prisma.followUp.update({
+        where: { id: followUp.id },
+        data: { status: FollowUpStatus.CANCELLED, cancelReason: "Follow-ups are switched off" },
+      });
+      continue;
+    }
+
+    const recipient = resolveConversationRecipient({
+      provider: followUp.conversation?.messagingChannel?.provider,
+      identifiers: followUp.contact.identifiers,
+      contactId: followUp.contactId,
+    });
+
     if (
       !followUp.conversation ||
       followUp.conversation.aiPaused ||
@@ -53,7 +94,7 @@ export async function processDueFollowUps(): Promise<number> {
         await isContactSuppressed(
           followUp.organisationId,
           followUp.contactId,
-          "manychat",
+          recipient.provider,
         )
       ) {
         throw new Error("Contact is actively suppressed");
@@ -62,7 +103,7 @@ export async function processDueFollowUps(): Promise<number> {
         organisationId: followUp.organisationId,
         contactId: followUp.contactId,
         conversationId: followUp.conversationId ?? undefined,
-        channel: "manychat",
+        channel: recipient.provider,
         actionType: "FOLLOW_UP",
       });
     } catch (error) {
@@ -104,13 +145,13 @@ export async function processDueFollowUps(): Promise<number> {
       continue;
     }
 
-    const identifier = followUp.contact.identifiers.find((i) => i.channel === "manychat");
-    const externalId = identifier?.identifier.replace(/^manychat:/, "") || followUp.contactId;
+    const externalId = recipient.contactExternalId;
     const body =
       followUp.messageBody ||
       "Just checking in — happy to answer any questions or share a booking link when you are ready.";
 
-    if (!isAiAutoSocialSendEnabled()) {
+    // The workspace's own "approval required" setting applies even when auto-send is on.
+    if (!isAiAutoSocialSendEnabled() || followUpMode === "approval_required") {
       await createAiOutboundApprovalRequest({
         organisationId: followUp.organisationId,
         title: "Approve AI follow-up message",
@@ -121,12 +162,16 @@ export async function processDueFollowUps(): Promise<number> {
           conversationId: followUp.conversationId!,
           contactId: followUp.contactId,
           contactExternalId: externalId,
+          provider: recipient.provider,
+          channel: recipient.provider,
           source: "FOLLOW_UP",
           holder: `followup:${followUp.id}`,
           idempotencyKey: `followup:${followUp.id}`,
           threadId: followUp.conversation.externalThreadId ?? undefined,
           followUpId: followUp.id,
           leadId: followUp.leadId ?? undefined,
+          // Refuse the follow-up at approval time if the lead or the team wrote since.
+          expectedActivityVersion: followUp.conversation.activityVersion,
         },
       });
       await prisma.followUp.update({
@@ -156,6 +201,9 @@ export async function processDueFollowUps(): Promise<number> {
       holder: `followup:${followUp.id}`,
       idempotencyKey: `followup:${followUp.id}`,
       threadId: followUp.conversation.externalThreadId ?? undefined,
+      provider: recipient.provider,
+      channel: recipient.provider,
+      expectedActivityVersion: followUp.conversation.activityVersion,
     });
 
     if (!sendResult.ok) {

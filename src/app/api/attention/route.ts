@@ -5,6 +5,8 @@ export async function GET() {
   try {
     const session = await requirePermission("inbox:read");
     const orgId = session.organisationId;
+    // A deleted contact's threads, leads and bookings no longer need attention.
+    const liveContact = { contact: { deletedAt: null } };
 
     const [handoffs, lowConfidence, hotLeads, knowledgeGaps, failedJobs, disconnected, bookings] =
       await Promise.all([
@@ -12,6 +14,7 @@ export async function GET() {
           where: {
             organisationId: orgId,
             deletedAt: null,
+            ...liveContact,
             OR: [{ needsHumanReview: true }, { handlingMode: "HUMAN" }],
           },
           include: { contact: true },
@@ -22,13 +25,14 @@ export async function GET() {
           where: {
             organisationId: orgId,
             deletedAt: null,
+            ...liveContact,
             handoffReason: { contains: "confidence", mode: "insensitive" },
           },
           include: { contact: true },
           take: 20,
         }),
         prisma.lead.findMany({
-          where: { organisationId: orgId, deletedAt: null, score: { gte: 70 } },
+          where: { organisationId: orgId, deletedAt: null, ...liveContact, score: { gte: 70 } },
           include: { contact: true, stage: true },
           orderBy: { score: "desc" },
           take: 20,
@@ -51,6 +55,7 @@ export async function GET() {
           where: {
             organisationId: orgId,
             status: { in: ["CANCELLED", "NO_SHOW"] },
+            ...liveContact,
           },
           include: { contact: true },
           orderBy: { updatedAt: "desc" },

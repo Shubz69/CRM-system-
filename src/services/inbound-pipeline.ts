@@ -1,5 +1,4 @@
 import {
-  BookingStatus,
   HandlingMode,
   MessageDirection,
   MessageSenderType,
@@ -20,7 +19,7 @@ import { upsertCampaignAttribution } from "@/services/attribution";
 import { runAutomations } from "@/services/automations";
 import { routeAndAnalyse } from "@/services/ai-router";
 import { flattenCrmMemory, mergeCrmMemory, readCrmMemory } from "@/services/crm-memory";
-import { cancelFollowUpsOnOptOut, cancelPendingFollowUps, scheduleFollowUps } from "@/services/followups";
+import { cancelFollowUpsOnOptOut, cancelPendingFollowUps } from "@/services/followups";
 import { retrieveRelevantKnowledge } from "@/services/knowledge";
 import {
   notifyOnHandover,
@@ -32,6 +31,10 @@ import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/
 import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
 import { aiMayMoveStage, aiMaySetQualification } from "@/services/lead-stage-guard";
+import {
+  runAiReplyFollowThrough,
+  type AiReplyFollowThrough,
+} from "@/services/messaging/ai-reply-follow-through";
 import { recordUsage } from "@/services/usage";
 import {
   capabilityAllowsAuto,
@@ -190,15 +193,18 @@ export async function processInboundMessage(
   });
 
   if (!organisation) {
+    // Permanent: the workspace was deleted. Acknowledge and ignore — throwing made every
+    // DM for it fail with 5xx, and Meta retries those for hours (and can disable the
+    // webhook for every tenant).
     await prisma.webhookEvent.update({
       where: { id: webhookEvent.id },
       data: {
-        status: WebhookProcessingStatus.FAILED,
-        error: "Organisation not found",
+        status: WebhookProcessingStatus.IGNORED,
+        error: "Organisation not found or deleted",
         processedAt: new Date(),
       },
     });
-    throw new Error("Organisation not found");
+    return { duplicate: false, webhookEventId: webhookEvent.id };
   }
 
   if (organisation.status === "SUSPENDED") {
@@ -402,7 +408,20 @@ export async function processInboundMessage(
         });
         conversationCreated = true;
       }
-      if (!conversationCreated && conversation) {
+      const externalId =
+        input.message.externalId || `in_${idempotencyKey.slice(0, 24)}`;
+      // A redelivery of a message stored by an earlier, partly failed attempt (e.g. Meta
+      // retrying after a 5xx) must not bump unread counts or the conversation version again.
+      const alreadyStored =
+        conversation && !conversationCreated
+          ? await tx.message.findUnique({
+              where: {
+                conversationId_externalId: { conversationId: conversation.id, externalId },
+              },
+              select: { id: true },
+            })
+          : null;
+      if (!conversationCreated && conversation && !alreadyStored) {
         const windows = openMessagingWindows();
         const prevMeta =
           conversation.metadata && typeof conversation.metadata === "object" && !Array.isArray(conversation.metadata)
@@ -435,8 +454,6 @@ export async function processInboundMessage(
         throw new Error("Conversation could not be created or resolved");
       }
 
-      const externalId =
-        input.message.externalId || `in_${idempotencyKey.slice(0, 24)}`;
       // Upsert (not create + catch P2002): a redelivered message returns the stored row, and a
       // concurrent insert surfaces as P2002 for the whole-transaction retry.
       const inboundMessage = await tx.message.upsert({
@@ -697,6 +714,17 @@ export async function processInboundMessage(
       query: input.message.text,
     });
 
+    // The version the AI's reply is drafted against: read right before the history the AI
+    // sees, so anything already in that history (e.g. an automation's message sent a moment
+    // ago) doesn't make its own reply look stale. Only later activity does.
+    const draftActivityVersion =
+      (
+        await prisma.conversation.findUnique({
+          where: { id: result.conversation.id },
+          select: { activityVersion: true },
+        })
+      )?.activityVersion ?? result.conversation.activityVersion;
+
     const recentMessages = await prisma.message.findMany({
       where: { conversationId: result.conversation.id },
       orderBy: { sentAt: "asc" },
@@ -826,18 +854,44 @@ export async function processInboundMessage(
     const targetStage = allowPipeline
       ? defaultPipeline?.stages.find((s) => s.slug === stageSlug) ?? null
       : null;
-    const currentStage = defaultPipeline?.stages.find((s) => s.id === result.lead.stageId) ?? null;
-    // Never undo a person's stage move or drag a lead backwards / out of Booked or Won.
-    const stage =
-      targetStage &&
-      aiMayMoveStage({ current: currentStage, target: targetStage, metadata: result.lead.metadata })
-        ? targetStage
-        : null;
-    const allowQualificationWrite =
-      capabilityAllowsAuto(autopilotConfig, "qualification") &&
-      aiMaySetQualification(result.lead.metadata);
+
+    // Decided inside the write below, against the lead as it is now — a person may have
+    // moved it during the multi-second AI call, and that move must win.
+    let allowQualificationWrite = false;
+    let previousQualification = result.lead.qualificationStatus;
+    let previousAiQualification: string | null = null;
+    let previousScoreForTrigger = result.lead.score ?? 0;
 
     await prisma.$transaction(async (tx) => {
+      const freshLead =
+        (await tx.lead.findUnique({
+          where: { id: result.lead.id },
+          select: { stageId: true, metadata: true, qualificationStatus: true, score: true },
+        })) ?? result.lead;
+      const freshMeta =
+        freshLead.metadata && typeof freshLead.metadata === "object" && !Array.isArray(freshLead.metadata)
+          ? (freshLead.metadata as Record<string, unknown>)
+          : {};
+      const currentStage = defaultPipeline?.stages.find((s) => s.id === freshLead.stageId) ?? null;
+      // Never undo a person's stage move or drag a lead backwards / out of Booked or Won.
+      const stage =
+        targetStage &&
+        aiMayMoveStage({ current: currentStage, target: targetStage, metadata: freshMeta })
+          ? targetStage
+          : null;
+      allowQualificationWrite =
+        capabilityAllowsAuto(autopilotConfig, "qualification") && aiMaySetQualification(freshMeta);
+      previousQualification = freshLead.qualificationStatus;
+      previousAiQualification =
+        typeof freshMeta.lastAiQualification === "string" ? freshMeta.lastAiQualification : null;
+      // With AI scoring off the score column never changes, so compare with the AI's
+      // last assessment instead (otherwise "score changed" fired on every message).
+      previousScoreForTrigger = allowScoring
+        ? freshLead.score ?? 0
+        : typeof freshMeta.lastAiScore === "number"
+          ? freshMeta.lastAiScore
+          : freshLead.score ?? 0;
+
       await tx.conversation.update({
         where: { id: result.conversation.id },
         data: {
@@ -851,11 +905,8 @@ export async function processInboundMessage(
         },
       });
 
-      const previousScore = result.lead.score ?? 0;
-      const existingMeta =
-        result.lead.metadata && typeof result.lead.metadata === "object"
-          ? (result.lead.metadata as Record<string, unknown>)
-          : {};
+      const previousScore = freshLead.score ?? 0;
+      const existingMeta = freshMeta;
       const crmMemory = mergeCrmMemory({
         existing: existingMemory,
         updates: {
@@ -897,6 +948,10 @@ export async function processInboundMessage(
               : typeof existingMeta.stageChangedBy === "string"
                 ? existingMeta.stageChangedBy
                 : null,
+            // The AI's latest verdicts, kept even when it may not write the real fields, so
+            // "lead qualified" / "score changed" automations fire on a change, not every DM.
+            lastAiQualification: analysis.qualification_status,
+            lastAiScore: score.totalScore,
           } as Prisma.InputJsonValue,
         },
       });
@@ -1064,24 +1119,25 @@ export async function processInboundMessage(
     });
 
     // "Score changed" means changed — it used to fire on every message.
-    if ((result.lead.score ?? 0) !== score.totalScore) {
+    if (previousScoreForTrigger !== score.totalScore) {
       await runAutomations({
         organisationId: input.organisationId,
         contactId: result.contact.id,
         conversationId: result.conversation.id,
         leadId: result.lead.id,
         triggerType: "lead_score_changed",
-        payload: { ...analysisPayload, previousScore: result.lead.score ?? 0 },
+        payload: { ...analysisPayload, previousScore: previousScoreForTrigger },
       });
     }
 
     // Fire on the transition only. These used to run on every message from an already
-    // qualified lead, creating a new approval / follow-up each time.
-    const previousQualification = result.lead.qualificationStatus;
+    // qualified lead, creating a new approval / follow-up each time. The AI's previous
+    // verdict is tracked separately so this also works when it may not write the
+    // qualification field itself (qualification set to "approval required").
     if (
       analysis.qualification_status === "qualified" &&
-      allowQualificationWrite &&
-      previousQualification !== QualificationStatus.QUALIFIED
+      previousQualification !== QualificationStatus.QUALIFIED &&
+      previousAiQualification !== "qualified"
     ) {
       await runAutomations({
         organisationId: input.organisationId,
@@ -1095,8 +1151,8 @@ export async function processInboundMessage(
 
     if (
       analysis.qualification_status === "disqualified" &&
-      allowQualificationWrite &&
-      previousQualification !== QualificationStatus.DISQUALIFIED
+      previousQualification !== QualificationStatus.DISQUALIFIED &&
+      previousAiQualification !== "disqualified"
     ) {
       await runAutomations({
         organisationId: input.organisationId,
@@ -1169,6 +1225,21 @@ export async function processInboundMessage(
         !isAiAutoSocialSendEnabled() ||
         capabilityRequiresApproval(autopilotConfig, "aiResponses");
 
+      // What happens once this reply reaches the lead — run immediately after a direct
+      // send, or by Approve & Send for a draft waiting on a person.
+      const followThrough: AiReplyFollowThrough = {
+        offeredBookingUrl,
+        attribution: {
+          source: input.leadSource || "instagram_manychat",
+          campaign: input.campaignSource || null,
+        },
+        followUp: {
+          intent: analysis.intent || l0.intent,
+          qualificationStatus: analysis.qualification_status || result.lead.qualificationStatus,
+          meetingBooked: analysis.recommended_next_action === "send_booking_link",
+        },
+      };
+
       if (mustRequireApproval) {
         await createAiOutboundApprovalRequest({
           organisationId: input.organisationId,
@@ -1189,7 +1260,8 @@ export async function processInboundMessage(
             agentVersion: routed.model,
             inboundMessageId: result.inboundMessage.id,
             leadId: result.lead.id,
-            expectedActivityVersion: result.conversation.activityVersion,
+            expectedActivityVersion: draftActivityVersion,
+            followThrough,
           },
         });
         await prisma.conversation.update({
@@ -1222,7 +1294,7 @@ export async function processInboundMessage(
         channel: messagingProvider,
         // The version this reply was drafted against. Outbound used to snapshot it after the
         // multi-second AI call, so a newer DM arriving meanwhile never made this reply stale.
-        expectedActivityVersion: result.conversation.activityVersion,
+        expectedActivityVersion: draftActivityVersion,
       });
 
       if (sendResult.ok && sendResult.dispatch?.messageId) {
@@ -1256,10 +1328,14 @@ export async function processInboundMessage(
           },
         });
       } else if (!sendResult.ok) {
-        logger.error("Failed to send AI reply", {
+        // STALE_CONTEXT / LEASE_UNAVAILABLE: a newer message or another reply to this
+        // conversation took over — this reply is superseded, not a delivery failure.
+        const superseded =
+          sendResult.code === "STALE_CONTEXT" || sendResult.code === "LEASE_UNAVAILABLE";
+        (superseded ? logger.info : logger.error)("AI reply not sent", {
           code: "code" in sendResult ? sendResult.code : "UNKNOWN",
         });
-        if (sendResult.code !== "STALE_CONTEXT") {
+        if (!superseded) {
           await prisma.conversation.update({
             where: { id: result.conversation.id },
             data: { needsHumanReview: true },
@@ -1278,67 +1354,20 @@ export async function processInboundMessage(
       }
       }
 
-      if (aiReplySent && offeredBookingUrl) {
-        // Retries / repeat offers reuse the open offer instead of stacking OFFERED rows.
-        const openOffer = await prisma.booking.findFirst({
-          where: {
-            organisationId: input.organisationId,
-            leadId: result.lead.id,
-            status: BookingStatus.OFFERED,
-          },
-          select: { id: true },
-        });
-        if (!openOffer) {
-          await prisma.booking.create({
-            data: {
-              organisationId: input.organisationId,
-              contactId: result.contact.id,
-              conversationId: result.conversation.id,
-              leadId: result.lead.id,
-              provider: process.env.BOOKING_PROVIDER || "link",
-              status: BookingStatus.OFFERED,
-              bookingUrl: offeredBookingUrl,
-              attribution: {
-                source: input.leadSource || "instagram_manychat",
-                campaign: input.campaignSource || null,
-              },
-            },
-          });
-        }
-        await runAutomations({
-          organisationId: input.organisationId,
-          contactId: result.contact.id,
-          conversationId: result.conversation.id,
-          leadId: result.lead.id,
-          triggerType: "booking_link_sent",
-          payload: { bookingUrl: offeredBookingUrl },
-        });
-      }
-
-      // Follow-ups chase a reply the lead actually received — not a draft awaiting approval
-      // or a send that failed.
+      // Booking offer + follow-ups chase a reply the lead actually received — not a draft
+      // awaiting approval (Approve & Send runs this then) or a send that failed.
       if (aiReplySent) {
-        const delays = Array.isArray(agentConfig?.followUpDelaysMinutes)
-          ? (agentConfig?.followUpDelaysMinutes as number[])
-          : [60, 1440, 4320];
-
-        await scheduleFollowUps({
+        await runAiReplyFollowThrough({
           organisationId: input.organisationId,
           contactId: result.contact.id,
           conversationId: result.conversation.id,
           leadId: result.lead.id,
-          delaysMinutes: delays,
-          maxFollowUps: agentConfig?.maxFollowUps ?? 3,
-          skipIfAutopilotDisabled: true,
-          policyInputs: {
-            intent: analysis.intent || l0.intent,
-            qualificationStatus: analysis.qualification_status || result.lead.qualificationStatus,
-            attemptNumber: 0,
-            maxAttempts: agentConfig?.maxFollowUps ?? 3,
-            meetingBooked: analysis.recommended_next_action === "send_booking_link",
-            optedOut: false,
-            lastInboundAt: result.conversation.lastInboundAt,
-          },
+          plan: followThrough,
+          followUpDelaysMinutes: Array.isArray(agentConfig?.followUpDelaysMinutes)
+            ? (agentConfig?.followUpDelaysMinutes as number[])
+            : null,
+          maxFollowUps: agentConfig?.maxFollowUps ?? null,
+          lastInboundAt: result.conversation.lastInboundAt,
         });
       }
       }

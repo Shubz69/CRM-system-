@@ -90,6 +90,15 @@ vi.mock("@/lib/env", () => ({
   })),
 }));
 
+const lockout = vi.hoisted(() => ({
+  reserve: vi.fn(async () => true),
+  recordSuccess: vi.fn(async () => undefined),
+}));
+vi.mock("@/lib/session-security", () => ({
+  reserveLoginAttempt: lockout.reserve,
+  recordSuccessfulLogin: lockout.recordSuccess,
+}));
+
 vi.mock("bcryptjs", () => ({
   hash: vi.fn(async (pw: string) => `hashed:${pw}`),
   compare: vi.fn(async (pw: string, stored: string) => stored === `hashed:${pw}`),
@@ -447,6 +456,16 @@ describe("workspace onboarding", () => {
         password: "attacker-password",
       });
       expect(result.userId).toBe("user_attacker");
+    });
+
+    it("acceptInvite shares the sign-in lockout, so it can't be used to guess passwords", async () => {
+      mocks.organisationInvitation.findUnique.mockResolvedValue(pendingInvite);
+      mocks.user.findFirst.mockResolvedValue(preRegistered);
+      lockout.reserve.mockResolvedValueOnce(false);
+      await expect(
+        acceptInvite({ token: raw, email: "victim@corp.test", password: "attacker-password" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringMatching(/Too many/) });
+      expect(mocks.organisationMember.create).not.toHaveBeenCalled();
     });
 
     it("acceptInvite never reactivates a disabled account", async () => {

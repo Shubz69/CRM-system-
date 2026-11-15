@@ -15,13 +15,32 @@ import { dispatchOutboundMessage } from "@/services/messaging/outbound";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, { params }: Params) {
+/** The open thread shows at most this many of the newest messages. */
+const THREAD_MESSAGE_LIMIT = 500;
+
+export async function GET(req: NextRequest, { params }: Params) {
   try {
     const session = await requirePermission("inbox:read");
     const { id } = await params;
+    const where = { id, organisationId: session.organisationId, deletedAt: null };
+
+    // The open thread polls this: a cheap "has anything changed?" read, so the full
+    // thread is only reloaded when it did. Read-only — never clears the unread count.
+    if (new URL(req.url).searchParams.get("versionOnly") === "1") {
+      const row = await prisma.conversation.findFirst({
+        where,
+        select: { activityVersion: true, lastMessageAt: true, unreadCount: true },
+      });
+      if (!row) return jsonError("Conversation not found", 404);
+      return Response.json({
+        activityVersion: row.activityVersion,
+        lastMessageAt: row.lastMessageAt,
+        unreadCount: row.unreadCount,
+      });
+    }
 
     const conversation = await prisma.conversation.findFirst({
-      where: { id, organisationId: session.organisationId, deletedAt: null },
+      where,
       include: {
         contact: {
           include: {
@@ -29,7 +48,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
             notes: { orderBy: { createdAt: "desc" }, take: 20 },
           },
         },
-        messages: { orderBy: { sentAt: "asc" } },
+        // Newest first so the cap keeps the latest messages; flipped back below for display.
+        messages: { orderBy: { sentAt: "desc" }, take: THREAD_MESSAGE_LIMIT },
         leads: {
           where: { deletedAt: null },
           include: {
@@ -65,6 +85,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
       });
     }
 
+    // Oldest → newest for display.
+    conversation.messages.reverse();
     return Response.json({ conversation });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
@@ -96,6 +118,11 @@ function humanReplyIdempotencyKey(input: {
   return `human-reply:${input.conversationId}:${input.userId}:${bodyHash}:${minuteBucket}`;
 }
 
+/** The reply definitely did not go out: the client may retry it with a fresh idempotency key. */
+function notDeliveredError(error: string, status: number) {
+  return Response.json({ error, notDelivered: true }, { status });
+}
+
 const patchSchema = z.object({
   aiPaused: z.boolean().optional(),
   handlingMode: z.nativeEnum(HandlingMode).optional(),
@@ -121,8 +148,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const { id } = await params;
     const body = patchSchema.parse(raw);
 
-    // Reassigning a conversation is its own permission (inbox:write alone may not reassign).
-    if (body.assignUserId !== undefined && !roleHasPermission(session.role, "inbox:assign")) {
+    // Reassigning a conversation is its own permission (inbox:assign). Without it, a person
+    // may only take an unassigned conversation themselves or let go of their own.
+    const canAssignAnyone = roleHasPermission(session.role, "inbox:assign");
+    const changingAssignment = body.assignUserId !== undefined;
+    if (
+      changingAssignment &&
+      !canAssignAnyone &&
+      body.assignUserId !== null &&
+      body.assignUserId !== session.userId
+    ) {
       return jsonError("You don't have permission to reassign conversations.", 403);
     }
 
@@ -132,9 +167,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         contact: { include: { identifiers: true } },
         messagingChannel: { select: { provider: true } },
         leads: { where: { deletedAt: null }, take: 1 },
+        assignments: { where: { active: true }, select: { userId: true } },
       },
     });
     if (!conversation) return jsonError("Conversation not found", 404);
+
+    if (changingAssignment && !canAssignAnyone) {
+      const currentAssigneeId = conversation.assignments[0]?.userId ?? null;
+      if (currentAssigneeId !== null && currentAssigneeId !== session.userId) {
+        return jsonError(
+          "This conversation is assigned to someone else — ask a manager to reassign it.",
+          403,
+        );
+      }
+    }
 
     // Validate everything before writing anything, so a rejected request changes nothing.
     const lead = conversation.leads[0];
@@ -253,7 +299,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         optedOut: conversation.contact.optedOut,
       });
       if (!windowState.humanReplyAllowed) {
-        return jsonError(
+        return notDeliveredError(
           windowState.humanBlockedReason?.includes("opted out")
             ? "Do not contact — customer opted out."
             : windowState.humanBlockedReason || "Human messaging window has closed",
@@ -309,14 +355,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           sendResult.code === "ZERNIO_NO_PRIOR_INBOUND" ||
           sendResult.code === "PROVIDER_POLICY_BLOCKED"
         ) {
+          // Refused before sending — definitely not delivered, so a retry gets a fresh key.
           if (
             sendResult.code === "CONTACT_OPTED_OUT" ||
             sendResult.code === "DO_NOT_CONTACT" ||
             sendResult.code === "CONTACT_SUPPRESSED"
           ) {
-            return jsonError("Do not contact — customer opted out.", 403);
+            return notDeliveredError("Do not contact — customer opted out.", 403);
           }
-          return jsonError(
+          return notDeliveredError(
             sendResult.code === "MESSAGING_WINDOW_CLOSED"
               ? "Messaging window has closed"
               : "This reply could not be sent under current messaging rules.",

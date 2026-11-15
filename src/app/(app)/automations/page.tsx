@@ -80,6 +80,8 @@ export default function AutomationsPage() {
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  // Approval being decided right now — its buttons stay disabled (no double sends).
+  const [deciding, setDeciding] = useState<string | null>(null);
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [name, setName] = useState("");
   const [triggerType, setTriggerType] = useState("lead_qualified");
@@ -168,20 +170,26 @@ export default function AutomationsPage() {
   }
 
   async function decide(id: string, decision: "APPROVED" | "REJECTED") {
-    const response = await fetch("/api/approvals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, decision }),
-    });
-    const json = await response.json();
-    if (!response.ok) {
-      toast.error(json.error || "Failed");
-      // A refused send may have retired the draft — refresh so it drops off.
+    if (deciding) return;
+    setDeciding(id);
+    try {
+      const response = await fetch("/api/approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, decision }),
+      });
+      const json = await response.json();
+      if (!response.ok) {
+        toast.error(json.error || "Failed");
+        // A refused send may have retired the draft — refresh so it drops off.
+        await load();
+        return;
+      }
+      toast.success(decision === "APPROVED" ? "Approved — actions ran" : "Rejected");
       await load();
-      return;
+    } finally {
+      setDeciding(null);
     }
-    toast.success(decision === "APPROVED" ? "Approved — actions ran" : "Rejected");
-    await load();
   }
 
   const pending = approvals.filter((a) => a.status === "PENDING");
@@ -312,10 +320,10 @@ export default function AutomationsPage() {
                 <p className="font-medium">{a.title}</p>
                 <p className="text-xs text-[var(--muted)]">{approvalDetail(a)}</p>
               </div>
-              <button className="btn btn-primary" type="button" onClick={() => void decide(a.id, "APPROVED")}>
+              <button className="btn btn-primary" type="button" disabled={deciding === a.id} onClick={() => void decide(a.id, "APPROVED")}>
                 Approve
               </button>
-              <button className="btn btn-secondary" type="button" onClick={() => void decide(a.id, "REJECTED")}>
+              <button className="btn btn-secondary" type="button" disabled={deciding === a.id} onClick={() => void decide(a.id, "REJECTED")}>
                 Reject
               </button>
             </article>

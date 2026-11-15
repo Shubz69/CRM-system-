@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { jsonError } from "@/lib/session";
+import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/session-security";
 import {
   acceptInvite,
   getInviteByToken,
@@ -43,6 +45,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = clientIp(req.headers.get("x-forwarded-for"));
+    if (!rateLimit(`accept-invite:${ip}`, 10, 60_000)) {
+      return jsonError("Too many attempts — try again in a minute", 429);
+    }
     const body = acceptSchema.parse(await req.json());
     const result = await acceptInvite({
       token: body.token,

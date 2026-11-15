@@ -11,16 +11,24 @@ import { statusLabel } from "@/lib/customer-labels";
 import { useSession } from "next-auth/react";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 import { useVisibleInterval } from "@/hooks/use-visible-interval";
+import { roleHasPermission } from "@/lib/permissions";
+import type { MemberRole } from "@prisma/client";
 import {
+  assigneeChoices,
+  INBOX_LIST_MAX,
   INBOX_QUEUES,
+  inboxListPaging,
   type InboxQueue,
   matchesInboxQueue,
   newReplyIdempotencyKey,
   parseInboxQueue,
+  threadChanged,
 } from "./inbox-queues";
 
 /** Conversations per "Load more" step (the list poll re-reads everything loaded so far). */
 const LIST_PAGE_SIZE = 100;
+/** The thread endpoint returns at most this many of the newest messages. */
+const THREAD_MESSAGE_LIMIT = 500;
 
 const QUEUE_LABELS: Record<InboxQueue, string> = {
   all: "All",
@@ -65,6 +73,7 @@ type ConversationDetail = {
   needsHumanReview: boolean;
   /** Bumped by every inbound/outbound/handoff — sent with replies so stale sends are refused. */
   activityVersion?: number;
+  lastMessageAt?: string | null;
   lastInboundAt?: string | null;
   lastOutboundAt?: string | null;
   messagingWindowExpiresAt?: string | null;
@@ -148,8 +157,10 @@ export default function InboxPage() {
   const detailRefreshSeqRef = useRef(0);
   const listLimitRef = useRef(LIST_PAGE_SIZE);
   const listSeqRef = useRef(0);
-  const [canLoadMore, setCanLoadMore] = useState(false);
+  const [listPaging, setListPaging] = useState({ canLoadMore: false, capped: false, total: 0 });
   const [loadingMore, setLoadingMore] = useState(false);
+  /** What the open thread was last loaded at — the light poll compares against it. */
+  const detailRef = useRef<ConversationDetail | null>(null);
   /** One idempotency key per composed reply; kept across retries of that same text. */
   const replyKeyRef = useRef<{ key: string; conversationId: string; text: string } | null>(null);
 
@@ -160,6 +171,10 @@ export default function InboxPage() {
   useEffect(() => {
     detailStateRef.current = detailState;
   }, [detailState]);
+
+  useEffect(() => {
+    detailRef.current = detail;
+  }, [detail]);
 
   const selectConversation = useCallback((id: string) => {
     // Synchronous selection — never briefly clear to null while targeting an id.
@@ -183,15 +198,15 @@ export default function InboxPage() {
     const conversations = (json.conversations ?? []) as ConversationListItem[];
     setItems(conversations);
     const total = typeof json.total === "number" ? json.total : conversations.length;
-    // Server caps the page size; only offer more when this page came back full.
-    setCanLoadMore(conversations.length >= limit && conversations.length < total);
+    // More to show while loaded < total, up to the server's cap.
+    setListPaging({ ...inboxListPaging({ loaded: conversations.length, total, limit }), total });
     if (!selectedIdRef.current && conversations[0]?.id) {
       selectConversation(conversations[0].id);
     }
   }, [selectConversation]);
 
   async function loadMore() {
-    listLimitRef.current += LIST_PAGE_SIZE;
+    listLimitRef.current = Math.min(listLimitRef.current + LIST_PAGE_SIZE, INBOX_LIST_MAX);
     setLoadingMore(true);
     try {
       await loadList();
@@ -219,6 +234,18 @@ export default function InboxPage() {
     const state = detailStateRef.current;
     // Only once the selected thread has loaded — never alongside the initial load.
     if (state.status !== "ready" || state.id !== selectedIdRef.current) return;
+    const targetId = state.id;
+    const shown = detailRef.current;
+    if (!shown || shown.id !== targetId) {
+      await refreshDetail();
+      return;
+    }
+    // Cheap check first; reload the whole thread only when something new happened.
+    const res = await fetch(`/api/conversations/${targetId}?versionOnly=1`);
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json) return; // keep what is on screen; next tick retries
+    if (selectedIdRef.current !== targetId) return;
+    if (!threadChanged(shown, json)) return;
     await refreshDetail();
   }, [refreshDetail]);
 
@@ -297,6 +324,13 @@ export default function InboxPage() {
   }, [showCustomerSheet]);
 
   const lead = detail?.leads?.[0];
+  const currentUserId = session?.user?.id ?? null;
+  // Live role from the members list (the session's role can lag a role change).
+  const currentRole =
+    members.find((m) => m.id === currentUserId)?.role ?? session?.user?.role ?? null;
+  const canAssignAnyone = currentRole
+    ? roleHasPermission(currentRole as MemberRole, "inbox:assign")
+    : false;
   const sendTargetMatches =
     Boolean(selectedId) && Boolean(detail) && detail?.id === selectedId;
   const optedOut = Boolean(detail?.contact.optedOut);
@@ -431,6 +465,13 @@ export default function InboxPage() {
 
   if (loading) return <PageLoading label="Loading inbox" />;
 
+  const ownerChoices = assigneeChoices({
+    canAssignAnyone,
+    currentUserId,
+    currentAssignee: detail?.assignments?.[0]?.user ?? null,
+    members,
+  });
+
   const customerPanel = detail ? (
     <div className="space-y-4 text-sm">
       <div>
@@ -485,15 +526,18 @@ export default function InboxPage() {
         <select
           className="input mt-2"
           value={detail.assignments?.[0]?.user.id || ""}
+          disabled={ownerChoices.locked}
           onChange={(e) => patch({ assignUserId: e.target.value || null })}
         >
-          <option value="">Unassigned</option>
-          {members.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.name || member.email}
+          {ownerChoices.options.map((option) => (
+            <option key={option.value || "unassigned"} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
+        {ownerChoices.locked ? (
+          <p className="meta mt-1">Assigned to a teammate — a manager can reassign it.</p>
+        ) : null}
       </div>
       <details>
         <summary className="caption cursor-pointer">Signals & follow-ups</summary>
@@ -687,7 +731,7 @@ export default function InboxPage() {
                 </div>
               </button>
             ))}
-            {canLoadMore ? (
+            {listPaging.canLoadMore ? (
               <div className="p-3">
                 <button
                   type="button"
@@ -698,6 +742,10 @@ export default function InboxPage() {
                   {loadingMore ? "Loading…" : "Load more"}
                 </button>
               </div>
+            ) : listPaging.capped ? (
+              <p className="meta p-3 text-center">
+                Showing the {INBOX_LIST_MAX} most recent of {listPaging.total.toLocaleString()}
+              </p>
             ) : null}
           </div>
         </section>
@@ -828,6 +876,9 @@ export default function InboxPage() {
                       </button>
                     </div>
                   </div>
+                ) : null}
+                {detail.messages.length >= THREAD_MESSAGE_LIMIT ? (
+                  <p className="meta text-center">Showing the {THREAD_MESSAGE_LIMIT} most recent messages.</p>
                 ) : null}
                 {detail.messages.map((m) => (
                   <div

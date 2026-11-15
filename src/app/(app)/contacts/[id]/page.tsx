@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageError, PageLoading } from "@/components/ui/page-state";
+import { SlideOver } from "@/components/ui/slide-over";
 import { Customer360Panel } from "@/components/crm/customer-360-panel";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
@@ -31,11 +32,18 @@ type Contact = {
 
 export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const workspaceContext = getImmutableWorkspaceContext(null);
   const [contact, setContact] = useState<Contact | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     setError(null);
@@ -66,7 +74,54 @@ export default function ContactDetailPage() {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Update failed");
-    await load();
+  }
+
+  function openEdit() {
+    if (!contact) return;
+    setEditName(contact.fullName || "");
+    setEditEmail(contact.email || "");
+    setEditPhone(contact.phone || "");
+    setEditOpen(true);
+  }
+
+  async function onSaveEdit(e: FormEvent) {
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    try {
+      await patch({
+        ...(editName.trim() ? { fullName: editName.trim() } : {}),
+        email: editEmail.trim() || null,
+        phone: editPhone.trim() || null,
+      });
+      await load();
+      toast.success("Contact updated");
+      setEditOpen(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (deleting) return;
+    if (
+      !window.confirm(
+        "Delete this contact? Their conversations, leads and deals will no longer appear in the inbox, pipeline or reports.",
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await patch({ deleted: true });
+      toast.success("Contact deleted");
+      router.push("/contacts");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+      setDeleting(false);
+    }
   }
 
   if (loading) return <PageLoading label="Loading contact" />;
@@ -85,13 +140,21 @@ export default function ContactDetailPage() {
             <Link className="btn btn-secondary" href="/contacts">
               Back to contacts
             </Link>
+            <button className="btn btn-secondary" type="button" onClick={openEdit}>
+              Edit
+            </button>
             <button
               className={contact.optedOut ? "btn btn-secondary" : "btn btn-danger"}
               onClick={() =>
-                patch({ optedOut: !contact.optedOut }).catch((e) => toast.error(e.message))
+                patch({ optedOut: !contact.optedOut })
+                  .then(load)
+                  .catch((e) => toast.error(e.message))
               }
             >
               {contact.optedOut ? "Clear opt-out" : "Opt out"}
+            </button>
+            <button className="btn btn-danger" type="button" disabled={deleting} onClick={() => void onDelete()}>
+              {deleting ? "Deleting…" : "Delete contact"}
             </button>
           </>
         }
@@ -180,6 +243,7 @@ export default function ContactDetailPage() {
             if (note.trim()) {
               patch({ note })
                 .then(() => setNote(""))
+                .then(load)
                 .catch((e) => toast.error(e.message));
             }
           }}
@@ -207,6 +271,48 @@ export default function ContactDetailPage() {
           ))}
         </ul>
       </section>
+
+      <SlideOver
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        title="Edit contact"
+        description="Leave email or phone empty to clear it — do not invent them."
+      >
+        <form className="space-y-4" onSubmit={onSaveEdit}>
+          <label className="block text-sm font-medium">
+            Full name
+            <input
+              className="input mt-1 w-full"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              required
+              maxLength={200}
+              autoFocus
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Email
+            <input
+              className="input mt-1 w-full"
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Phone
+            <input
+              className="input mt-1 w-full"
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              maxLength={100}
+            />
+          </label>
+          <button className="btn btn-primary" type="submit" disabled={saving}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </form>
+      </SlideOver>
     </div>
   );
 }

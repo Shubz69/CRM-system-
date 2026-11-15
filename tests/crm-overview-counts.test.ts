@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prismaMocks = vi.hoisted(() => ({
   contact: { findMany: vi.fn(async () => [] as unknown[]), count: vi.fn(async () => 0) },
-  conversation: { findMany: vi.fn(async () => [] as unknown[]), count: vi.fn(async () => 0) },
+  conversation: {
+    findMany: vi.fn(async () => [] as unknown[]),
+    count: vi.fn(async () => 0),
+    fields: { lastOutboundAt: { name: "lastOutboundAt", modelName: "Conversation" } },
+  },
   deal: {
     findMany: vi.fn(async () => [] as unknown[]),
     count: vi.fn(async () => 0),
@@ -124,6 +128,7 @@ describe("GET /api/deals?summary=1", () => {
       organisationId: "org_1",
       deletedAt: null,
       status: "OPEN",
+      OR: [{ contactId: null }, { contact: { deletedAt: null } }],
     });
   });
 });

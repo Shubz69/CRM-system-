@@ -28,7 +28,9 @@ describe("NL → visible workflow", () => {
     );
     // Only triggers that are emitted / actions with an executor (no message_received-only
     // context, no draft_reply_for_review — it had no executor and silently did nothing).
-    expect(wf.triggerType).toBe("new_inbound_message");
+    // A score condition needs a trigger that runs after the AI scored the message (the
+    // new-message trigger fires before scoring, so the rule could never match there).
+    expect(wf.triggerType).toBe("lead_score_changed");
     expect(wf.conditions.minScore).toBe(60);
     expect(wf.conditions.topicIncludes).toEqual(["pricing", "price"]);
     expect(wf.conditions.requireHumanReview).toBe(true);

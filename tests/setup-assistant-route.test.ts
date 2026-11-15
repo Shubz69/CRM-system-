@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   analyseConversation: vi.fn(),
   upsertKnowledgeDocument: vi.fn(),
   knowledgeCreate: vi.fn(),
+  knowledgeFindMany: vi.fn(),
   agentFindFirst: vi.fn(),
   agentUpdate: vi.fn(),
   qualificationUpsert: vi.fn(),
@@ -57,7 +58,10 @@ vi.mock("@/services/knowledge", () => ({
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    knowledgeDocument: { create: (...args: unknown[]) => mocks.knowledgeCreate(...args) },
+    knowledgeDocument: {
+      create: (...args: unknown[]) => mocks.knowledgeCreate(...args),
+      findMany: (...args: unknown[]) => mocks.knowledgeFindMany(...args),
+    },
     agentConfiguration: {
       findFirst: (...args: unknown[]) => mocks.agentFindFirst(...args),
       update: (...args: unknown[]) => mocks.agentUpdate(...args),
@@ -126,6 +130,7 @@ describe("Setup Assistant approve", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.upsertKnowledgeDocument.mockResolvedValue("doc_1");
+    mocks.knowledgeFindMany.mockResolvedValue([]);
     mocks.agentFindFirst.mockResolvedValue({
       id: "cfg_a",
       brandTone: "old",
@@ -160,6 +165,44 @@ describe("Setup Assistant approve", () => {
       knowledgeDocuments: 1,
       qualificationFields: 1,
     });
+  });
+
+  it("never overwrites a hand-written doc with the same title — saves under a distinct title", async () => {
+    mocks.knowledgeFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === "What we sell" ? [{ tags: ["pricing"] }] : [],
+    );
+    const res = await post({ action: "approve", proposal });
+    expect(res.status).toBe(200);
+    expect(mocks.knowledgeFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organisationId: "org_a", title: "What we sell" } }),
+    );
+    expect(mocks.upsertKnowledgeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "What we sell (Setup Assistant)", tags: ["setup-assistant"] }),
+    );
+  });
+
+  it("numbers the distinct title when '(Setup Assistant)' is also a hand-written doc", async () => {
+    mocks.knowledgeFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === "What we sell" || where.title === "What we sell (Setup Assistant)"
+        ? [{ tags: [] }]
+        : [],
+    );
+    await post({ action: "approve", proposal });
+    expect(mocks.upsertKnowledgeDocument.mock.calls[0]![0].title).toBe("What we sell (Setup Assistant 2)");
+  });
+
+  it("re-approving updates its own earlier doc under the plain title", async () => {
+    mocks.knowledgeFindMany.mockResolvedValue([{ tags: ["setup-assistant"] }]);
+    await post({ action: "approve", proposal });
+    expect(mocks.upsertKnowledgeDocument.mock.calls[0]![0].title).toBe("What we sell");
+  });
+
+  it("does not treat a knowledge-gap doc with the same title as its own", async () => {
+    mocks.knowledgeFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === "What we sell" ? [{ tags: ["knowledge-gap"] }] : [],
+    );
+    await post({ action: "approve", proposal });
+    expect(mocks.upsertKnowledgeDocument.mock.calls[0]![0].title).toBe("What we sell (Setup Assistant)");
   });
 
   it("rejects a proposal in the wrong shape instead of silently saving nothing", async () => {

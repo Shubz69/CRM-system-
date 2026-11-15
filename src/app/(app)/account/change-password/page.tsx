@@ -34,8 +34,9 @@ export default function ChangePasswordPage() {
         return;
       }
 
-      // Refresh JWT so middleware no longer forces this page.
-      await update({ mustChangePassword: false });
+      // Refresh JWT so middleware no longer forces this page. The proof keeps this browser
+      // signed in; every other session was revoked by the password change.
+      await update({ mustChangePassword: false, sessionRefreshProof: json.sessionRefreshProof });
       toast.success("Password updated — opening dashboard");
       // Hard navigation ensures middleware reads the refreshed session cookie.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- must force full reload for JWT/middleware

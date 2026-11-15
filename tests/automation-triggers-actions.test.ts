@@ -87,15 +87,17 @@ describe("automation trigger/action catalogue", () => {
   });
 
   it("every listed trigger is emitted by a runAutomations caller, and every emitted literal is listed", () => {
-    const emitters = [
-      read("src/services/inbound-pipeline.ts"),
-      read("src/services/booking-webhook.ts"),
-      read("src/services/domain-events/catalogue.ts"),
-    ].join("\n");
+    const emitterFiles = [
+      "src/services/inbound-pipeline.ts",
+      "src/services/messaging/ai-reply-follow-through.ts",
+      "src/services/booking-webhook.ts",
+      "src/services/domain-events/catalogue.ts",
+    ];
+    const emitters = emitterFiles.map(read).join("\n");
     for (const trigger of AUTOMATION_TRIGGERS) {
       expect(emitters, `trigger ${trigger} is not emitted`).toContain(`"${trigger}"`);
     }
-    const inbound = read("src/services/inbound-pipeline.ts");
+    const inbound = [emitterFiles[0]!, emitterFiles[1]!].map(read).join("\n");
     const literals = [...inbound.matchAll(/triggerType:\s*"([a-z_]+)"/g)].map((m) => m[1]!);
     expect(literals.length).toBeGreaterThan(0);
     for (const literal of literals) expect(AUTOMATION_TRIGGERS).toContain(literal);

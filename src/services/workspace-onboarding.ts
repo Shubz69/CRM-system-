@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import { compare, hash } from "bcryptjs";
+import { recordSuccessfulLogin, reserveLoginAttempt } from "@/lib/session-security";
 import {
   InvitationStatus,
   MemberRole,
@@ -586,13 +587,21 @@ export async function acceptInvite(input: AcceptInviteInput) {
       );
     }
     if (user.passwordHash) {
-      const ownsAccount = Boolean(input.password) && (await compare(input.password!, user.passwordHash));
-      if (!ownsAccount) {
+      const wrongPassword = new OnboardingError(
+        "This email already has an account. Enter that account's password to join, or reset it from the sign-in page first.",
+        "FORBIDDEN",
+      );
+      if (!input.password) throw wrongPassword;
+      // Same atomic lockout as the sign-in form — otherwise anyone who can create an
+      // invite could use this page to guess the account's password without limit.
+      if (!(await reserveLoginAttempt(user.id))) {
         throw new OnboardingError(
-          "This email already has an account. Enter that account's password to join, or reset it from the sign-in page first.",
+          "Too many password attempts for this account. Wait 15 minutes, or reset the password from the sign-in page.",
           "FORBIDDEN",
         );
       }
+      if (!(await compare(input.password, user.passwordHash))) throw wrongPassword;
+      await recordSuccessfulLogin(user.id);
     }
     const updates: {
       name?: string | null;

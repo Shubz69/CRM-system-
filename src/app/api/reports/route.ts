@@ -38,19 +38,20 @@ export async function POST(req: Request) {
     // Soft-deleted conversations/leads/contacts must not inflate the numbers.
     const liveContact = { contact: { deletedAt: null } };
     const liveConversationOrNone = {
-      OR: [{ conversationId: null }, { conversation: { deletedAt: null } }],
+      OR: [{ conversationId: null }, { conversation: { deletedAt: null, ...liveContact } }],
     };
 
     const [newConversations, qualifiedLeads, callsBooked, followUpsSent, objections, questions, attention] =
       await Promise.all([
         prisma.conversation.count({
-          where: { organisationId: orgId, deletedAt: null, ...dateFilter },
+          where: { organisationId: orgId, deletedAt: null, ...liveContact, ...dateFilter },
         }),
         prisma.lead.count({
           where: {
             organisationId: orgId,
             deletedAt: null,
             qualificationStatus: QualificationStatus.QUALIFIED,
+            ...liveContact,
             ...dateFilter,
           },
         }),

@@ -42,7 +42,8 @@ export async function POST(req: NextRequest) {
           externalId: contactExternalId,
           fullName: data.fullName ?? "Simulated Lead",
           instagramUsername: data.instagramUsername ?? "sim_lead",
-          email: data.email || undefined,
+          // Not passed on: the pipeline matches contacts by email, which would attach a
+          // simulated conversation to a real customer with that address.
         },
         message: {
           text: data.text,

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
+import { BookingWebhookCard } from "@/components/booking-webhook-card";
 
 type Channel = {
   id: string;
@@ -1027,6 +1028,8 @@ export default function IntegrationsClient() {
           </div>
         </form>
       </section>
+
+      <BookingWebhookCard />
     </div>
   );
 }

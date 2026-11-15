@@ -54,8 +54,34 @@ describe("strict opt-out detection", () => {
     "can you stop messaging me",
     "leave me alone",
     "Remove me from your list",
+    "remove me from your list",
     "Don’t message me again",
+    "don't message me again",
+    "dont message me",
+    "do not contact me",
     "opt out",
+    "Opt-out",
+    "STOP!!",
+    "unsubscribe",
+    "unsubscribe please",
+    "stop it",
+    "STOP NOW",
+    // Opt-outs that are not the first words of the message.
+    "Not interested, please stop messaging me",
+    "I said STOP",
+    "I told you to stop",
+    "Hi, stop",
+    "Thanks but remove me",
+    "No thanks.\nStop",
+    "No thanks - stop",
+    "thanks—stop",
+    "Seriously, stop messaging me",
+    "Stop texting me please",
+    "'STOP'",
+    "Stopp",
+    "stahp",
+    "Loved the work. But please, just stop now",
+    "Who is this? Leave me alone",
   ])("treats %j as an opt-out", (text) => {
     expect(detectOptOut(text)).toBe(true);
     expect(classifyInboundL0(text).optedOut).toBe(true);
@@ -73,25 +99,57 @@ describe("strict opt-out detection", () => {
     "How much is it? Don't want to stop now",
     "I already unsubscribed from the old list, but want this",
     "Can you send the pricing details?",
+    "I can't stop thinking about the colour you did",
+    "non-stop",
+    "one-stop shop",
+    "can you stop by tomorrow?",
+    "the bus stop",
+    "don't stop",
+    "stop by later",
+    "Stoppage time was wild",
+    // A negation aimed at the phrase is not an opt-out.
+    "Please don't remove me from the list",
+    "I don't want to unsubscribe, just update my email",
+    "Don't stop sending me updates!",
   ])("does not treat %j as an opt-out", (text) => {
     expect(detectOptOut(text)).toBe(false);
     expect(classifyInboundL0(text).optedOut).toBe(false);
   });
 
-  it("keeps multi-word org-configured keywords working", () => {
+  it("matches multi-word org-configured keywords anywhere, as whole words", () => {
     const keywords = ["no more messages", "take me off"];
     expect(detectOptOut("No more messages please", keywords)).toBe(true);
     expect(detectOptOut("please take me off the list", keywords)).toBe(true);
-    expect(detectOptOut("there are no more messages to send?", keywords)).toBe(false);
+    expect(detectOptOut("Thanks for the info, but no more messages", keywords)).toBe(true);
+    expect(detectOptOut("Can you take me offline for a sec?", keywords)).toBe(false);
     // Org list without "stop" does not opt out on "stop".
     expect(detectOptOut("stop", keywords)).toBe(false);
+  });
+
+  it("applies the clause rule to an org-configured 'stop' and whole-word matching to other single words", () => {
+    expect(detectOptOut("Hi, STOP", ["STOP"])).toBe(true);
+    expect(detectOptOut("I can't stop thinking about it", ["stop"])).toBe(false);
+    expect(detectOptOut("Ok cancel, no more", ["cancel"])).toBe(true);
+    expect(detectOptOut("Can I cancel my booking?", ["cancel"])).toBe(true);
+    expect(detectOptOut("It was cancelled", ["cancel"])).toBe(false);
   });
 
   it("reports the matched keyword", () => {
     expect(matchOptOutKeyword("Stop messaging me")).toBe("stop");
     expect(matchOptOutKeyword("stop messaging me", ["stop messaging"])).toBe("stop messaging");
+    expect(matchOptOutKeyword("Not interested, please stop messaging me")).toBe("stop");
+    expect(matchOptOutKeyword("Thanks but remove me")).toBe("remove me");
+    expect(matchOptOutKeyword("opt-out")).toBe("opt out");
+    expect(matchOptOutKeyword("I said STOP")).toBe("stop");
     expect(classifyInboundL0("unsubscribe").matchedKeywords).toEqual(["unsubscribe"]);
+    expect(classifyInboundL0("Hi, stop").matchedKeywords).toEqual(["stop"]);
     expect(DEFAULT_OPT_OUT_KEYWORDS).toContain("leave me alone");
+  });
+
+  it("ignores empty input and blank keywords", () => {
+    expect(matchOptOutKeyword("")).toBeNull();
+    expect(matchOptOutKeyword("🛑 !!")).toBeNull();
+    expect(matchOptOutKeyword("stop", ["", "  "])).toBeNull();
   });
 });
 

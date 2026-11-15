@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
-import { createHash, timingSafeEqual } from "crypto";
+import { createHash } from "crypto";
 import { BookingStatus } from "@prisma/client";
 import { getBookingProvider } from "@/adapters/booking";
-import { getEnv, assertProductionSecretsConfigured } from "@/lib/env";
+import { assertProductionSecretsConfigured, getEnv } from "@/lib/env";
 import {
   assertWebhookTimestampFresh,
   readWebhookTimestampHeader,
@@ -16,13 +16,10 @@ import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { runAutomations } from "@/services/automations";
 import { recordUsage } from "@/services/usage";
-
-function safeEqual(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  if (aBuf.length !== bBuf.length) return false;
-  return timingSafeEqual(aBuf, bBuf);
-}
+import {
+  matchesSharedBookingSecret,
+  verifyBookingWebhookSecret,
+} from "@/services/booking-secrets";
 
 function stageSlugForStatus(status: string): string | null {
   switch (status) {
@@ -85,13 +82,12 @@ export async function handleBookingWebhook(
       throw error;
     }
 
-    const env = getEnv();
     const secret =
       req.headers.get("x-booking-secret") ||
       req.headers.get("x-calendly-secret") ||
       req.headers.get("x-cal-secret") ||
       "";
-    if (!safeEqual(secret, env.BOOKING_WEBHOOK_SECRET)) {
+    if (!secret) {
       return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
     }
 
@@ -102,9 +98,6 @@ export async function handleBookingWebhook(
 
     const provider = getBookingProvider();
     const parsed = provider.parseWebhook(rawBody);
-    if (!parsed) {
-      return Response.json({ error: "Invalid booking webhook payload" }, { status: 400 });
-    }
 
     const organisationIdFromBody =
       rawBody && typeof rawBody === "object" && "organisationId" in rawBody
@@ -112,17 +105,41 @@ export async function handleBookingWebhook(
         : "";
 
     const org =
-      organisationIdFromBody
+      parsed && organisationIdFromBody
         ? await prisma.organisation.findFirst({
             where: { id: organisationIdFromBody, deletedAt: null },
           })
         : null;
 
-    if (!org) {
+    if (!parsed || !org) {
+      // Authenticate before explaining what's wrong with the payload: without a workspace
+      // the only secret that can be checked is the shared one.
+      if (!matchesSharedBookingSecret(secret)) {
+        return Response.json({ error: "Invalid webhook secret" }, { status: 401 });
+      }
       return Response.json(
-        { error: "organisationId required (no silent first-org fallback)" },
+        {
+          error: parsed
+            ? "organisationId required (no silent first-org fallback)"
+            : "Invalid booking webhook payload",
+        },
         { status: 400 },
       );
+    }
+
+    // The secret must belong to the workspace this booking is for. A workspace with its own
+    // secret no longer accepts the shared one, so another tenant can't write into it.
+    const secretCheck = await verifyBookingWebhookSecret({
+      organisationId: org.id,
+      presented: secret,
+    });
+    if (!secretCheck.ok) {
+      return Response.json({ error: secretCheck.reason }, { status: 401 });
+    }
+    if (secretCheck.source === "global") {
+      logger.warn("Booking webhook authorised with the shared secret", {
+        organisationId: org.id,
+      });
     }
 
     const eventKey = parsed.status.toLowerCase();
@@ -202,7 +219,7 @@ export async function handleBookingWebhook(
     const bookingProviderName =
       providerLabel === "calendly" || providerLabel === "calcom"
         ? providerLabel
-        : env.BOOKING_PROVIDER === "mock"
+        : getEnv().BOOKING_PROVIDER === "mock"
           ? "mock"
           : "link";
 

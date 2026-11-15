@@ -82,6 +82,7 @@ describe("/api/knowledge/recommendations", () => {
     mocks.recFindFirst.mockResolvedValue(openRec);
     mocks.recUpdateMany.mockResolvedValue({ count: 1 });
     mocks.upsertKnowledgeDocument.mockResolvedValue("doc_1");
+    mocks.docFindMany.mockResolvedValue([]);
   });
 
   it("GET returns only open recommendations", async () => {
@@ -115,6 +116,47 @@ describe("/api/knowledge/recommendations", () => {
       data: { status: "APPROVED", draftAnswer: "Yes — UK and EU." },
     });
     expect((await res.json()).documentId).toBe("doc_1");
+  });
+
+  it("Approve never overwrites a hand-written doc with the same title", async () => {
+    mocks.docFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === "Pricing" ? [{ tags: [] }] : [],
+    );
+    const res = await patch({ id: "rec_1", status: "APPROVED", draftAnswer: "From £99/month.", title: "Pricing" });
+    expect(res.status).toBe(200);
+    expect(mocks.docFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organisationId: "org_a", title: "Pricing" } }),
+    );
+    expect(mocks.upsertKnowledgeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Pricing (from knowledge gap)", tags: ["knowledge-gap"] }),
+    );
+  });
+
+  it("Approve treats a Setup Assistant doc with the same title as someone else's", async () => {
+    mocks.docFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === "Pricing" ? [{ tags: ["setup-assistant"] }] : [],
+    );
+    await patch({ id: "rec_1", status: "APPROVED", draftAnswer: "From £99/month.", title: "Pricing" });
+    expect(mocks.upsertKnowledgeDocument.mock.calls[0]![0].title).toBe("Pricing (from knowledge gap)");
+  });
+
+  it("re-approving a gap updates its own earlier doc under the plain title", async () => {
+    mocks.docFindMany.mockResolvedValue([{ tags: ["knowledge-gap"] }]);
+    await patch({ id: "rec_1", status: "APPROVED", draftAnswer: "Yes — UK and EU." });
+    expect(mocks.upsertKnowledgeDocument.mock.calls[0]![0].title).toBe(
+      "Do you work with companies outside the UK?",
+    );
+  });
+
+  it("keeps the suffixed title within the 180-character limit", async () => {
+    const longTitle = "x".repeat(180);
+    mocks.docFindMany.mockImplementation(async ({ where }: { where: { title: string } }) =>
+      where.title === longTitle ? [{ tags: [] }] : [],
+    );
+    await patch({ id: "rec_1", status: "APPROVED", draftAnswer: "Answer", title: longTitle });
+    const saved = mocks.upsertKnowledgeDocument.mock.calls[0]![0].title as string;
+    expect(saved.length).toBeLessThanOrEqual(180);
+    expect(saved.endsWith(" (from knowledge gap)")).toBe(true);
   });
 
   it("Dismiss closes the gap without creating knowledge", async () => {
