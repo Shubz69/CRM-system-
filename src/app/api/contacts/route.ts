@@ -23,10 +23,15 @@ export async function GET(req: Request) {
     const session = await requirePermission("leads:read");
     const { searchParams } = new URL(req.url);
     const q = searchParams.get("q")?.trim();
+    // Tag filter: the tag must belong to this workspace too (another org's tag id matches nothing).
+    const tagId = searchParams.get("tagId")?.trim();
 
     const where: Prisma.ContactWhereInput = {
       organisationId: session.organisationId,
       deletedAt: null,
+      ...(tagId
+        ? { tags: { some: { tagId, tag: { organisationId: session.organisationId } } } }
+        : {}),
       ...(q
         ? {
             OR: [

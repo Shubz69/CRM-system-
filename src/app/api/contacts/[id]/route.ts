@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { jsonError, requirePermission, requirePermissionForMutation, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
 import { applyOptOut, clearOptOut } from "@/services/opt-out";
+import { recordCrmActivity } from "@/services/crm-activity";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -71,9 +72,30 @@ export async function PATCH(req: Request, { params }: Params) {
       await prisma.note.create({ data: { organisationId: session.organisationId, contactId: id, authorId: session.userId, body: body.note } });
     }
     if (body.tagIds) {
-      const validTags = await prisma.tag.findMany({ where: { id: { in: body.tagIds }, organisationId: session.organisationId }, select: { id: true } });
+      const validTags = await prisma.tag.findMany({ where: { id: { in: body.tagIds }, organisationId: session.organisationId }, select: { id: true, name: true } });
+      const before = await prisma.contactTag.findMany({
+        where: { contactId: id },
+        select: { tagId: true, tag: { select: { name: true } } },
+      });
       await prisma.contactTag.deleteMany({ where: { contactId: id } });
       await prisma.contactTag.createMany({ data: validTags.map((tag) => ({ contactId: id, tagId: tag.id })) });
+      const beforeIds = new Set(before.map((t) => t.tagId));
+      const afterIds = new Set(validTags.map((t) => t.id));
+      const added = validTags.filter((t) => !beforeIds.has(t.id)).map((t) => ({ id: t.id, name: t.name }));
+      const removed = before.filter((t) => !afterIds.has(t.tagId)).map((t) => ({ id: t.tagId, name: t.tag.name }));
+      if (added.length || removed.length) {
+        const names = (list: Array<{ name: string }>) => list.map((t) => `"${t.name}"`).join(", ");
+        await recordCrmActivity({
+          organisationId: session.organisationId,
+          kind: "tagged",
+          title: [added.length ? `Tagged ${names(added)}` : "", removed.length ? `Removed ${names(removed)}` : ""]
+            .filter(Boolean)
+            .join(" · "),
+          contactId: id,
+          createdByUserId: session.userId,
+          metadata: { added, removed },
+        });
+      }
     }
     if (
       body.fullName !== undefined ||

@@ -1,10 +1,13 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { markHumanLeadChange } from "@/services/lead-stage-guard";
 import { requirePermission, requirePermissionForMutation, jsonError, WorkspaceChangedError, workspaceChangedJsonResponse } from "@/lib/session";
+import { roleHasPermission } from "@/lib/permissions";
 import { writeAuditLog } from "@/services/audit";
+import { recordCrmActivity } from "@/services/crm-activity";
+import { zodMessage } from "./_lib/http";
+import { moveLeadsMarkedHuman } from "./_lib/move-leads";
+import { isSystemStageSlug } from "./_lib/stages";
 
 export async function GET() {
   try {
@@ -33,17 +36,34 @@ export async function GET() {
       },
     });
 
-    return Response.json({ pipeline });
+    return Response.json({
+      pipeline: pipeline
+        ? {
+            ...pipeline,
+            // Built-in stages (the AI moves leads by these slugs) can't be deleted.
+            stages: pipeline.stages.map((stage) => ({
+              ...stage,
+              isSystem: isSystemStageSlug(stage.slug),
+            })),
+          }
+        : null,
+      // What the board may offer this person: stage editing and moving leads.
+      permissions: {
+        manageStages: roleHasPermission(session.role, "pipeline:manage"),
+        moveLeads: roleHasPermission(session.role, "leads:write"),
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
 }
 
 const moveSchema = z.object({
-  leadId: z.string(),
-  stageId: z.string(),
+  leadId: z.string({ required_error: "leadId is required" }).min(1, "leadId is required"),
+  stageId: z.string({ required_error: "stageId is required" }).min(1, "stageId is required"),
 });
 
 export async function PATCH(req: NextRequest) {
@@ -54,6 +74,7 @@ export async function PATCH(req: NextRequest) {
 
     const lead = await prisma.lead.findFirst({
       where: { id: body.leadId, organisationId: session.organisationId, deletedAt: null },
+      include: { stage: { select: { name: true } } },
     });
     if (!lead) return jsonError("Lead not found", 404);
 
@@ -65,16 +86,13 @@ export async function PATCH(req: NextRequest) {
     });
     if (!stage) return jsonError("Stage not found", 404);
 
-    await prisma.lead.updateMany({
-      where: { id: lead.id, organisationId: session.organisationId },
-      data: {
-        stageId: stage.id,
-        // A person's move wins: inbound AI analysis will not move this lead again.
-        metadata: markHumanLeadChange(lead.metadata, {
-          stage: true,
-          userId: session.userId,
-        }) as Prisma.InputJsonValue,
-      },
+    // A person's move wins: inbound AI analysis will not move this lead again. Metadata is
+    // re-read under a row lock so concurrent AI writes (crmMemory, scores…) are kept.
+    await moveLeadsMarkedHuman({
+      organisationId: session.organisationId,
+      leadIds: [lead.id],
+      stageId: stage.id,
+      userId: session.userId,
     });
 
     await writeAuditLog({
@@ -86,11 +104,30 @@ export async function PATCH(req: NextRequest) {
       metadata: { stageId: stage.id, stage: stage.name },
     });
 
+    if (lead.stageId !== stage.id) {
+      await recordCrmActivity({
+        organisationId: session.organisationId,
+        kind: "stage_changed",
+        title: `Moved to ${stage.name}`,
+        contactId: lead.contactId,
+        leadId: lead.id,
+        createdByUserId: session.userId,
+        metadata: {
+          fromStageId: lead.stageId,
+          fromStageName: lead.stage?.name ?? null,
+          toStageId: stage.id,
+          toStageName: stage.name,
+        },
+      });
+    }
+
     return Response.json({ ok: true });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();
+    if (error instanceof z.ZodError) return jsonError(zodMessage(error), 400);
     const message = error instanceof Error ? error.message : "Failed";
     if (message === "UNAUTHORIZED") return jsonError("Unauthorized", 401);
+    if (message.startsWith("Forbidden")) return jsonError(message, 403);
     return jsonError(message, 500);
   }
 }

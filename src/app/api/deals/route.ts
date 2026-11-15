@@ -10,6 +10,7 @@ import {
 } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { createDeal, DealLinkError } from "@/services/crm-v2";
+import { recordCrmActivity } from "@/services/crm-activity";
 
 export async function GET(req: Request) {
   try {
@@ -93,6 +94,22 @@ export async function POST(req: NextRequest) {
     const id = await createDeal({
       organisationId: session.organisationId,
       ...body,
+    });
+    // Best-effort timeline entry (links were validated by createDeal).
+    await recordCrmActivity({
+      organisationId: session.organisationId,
+      kind: "deal_created",
+      title: `Deal created: ${body.name.trim()}`,
+      contactId: body.contactId ?? null,
+      leadId: body.leadId ?? null,
+      dealId: id,
+      companyId: body.companyId ?? null,
+      createdByUserId: session.userId,
+      metadata: {
+        amountCents: body.amountCents ?? null,
+        currency: body.currency ?? "USD",
+        stageLabel: body.stageLabel ?? null,
+      },
     });
     return Response.json({ id, organisationId: session.organisationId });
   } catch (error) {
@@ -181,6 +198,35 @@ export async function PATCH(req: NextRequest) {
         });
       }
     });
+
+    // Best-effort timeline entry with just the fields that actually changed.
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    const fields = ["status", "amountCents", "probability", "stageLabel", "summary"] as const;
+    for (const field of fields) {
+      const next = body[field];
+      if (next !== undefined && next !== existing[field]) {
+        changes[field] = { from: existing[field], to: next };
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      const statusChanged = changes.status !== undefined;
+      await recordCrmActivity({
+        organisationId: session.organisationId,
+        kind: "deal_updated",
+        title:
+          statusChanged && body.status === DealStatus.WON
+            ? `Deal won: ${existing.name}`
+            : statusChanged && body.status === DealStatus.LOST
+              ? `Deal lost: ${existing.name}`
+              : `Deal updated: ${existing.name}`,
+        contactId: existing.contactId,
+        leadId: existing.leadId,
+        dealId: existing.id,
+        companyId: existing.companyId,
+        createdByUserId: session.userId,
+        metadata: { changes },
+      });
+    }
     return Response.json({ ok: true, organisationId: session.organisationId });
   } catch (error) {
     if (error instanceof WorkspaceChangedError) return workspaceChangedJsonResponse();

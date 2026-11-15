@@ -30,7 +30,7 @@ import {
 import { applyOptOut, detectOptOut, DEFAULT_OPT_OUT_KEYWORDS } from "@/services/opt-out";
 import { syncQualificationAnswers } from "@/services/qualification";
 import { calculateLeadScore } from "@/services/scoring";
-import { aiMayMoveStage, aiMaySetQualification } from "@/services/lead-stage-guard";
+import { aiMayMoveStage, aiMaySetQualification, readLeadMeta } from "@/services/lead-stage-guard";
 import {
   runAiReplyFollowThrough,
   type AiReplyFollowThrough,
@@ -489,6 +489,58 @@ export async function processInboundMessage(
           deletedAt: null,
         },
       });
+
+      if (!lead) {
+        // This thread's lead was folded into another one when two contacts were merged:
+        // keep using the lead it was merged into rather than opening a second one.
+        const mergedAway = await tx.lead.findFirst({
+          where: {
+            organisationId: input.organisationId,
+            contactId: contact.id,
+            conversationId: conversation.id,
+            deletedAt: { not: null },
+          },
+          orderBy: { deletedAt: "desc" },
+          select: { metadata: true },
+        });
+        const mergedInto = readLeadMeta(mergedAway?.metadata).mergedInto;
+        if (typeof mergedInto === "string" && mergedInto) {
+          lead = await tx.lead.findFirst({
+            where: {
+              id: mergedInto,
+              organisationId: input.organisationId,
+              contactId: contact.id,
+              deletedAt: null,
+            },
+          });
+        }
+      }
+
+      if (!lead) {
+        // A lead added by hand (contacts page, bulk action) has no conversation yet. When
+        // that person writes in, attach this conversation to it instead of opening a second
+        // lead in "new".
+        const handAdded = await tx.lead.findFirst({
+          where: {
+            organisationId: input.organisationId,
+            contactId: contact.id,
+            conversationId: null,
+            deletedAt: null,
+          },
+          orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+          select: { id: true },
+        });
+        if (handAdded) {
+          // Guarded on conversationId: null so a second thread can't take it over.
+          const attached = await tx.lead.updateMany({
+            where: { id: handAdded.id, conversationId: null, deletedAt: null },
+            data: { conversationId: conversation.id },
+          });
+          if (attached.count === 1) {
+            lead = await tx.lead.findUnique({ where: { id: handAdded.id } });
+          }
+        }
+      }
 
       let leadCreated = false;
       if (!lead) {

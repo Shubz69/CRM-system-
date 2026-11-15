@@ -219,6 +219,7 @@ function makeTx(opts: { identifierContact?: Record<string, unknown> | null } = {
       })),
       create: vi.fn(),
       update: vi.fn(async () => ({})),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     leadScore: { create: vi.fn(async () => ({})) },
     leadScoreEvent: { create: vi.fn(async () => ({})) },
@@ -435,6 +436,85 @@ describe("processInboundMessage hardening", () => {
       expect.objectContaining({ triggerType: "booking_link_sent" }),
     );
     expect(mocks.scheduleFollowUps).not.toHaveBeenCalled();
+  });
+
+  describe("one live lead per person", () => {
+    const liveContact = { id: "contact-1", fullName: "Lead", optedOut: false, deletedAt: null };
+    const leadRow = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      stageId: null,
+      score: 0,
+      metadata: {},
+      qualificationStatus: "UNKNOWN",
+      ...extra,
+    });
+    const leadCreatedEvents = () =>
+      mocks.appendDomainEvent.mock.calls.filter((c) => (c[1] as { eventType: string }).eventType === "LEAD_CREATED");
+
+    it("attaches the conversation to a hand-added lead (no conversation yet) instead of creating a second lead", async () => {
+      const tx = makeTx({ identifierContact: liveContact });
+      tx.lead.findFirst
+        .mockResolvedValueOnce(null) // no lead for this conversation
+        .mockResolvedValueOnce(null) // no lead merged away from it
+        .mockResolvedValueOnce({ id: "lead-hand" } as never); // the contact's hand-added lead
+      tx.lead.findUnique.mockResolvedValueOnce(leadRow("lead-hand", { conversationId: "conv-1" }) as never);
+      useTx(tx);
+
+      await processInboundMessage(input, { provider: "zernio" });
+
+      expect(tx.lead.findFirst.mock.calls[2]![0]).toMatchObject({
+        where: { organisationId: ORG, contactId: "contact-1", conversationId: null, deletedAt: null },
+      });
+      expect(tx.lead.updateMany).toHaveBeenCalledWith({
+        where: { id: "lead-hand", conversationId: null, deletedAt: null },
+        data: { conversationId: "conv-1" },
+      });
+      expect(tx.lead.create).not.toHaveBeenCalled();
+      expect(leadCreatedEvents()).toHaveLength(0);
+      // Everything downstream works on that lead.
+      expect(mocks.bookingCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ leadId: "lead-hand" }) }),
+      );
+    });
+
+    it("follows a lead merged away from this conversation to the lead it was merged into", async () => {
+      const tx = makeTx({ identifierContact: liveContact });
+      tx.lead.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ metadata: { mergedInto: "lead-kept" } } as never)
+        .mockResolvedValueOnce(leadRow("lead-kept") as never);
+      useTx(tx);
+
+      await processInboundMessage(input, { provider: "zernio" });
+
+      expect(tx.lead.findFirst.mock.calls[1]![0]).toMatchObject({
+        where: { organisationId: ORG, contactId: "contact-1", conversationId: "conv-1", deletedAt: { not: null } },
+      });
+      expect(tx.lead.findFirst.mock.calls[2]![0]).toMatchObject({
+        where: { id: "lead-kept", organisationId: ORG, contactId: "contact-1", deletedAt: null },
+      });
+      expect(tx.lead.create).not.toHaveBeenCalled();
+      expect(tx.lead.updateMany).not.toHaveBeenCalled();
+      expect(mocks.bookingCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ leadId: "lead-kept" }) }),
+      );
+    });
+
+    it("still creates a lead in \"new\" when the person has no live lead", async () => {
+      const tx = makeTx({ identifierContact: liveContact });
+      tx.lead.findFirst.mockResolvedValue(null);
+      tx.lead.create.mockResolvedValue(leadRow("lead-new") as never);
+      useTx(tx);
+
+      await processInboundMessage(input, { provider: "zernio" });
+
+      expect(tx.lead.findFirst).toHaveBeenCalledTimes(3);
+      expect(tx.lead.updateMany).not.toHaveBeenCalled();
+      expect(tx.lead.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ contactId: "contact-1", conversationId: "conv-1" }) }),
+      );
+      expect(leadCreatedEvents()).toHaveLength(1);
+    });
   });
 
   it("failed send: no offer, no booking_link_sent, no follow-ups", async () => {

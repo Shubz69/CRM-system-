@@ -16,10 +16,28 @@ import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { runAutomations } from "@/services/automations";
 import { recordUsage } from "@/services/usage";
+import { recordCrmActivity } from "@/services/crm-activity";
 import {
   matchesSharedBookingSecret,
   verifyBookingWebhookSecret,
 } from "@/services/booking-secrets";
+
+function bookingActivityTitle(status: string): string {
+  switch (status) {
+    case "CREATED":
+      return "Meeting booked";
+    case "RESCHEDULED":
+      return "Meeting rescheduled";
+    case "CANCELLED":
+      return "Booking cancelled";
+    case "ATTENDED":
+      return "Attended meeting";
+    case "NO_SHOW":
+      return "Missed meeting (no-show)";
+    default:
+      return "Booking updated";
+  }
+}
 
 function stageSlugForStatus(status: string): string | null {
   switch (status) {
@@ -335,6 +353,26 @@ export async function handleBookingWebhook(
     await prisma.webhookEvent.update({
       where: { provider_idempotencyKey: { provider: providerLabel, idempotencyKey } },
       data: { status: "PROCESSED", processedAt: new Date() },
+    });
+
+    // Timeline entry once the event is fully processed (a redelivery returns early above).
+    // Best-effort: never changes the webhook's response.
+    await recordCrmActivity({
+      organisationId: org.id,
+      kind: "booking",
+      title: bookingActivityTitle(parsed.status),
+      contactId: contact.id,
+      leadId: lead?.id ?? booking.leadId ?? null,
+      metadata: {
+        bookingId: booking.id,
+        status: parsed.status,
+        scheduledAt:
+          parsed.scheduledAt instanceof Date && !Number.isNaN(parsed.scheduledAt.getTime())
+            ? parsed.scheduledAt.toISOString()
+            : null,
+        provider: bookingProviderName,
+        movedToStage: lead && targetStage ? targetStage.name : null,
+      },
     });
 
     return Response.json({ ok: true, bookingId: booking.id });

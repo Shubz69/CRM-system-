@@ -221,27 +221,6 @@ export function Customer360Panel({ contactId }: { contactId: string }) {
         )}
       </details>
 
-      <details className="surface p-4">
-        <summary className="cursor-pointer text-sm font-semibold">
-          Full activity timeline
-        </summary>
-        {data.activities.length === 0 ? (
-          <p className="mt-2 text-sm text-[var(--muted)]">No activity yet.</p>
-        ) : (
-          <ul className="mt-3 space-y-2 text-sm">
-            {data.activities.slice(0, 12).map((a) => (
-              <li key={a.id} className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
-                <span className="badge mr-2">{statusLabel(a.kind)}</span>
-                {a.title || a.body || "Activity"}
-                <span className="ml-2 text-xs text-[var(--muted)]">
-                  {new Date(a.createdAt).toLocaleString()}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </details>
-
       {data.limitations.length > 0 && (
         <ul className="space-y-1 text-xs text-[var(--muted)]">
           {data.limitations.map((l) => (

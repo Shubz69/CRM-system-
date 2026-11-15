@@ -9,6 +9,7 @@ import { markHumanLeadChange } from "@/services/lead-stage-guard";
 import { cancelPendingFollowUps } from "@/services/followups";
 import { expirePendingAiDrafts } from "@/services/automation-os";
 import { writeAuditLog } from "@/services/audit";
+import { recordCrmActivity } from "@/services/crm-activity";
 import { logger } from "@/lib/logger";
 import { evaluateMessagingWindow } from "@/lib/messaging-window";
 import { dispatchOutboundMessage } from "@/services/messaging/outbound";
@@ -193,16 +194,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
 
     let stageId: string | undefined;
+    let stageName: string | undefined;
     if (body.stageId) {
       const stage = await prisma.pipelineStage.findFirst({
         where: {
           id: body.stageId,
           pipeline: { organisationId: session.organisationId },
         },
-        select: { id: true },
+        select: { id: true, name: true },
       });
       if (!stage) return jsonError("Stage not found", 404);
       stageId = stage.id;
+      stageName = stage.name;
     }
 
     if (body.assignUserId) {
@@ -264,7 +267,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     }
 
     if (body.note) {
-      await prisma.note.create({
+      const note = await prisma.note.create({
         data: {
           organisationId: session.organisationId,
           conversationId: id,
@@ -272,6 +275,17 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           authorId: session.userId,
           body: body.note,
         },
+      });
+      // Best-effort timeline entry; metadata.noteId lets the timeline list the note once.
+      await recordCrmActivity({
+        organisationId: session.organisationId,
+        kind: "note",
+        title: "Note added in the inbox",
+        body: body.note,
+        contactId: conversation.contactId,
+        leadId: lead?.id ?? null,
+        createdByUserId: session.userId,
+        metadata: { noteId: note?.id ?? null, conversationId: id },
       });
     }
 
@@ -289,6 +303,37 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           }) as Prisma.InputJsonValue,
         },
       });
+      if (stageId && stageId !== lead.stageId) {
+        await recordCrmActivity({
+          organisationId: session.organisationId,
+          kind: "stage_changed",
+          title: `Moved to ${stageName ?? "a new stage"}`,
+          contactId: conversation.contactId,
+          leadId: lead.id,
+          createdByUserId: session.userId,
+          metadata: {
+            fromStageId: lead.stageId ?? null,
+            toStageId: stageId,
+            toStageName: stageName ?? null,
+            conversationId: id,
+          },
+        });
+      }
+      if (body.qualificationStatus && body.qualificationStatus !== lead.qualificationStatus) {
+        await recordCrmActivity({
+          organisationId: session.organisationId,
+          kind: "qualification_changed",
+          title: `Qualification set to ${body.qualificationStatus.toLowerCase()}`,
+          contactId: conversation.contactId,
+          leadId: lead.id,
+          createdByUserId: session.userId,
+          metadata: {
+            from: lead.qualificationStatus ?? null,
+            to: body.qualificationStatus,
+            conversationId: id,
+          },
+        });
+      }
     }
 
     if (body.reply) {
@@ -404,6 +449,25 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         conversationId: id,
         reason: "A team member replied in the inbox",
       });
+
+      // ALREADY_CONFIRMED is a retried submit of a reply that was already recorded.
+      if (sendResult.code !== "ALREADY_CONFIRMED") {
+        const snippet = body.reply.length > 280 ? `${body.reply.slice(0, 279)}…` : body.reply;
+        await recordCrmActivity({
+          organisationId: session.organisationId,
+          kind: "reply_sent",
+          title: "Replied in the inbox",
+          body: snippet,
+          contactId: conversation.contactId,
+          leadId: lead?.id ?? null,
+          createdByUserId: session.userId,
+          metadata: {
+            conversationId: id,
+            channel: channelProvider,
+            dispatchId: sendResult.dispatch?.id ?? null,
+          },
+        });
+      }
 
       return Response.json({
         ok: true,

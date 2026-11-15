@@ -3,11 +3,17 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
+import { AddToPipeline } from "@/components/contacts/add-to-pipeline";
+import { ContactDuplicates } from "@/components/contacts/contact-duplicates";
+import { canManageContacts, canWriteContacts } from "@/components/contacts/contact-permissions";
+import { ContactTags } from "@/components/contacts/contact-tags";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageError, PageLoading } from "@/components/ui/page-state";
 import { SlideOver } from "@/components/ui/slide-over";
 import { Customer360Panel } from "@/components/crm/customer-360-panel";
+import { ContactActivityTimeline } from "@/components/contact-activity-timeline";
 import { getImmutableWorkspaceContext, workspaceFetch } from "@/lib/workspace-client";
 
 type Contact = {
@@ -17,7 +23,12 @@ type Contact = {
   email: string | null;
   phone: string | null;
   optedOut: boolean;
-  leads: Array<{ score: number; qualificationStatus: string; stage?: { name: string } | null }>;
+  leads: Array<{
+    id: string;
+    score: number;
+    qualificationStatus: string;
+    stage?: { id: string; name: string } | null;
+  }>;
   conversations: Array<{ id: string; lastMessagePreview: string | null; lastMessageAt: string | null }>;
   bookings: Array<{
     id: string;
@@ -34,6 +45,11 @@ export default function ContactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const workspaceContext = getImmutableWorkspaceContext(null);
+  const { data: session } = useSession();
+  const role = session?.user?.role ?? null;
+  // Unknown role (session still loading): show write actions; the server enforces permissions.
+  const canWrite = role ? canWriteContacts(role) : true;
+  const canMerge = role ? canManageContacts(role) : false;
   const [contact, setContact] = useState<Contact | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +67,20 @@ export default function ContactDetailPage() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Failed to load contact");
     setContact(data.contact);
+  };
+
+  // Bumped after any change on this page so the activity timeline shows it immediately.
+  const [activityKey, setActivityKey] = useState(0);
+
+  /** Re-read the contact after a change made by a child panel (tags, pipeline, merge). */
+  const reload = async () => {
+    try {
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not refresh the contact");
+    } finally {
+      setActivityKey((k) => k + 1);
+    }
   };
 
   useEffect(() => {
@@ -163,23 +193,44 @@ export default function ContactDetailPage() {
         {contact.fullName || "Unknown contact"}
       </p>
 
+      <ContactDuplicates
+        contactId={contact.id}
+        contactName={contact.fullName || "this contact"}
+        canMerge={canMerge}
+        onMerged={reload}
+      />
+
       <Customer360Panel contactId={contact.id} />
+
+      <ContactActivityTimeline contactId={contact.id} refreshKey={activityKey} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="surface p-5">
           <h2 className="font-semibold">Lead</h2>
-          <p className="mt-2">
-            Score <span className="badge badge-success">{lead?.score ?? 0}</span>
-          </p>
-          <p>
-            {lead?.qualificationStatus || "No lead"} · {lead?.stage?.name || "No stage"}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-1">
-            {contact.tags.map(({ tag }) => (
-              <span key={tag.id} className="badge" style={{ borderColor: tag.color }}>
-                {tag.name}
-              </span>
-            ))}
+          {lead ? (
+            <>
+              <p className="mt-2">
+                Score <span className="badge badge-success">{lead.score ?? 0}</span>
+              </p>
+              <p className="mb-2">{lead.qualificationStatus}</p>
+            </>
+          ) : null}
+          <div className="mt-2">
+            <AddToPipeline
+              contactId={contact.id}
+              lead={lead}
+              canWrite={canWrite}
+              onChanged={reload}
+            />
+          </div>
+          <h3 className="caption mt-4">Tags</h3>
+          <div className="mt-2">
+            <ContactTags
+              contactId={contact.id}
+              tags={contact.tags.map(({ tag }) => tag)}
+              canWrite={canWrite}
+              onChanged={reload}
+            />
           </div>
         </section>
         <section className="surface p-5 lg:col-span-2">
@@ -243,7 +294,7 @@ export default function ContactDetailPage() {
             if (note.trim()) {
               patch({ note })
                 .then(() => setNote(""))
-                .then(load)
+                .then(reload)
                 .catch((e) => toast.error(e.message));
             }
           }}

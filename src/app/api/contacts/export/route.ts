@@ -8,11 +8,14 @@ export async function GET(req: Request) {
     // A full contact export is a data export — leads:read let READ_ONLY users download
     // every contact's personal details.
     const session = await requirePermission("reports:export");
-    const q = new URL(req.url).searchParams.get("q")?.trim();
+    const { searchParams } = new URL(req.url);
+    const q = searchParams.get("q")?.trim();
+    const tagId = searchParams.get("tagId")?.trim();
     const contacts = await prisma.contact.findMany({
       where: {
         organisationId: session.organisationId,
         deletedAt: null,
+        ...(tagId ? { tags: { some: { tagId, tag: { organisationId: session.organisationId } } } } : {}),
         ...(q ? { OR: [{ fullName: { contains: q, mode: "insensitive" } }, { email: { contains: q, mode: "insensitive" } }, { phone: { contains: q, mode: "insensitive" } }, { instagramUsername: { contains: q, mode: "insensitive" } }] } : {}),
       },
       include: { leads: { where: { deletedAt: null }, take: 1, include: { stage: true } }, tags: { include: { tag: true } } },
@@ -41,7 +44,7 @@ export async function GET(req: Request) {
       action: "contacts.export.csv",
       entityType: "Contact",
       entityId: session.organisationId,
-      metadata: { count: contacts.length, filtered: Boolean(q) },
+      metadata: { count: contacts.length, filtered: Boolean(q || tagId) },
     });
     return new Response(csv, { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": 'attachment; filename="contacts.csv"' } });
   } catch (error) {
